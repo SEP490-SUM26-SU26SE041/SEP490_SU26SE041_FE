@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Farm - Advanced Simulation</title>
+  
+  <!-- Fonts from Nursery OS -->
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'primary': '#486730',
+            'primary-container': '#87a96b',
+            'on-primary-container': '#213d0b',
+            'secondary': '#506354',
+            'secondary-container': '#d0e5d2',
+            'on-secondary-container': '#546758',
+            'tertiary': '#7c5639',
+            'tertiary-container': '#c49674',
+            'on-tertiary-container': '#4f2f15',
+            'surface': '#f9f9f8',
+            'surface-container-low': '#f3f4f3',
+            'outline-variant': '#c4c8ba',
+            'on-surface-variant': '#43483d',
+          },
+          fontFamily: {
+            hanken: ['Hanken Grotesk', 'sans-serif'],
+            inter: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    /* Fix for white text on autofill */
+    input:-webkit-autofill,
+    input:-webkit-autofill:hover, 
+    input:-webkit-autofill:focus, 
+    input:-webkit-autofill:active {
+      -webkit-box-shadow: 0 0 0 1000px white inset !important;
+      -webkit-text-fill-color: #0f172a !important;
+      transition: background-color 5000s ease-in-out 0s;
+    }
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #f9f9f8;
+      color: #1a1c1c;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+
+</html>
