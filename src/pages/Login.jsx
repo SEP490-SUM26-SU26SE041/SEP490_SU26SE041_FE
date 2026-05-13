@@ -9,6 +9,8 @@ const Login = () => {
   const [name, setName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
+  const [otpCode, setOtpCode] = useState('');
+
   const navigateTo = (path) => {
     window.history.pushState(null, '', path);
     window.dispatchEvent(new Event('navigate'));
@@ -53,7 +55,7 @@ const Login = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const API_URL = 'https://localhost:7048/api/Auth'; // Update port if different
+    const API_URL = 'https://localhost:7048/api/Auth';
 
     try {
       if (view === 'login') {
@@ -67,8 +69,6 @@ const Login = () => {
           const data = await response.json();
           localStorage.setItem('token', data.token);
           localStorage.setItem('user', JSON.stringify(data));
-
-          // Role-based navigation
           const rolePaths = {
             'Admin': '/admin',
             'Manager': '/farm-manager',
@@ -76,7 +76,6 @@ const Login = () => {
             'Researcher': '/researcher',
             'Student': '/student'
           };
-          
           navigateTo(rolePaths[data.role] || '/');
         } else {
           const error = await response.json();
@@ -102,12 +101,51 @@ const Login = () => {
           alert(error.message || 'Registration failed!');
         }
       } else if (view === 'forgot') {
-        alert('Password reset feature is not implemented in BE yet!');
-        setView('login');
+        const response = await fetch(`${API_URL}/forgot-password`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        if (response.ok) {
+          alert('Mã xác nhận đã được gửi về Email của bạn!');
+          setView('verify_code');
+        } else {
+          const error = await response.json();
+          alert(error.message || 'Gửi mail thất bại!');
+        }
+      } else if (view === 'verify_code') {
+        const response = await fetch(`${API_URL}/verify-code`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, code: otpCode }),
+        });
+        if (response.ok) {
+          setView('reset_password');
+        } else {
+          const error = await response.json();
+          alert(error.message || 'Mã xác nhận không đúng!');
+        }
+      } else if (view === 'reset_password') {
+        if (password !== confirmPassword) {
+          alert('Mật khẩu không khớp!');
+          return;
+        }
+        const response = await fetch(`${API_URL}/reset-password`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, code: otpCode, newPassword: password }),
+        });
+        if (response.ok) {
+          alert('Mật khẩu đã được đổi thành công!');
+          setView('login');
+        } else {
+          const error = await response.json();
+          alert(error.message || 'Đổi mật khẩu thất bại!');
+        }
       }
     } catch (err) {
       console.error(err);
-      alert('Connection to server failed. Make sure Backend is running!');
+      alert('Lỗi kết nối Server!');
     }
   };
 
@@ -199,34 +237,60 @@ const Login = () => {
               </div>
             )}
 
-            <div className="relative group">
-              <input 
-                type="email" 
-                id="email" 
-                className="w-full pt-5 pb-2 px-4 text-[15px] border border-gray-200 rounded-xl bg-white text-slate-900 focus:outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 transition-all peer placeholder-transparent autofill:shadow-[inset_0_0_0_1000px_white] autofill:text-slate-900"
-                placeholder="Email address"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required 
-              />
-              <label 
-                htmlFor="email" 
-                className="absolute left-4 top-1.5 text-gray-500 text-[11px] transition-all pointer-events-none 
-                           peer-placeholder-shown:text-[15px] peer-placeholder-shown:top-4 peer-placeholder-shown:text-gray-400
-                           peer-focus:top-1.5 peer-focus:text-[11px] peer-focus:text-gray-600
-                           peer-autofill:top-1.5 peer-autofill:text-[11px]"
-              >
-                Email address
-              </label>
-            </div>
+            {view === 'verify_code' && (
+              <div className="relative group">
+                <input 
+                  type="text" 
+                  id="otpCode" 
+                  className="w-full pt-5 pb-2 px-4 text-[15px] border border-gray-200 rounded-xl bg-white text-slate-900 focus:outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 transition-all peer placeholder-transparent autofill:shadow-[inset_0_0_0_1000px_white] autofill:text-slate-900"
+                  placeholder="Mã xác nhận 6 số"
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  required 
+                />
+                <label 
+                  htmlFor="otpCode" 
+                  className="absolute left-4 top-1.5 text-gray-500 text-[11px] transition-all pointer-events-none 
+                             peer-placeholder-shown:text-[15px] peer-placeholder-shown:top-4 peer-placeholder-shown:text-gray-400
+                             peer-focus:top-1.5 peer-focus:text-[11px] peer-focus:text-gray-600
+                             peer-autofill:top-1.5 peer-autofill:text-[11px]"
+                >
+                  Mã xác nhận 6 số
+                </label>
+              </div>
+            )}
+
+            {(view === 'login' || view === 'signup' || view === 'forgot') && (
+              <div className="relative group">
+                <input 
+                  type="email" 
+                  id="email" 
+                  className="w-full pt-5 pb-2 px-4 text-[15px] border border-gray-200 rounded-xl bg-white text-slate-900 focus:outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 transition-all peer placeholder-transparent autofill:shadow-[inset_0_0_0_1000px_white] autofill:text-slate-900"
+                  placeholder="Email address"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required 
+                  readOnly={view === 'verify_code' || view === 'reset_password'}
+                />
+                <label 
+                  htmlFor="email" 
+                  className="absolute left-4 top-1.5 text-gray-500 text-[11px] transition-all pointer-events-none 
+                             peer-placeholder-shown:text-[15px] peer-placeholder-shown:top-4 peer-placeholder-shown:text-gray-400
+                             peer-focus:top-1.5 peer-focus:text-[11px] peer-focus:text-gray-600
+                             peer-autofill:top-1.5 peer-autofill:text-[11px]"
+                >
+                  Email address
+                </label>
+              </div>
+            )}
             
-            {view !== 'forgot' && (
+            {(view === 'login' || view === 'signup' || view === 'reset_password') && (
               <div className="relative group">
                 <input 
                   type={showPassword ? "text" : "password"} 
                   id="password" 
                   className="w-full pt-5 pb-2 px-4 text-[15px] border border-gray-200 rounded-xl bg-white text-slate-900 focus:outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 transition-all peer placeholder-transparent autofill:shadow-[inset_0_0_0_1000px_white] autofill:text-slate-900"
-                  placeholder="Password"
+                  placeholder={view === 'reset_password' ? "Mật khẩu mới" : "Password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required 
@@ -238,7 +302,7 @@ const Login = () => {
                              peer-focus:top-1.5 peer-focus:text-[11px] peer-focus:text-gray-600
                              peer-autofill:top-1.5 peer-autofill:text-[11px]"
                 >
-                  Password
+                  {view === 'reset_password' ? "Mật khẩu mới" : "Password"}
                 </label>
                 <button 
                   type="button" 
@@ -255,7 +319,7 @@ const Login = () => {
               </div>
             )}
 
-            {view === 'signup' && (
+            {(view === 'signup' || view === 'reset_password') && (
               <div className="relative group">
                 <input 
                   type={showPassword ? "text" : "password"} 
