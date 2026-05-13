@@ -13,6 +13,7 @@
     "vite": "^5.4.10"
   },
   "dependencies": {
+    "@react-oauth/google": "^0.13.5",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.1",
     "react": "^19.2.6",

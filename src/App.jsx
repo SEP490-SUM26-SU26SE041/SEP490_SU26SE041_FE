@@ -9,7 +9,10 @@ import ResearcherDashboard from './pages/researcher/ResearcherDashboard';
 import StudentDashboard from './pages/student/StudentDashboard';
 import AIAssistantDashboard from './pages/ai-assistant/AIAssistantDashboard';
 
+import { GoogleOAuthProvider } from '@react-oauth/google';
+
 const App = () => {
+  const GOOGLE_CLIENT_ID = "381864878555-tb9lhets0jsdrn431mvupkt4p2ip2l8i.apps.googleusercontent.com";
   const [currentPath, setCurrentPath] = useState(window.location.pathname);
 
   useEffect(() => {
@@ -49,11 +52,13 @@ const App = () => {
   };
 
   return (
-    <FarmProvider>
-      <div className="app-container">
-        {renderView()}
-      </div>
-    </FarmProvider>
+    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+      <FarmProvider>
+        <div className="app-container">
+          {renderView()}
+        </div>
+      </FarmProvider>
+    </GoogleOAuthProvider>
   );
 };
 

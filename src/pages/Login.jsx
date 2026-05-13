@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useGoogleLogin } from '@react-oauth/google';
 
 const Login = () => {
   const [view, setView] = useState('login'); // 'login', 'signup', 'forgot'
@@ -13,41 +14,110 @@ const Login = () => {
     window.dispatchEvent(new Event('navigate'));
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (view === 'login') {
-      const accounts = {
-        'admin@farm.com': { pass: 'admin123', path: '/admin' },
-        'manager@farm.com': { pass: 'manager123', path: '/farm-manager' },
-        'tech@farm.com': { pass: 'tech123', path: '/technician' },
-        'researcher@farm.com': { pass: 'researcher123', path: '/researcher' },
-        'student@farm.com': { pass: 'student123', path: '/student' },
-        'ai@farm.com': { pass: 'ai123', path: '/ai-assistant' },
-      };
+  const handleGoogleSuccess = async (tokenResponse) => {
+    const API_URL = 'https://localhost:7048/api/Auth';
+    try {
+      // Gửi access_token về Backend
+      const response = await fetch(`${API_URL}/google-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: tokenResponse.access_token }),
+      });
 
-      const user = accounts[email];
-      if (user && user.pass === password) {
-        navigateTo(user.path);
+      if (response.ok) {
+        const data = await response.json();
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('user', JSON.stringify(data));
+
+        const rolePaths = {
+          'Admin': '/admin',
+          'Manager': '/farm-manager',
+          'Technician': '/technician',
+          'Researcher': '/researcher',
+          'Student': '/student'
+        };
+        navigateTo(rolePaths[data.role] || '/');
       } else {
-        alert('Invalid credentials! Hint: use admin@farm.com / admin123');
+        alert('Google Login failed at backend!');
       }
-    } else if (view === 'signup') {
-      if (password !== confirmPassword) {
-        alert('Passwords do not match!');
-        return;
+    } catch (err) {
+      console.error(err);
+      alert('Connection failed!');
+    }
+  };
+
+  const loginWithGoogle = useGoogleLogin({
+    onSuccess: handleGoogleSuccess,
+    onError: () => alert('Google Login Failed'),
+  });
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const API_URL = 'https://localhost:7048/api/Auth'; // Update port if different
+
+    try {
+      if (view === 'login') {
+        const response = await fetch(`${API_URL}/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('user', JSON.stringify(data));
+
+          // Role-based navigation
+          const rolePaths = {
+            'Admin': '/admin',
+            'Manager': '/farm-manager',
+            'Technician': '/technician',
+            'Researcher': '/researcher',
+            'Student': '/student'
+          };
+          
+          navigateTo(rolePaths[data.role] || '/');
+        } else {
+          const error = await response.json();
+          alert(error.message || 'Login failed!');
+        }
+      } else if (view === 'signup') {
+        if (password !== confirmPassword) {
+          alert('Passwords do not match!');
+          return;
+        }
+
+        const response = await fetch(`${API_URL}/register`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fullName: name, email, password, role: 'Student' }),
+        });
+
+        if (response.ok) {
+          alert('Registration successful! Please sign in.');
+          setView('login');
+        } else {
+          const error = await response.json();
+          alert(error.message || 'Registration failed!');
+        }
+      } else if (view === 'forgot') {
+        alert('Password reset feature is not implemented in BE yet!');
+        setView('login');
       }
-      console.log('Signing up with', name, email, password);
-      alert('Signup feature will be connected to backend later!');
-    } else if (view === 'forgot') {
-      console.log('Resetting password for', email);
-      alert('Password reset link sent (mock)!');
-      setView('login');
+    } catch (err) {
+      console.error(err);
+      alert('Connection to server failed. Make sure Backend is running!');
     }
   };
 
   const renderGoogleButton = () => (
     <div className="mb-8">
-      <button type="button" className="w-full flex items-center justify-center gap-3 bg-white border border-gray-200 rounded-xl py-3.5 px-4 text-sm font-semibold text-gray-700 hover:bg-gray-50 hover:border-gray-300 hover:-translate-y-px transition-all active:scale-[0.98]">
+      <button 
+        type="button" 
+        onClick={() => loginWithGoogle()}
+        className="w-full flex items-center justify-center gap-3 bg-white border border-gray-200 rounded-xl py-3.5 px-4 text-sm font-semibold text-gray-700 hover:bg-gray-50 hover:border-gray-300 hover:-translate-y-px transition-all active:scale-[0.98]"
+      >
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
           <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
