@@ -10,6 +10,7 @@ import StudentDashboard from './pages/student/StudentDashboard';
 import AIAssistantDashboard from './pages/ai-assistant/AIAssistantDashboard';
 
 import { GoogleOAuthProvider } from '@react-oauth/google';
+import { ToastProvider } from './context/ToastContext';
 
 const App = () => {
   const GOOGLE_CLIENT_ID = "381864878555-tb9lhets0jsdrn431mvupkt4p2ip2l8i.apps.googleusercontent.com";
@@ -53,11 +54,13 @@ const App = () => {
 
   return (
     <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-      <FarmProvider>
-        <div className="app-container">
-          {renderView()}
-        </div>
-      </FarmProvider>
+      <ToastProvider>
+        <FarmProvider>
+          <div className="app-container">
+            {renderView()}
+          </div>
+        </FarmProvider>
+      </ToastProvider>
     </GoogleOAuthProvider>
   );
 };

@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { userApi } from '../../api/userApi';
+import { useToast } from '../../context/ToastContext';
 
 const UserManagement = () => {
+  const { showToast } = useToast();
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -81,17 +83,17 @@ const UserManagement = () => {
     try {
       if (isEditing) {
         await userApi.updateUser(formData.id, formData);
-        alert('Cập nhật người dùng thành công');
+        showToast('Cập nhật người dùng thành công', 'success');
         fetchUsers();
         setIsModalOpen(false);
       } else {
         await userApi.createUser(formData);
-        alert('Thêm người dùng thành công');
+        showToast('Thêm người dùng thành công', 'success');
         fetchUsers();
         setIsModalOpen(false);
       }
     } catch (err) {
-      alert(err.message || 'Lỗi kết nối đến máy chủ');
+      showToast(err.message || 'Lỗi kết nối đến máy chủ', 'error');
     }
   };
 
@@ -99,8 +101,10 @@ const UserManagement = () => {
     if (!window.confirm('Bạn có chắc chắn muốn thay đổi trạng thái người dùng này?')) return;
     try {
       await userApi.toggleStatus(id);
+      showToast('Thay đổi trạng thái thành công', 'success');
       fetchUsers();
     } catch (err) {
+      showToast('Lỗi thay đổi trạng thái', 'error');
       console.error(err);
     }
   };
@@ -109,8 +113,10 @@ const UserManagement = () => {
     if (!window.confirm('Bạn có chắc chắn muốn xóa người dùng này?')) return;
     try {
       await userApi.deleteUser(id);
+      showToast('Xóa người dùng thành công', 'success');
       fetchUsers();
     } catch (err) {
+      showToast('Lỗi xóa người dùng', 'error');
       console.error(err);
     }
   };
@@ -224,42 +230,50 @@ const UserManagement = () => {
       {/* Modal Form */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden flex flex-col">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col">
             <div className="px-6 py-4 border-b border-outline-variant flex justify-between items-center">
               <h3 className="font-hanken font-bold text-lg text-primary">{isEditing ? 'Cập Nhật Người Dùng' : 'Thêm Người Dùng Mới'}</h3>
               <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600">
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
-            <form onSubmit={handleSave} className="p-6 flex flex-col gap-4">
-              <div>
+            <form onSubmit={handleSave} className="p-6 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+              <div className="col-span-1">
                 <label className="block text-xs font-bold text-on-surface-variant mb-1">Họ và Tên</label>
-                <input required type="text" value={formData.fullName} onChange={e => setFormData({...formData, fullName: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" />
+                <input required type="text" value={formData.fullName} onChange={e => setFormData({...formData, fullName: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-white text-on-surface transition-colors" />
               </div>
-              <div>
+              <div className="col-span-1">
                 <label className="block text-xs font-bold text-on-surface-variant mb-1">Email</label>
-                <input required type="email" value={formData.email} disabled={isEditing} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none disabled:bg-gray-100" />
+                <input required type="email" value={formData.email} disabled={isEditing} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-white text-on-surface disabled:bg-gray-100 transition-colors" />
               </div>
               {!isEditing && (
-                <div>
+                <div className="col-span-1">
                   <label className="block text-xs font-bold text-on-surface-variant mb-1">Mật Khẩu</label>
-                  <input required type="password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none" />
+                  <input required type="password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-white text-on-surface transition-colors" />
                 </div>
               )}
-              <div>
+              <div className="col-span-1">
+                <label className="block text-xs font-bold text-on-surface-variant mb-1">Số Điện Thoại</label>
+                <input type="text" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-white text-on-surface transition-colors" />
+              </div>
+              <div className="col-span-1">
                 <label className="block text-xs font-bold text-on-surface-variant mb-1">Chức Vụ</label>
-                <select value={formData.role} onChange={e => setFormData({...formData, role: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-white">
+                <select value={formData.role} onChange={e => setFormData({...formData, role: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-white text-on-surface transition-colors">
                   {roles.map(r => <option key={r.id} value={r.roleName}>{r.roleName}</option>)}
                 </select>
               </div>
-              <div className="flex items-center gap-2 mt-2">
-                <input type="checkbox" id="isActive" checked={formData.isActive} onChange={e => setFormData({...formData, isActive: e.target.checked})} className="rounded text-primary focus:ring-primary/20" />
-                <label htmlFor="isActive" className="text-sm text-on-surface font-medium">Tài khoản Đang Hoạt Động</label>
+              <div className="col-span-1 md:col-span-2">
+                <label className="block text-xs font-bold text-on-surface-variant mb-1">Mô Tả Hồ Sơ</label>
+                <textarea rows="3" value={formData.profileDescription} onChange={e => setFormData({...formData, profileDescription: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-white text-on-surface transition-colors resize-none"></textarea>
+              </div>
+              <div className="col-span-1 md:col-span-2 flex items-center gap-2 mt-1">
+                <input type="checkbox" id="isActive" checked={formData.isActive} onChange={e => setFormData({...formData, isActive: e.target.checked})} className="w-4 h-4 rounded text-primary focus:ring-primary/20 border-gray-300 cursor-pointer" />
+                <label htmlFor="isActive" className="text-sm text-on-surface font-medium cursor-pointer select-none">Tài khoản Đang Hoạt Động</label>
               </div>
               
-              <div className="mt-4 flex justify-end gap-3">
-                <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 font-bold text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Hủy</button>
-                <button type="submit" className="px-4 py-2 font-bold text-sm text-white bg-primary hover:bg-[#3d5728] rounded-lg shadow-sm">Lưu Thông Tin</button>
+              <div className="col-span-1 md:col-span-2 mt-4 flex justify-end gap-3 pt-4 border-t border-outline-variant">
+                <button type="button" onClick={() => setIsModalOpen(false)} className="px-5 py-2.5 font-bold text-[13px] uppercase tracking-wider text-gray-600 hover:bg-gray-100 rounded-xl transition-colors">Hủy</button>
+                <button type="submit" className="px-5 py-2.5 font-bold text-[13px] uppercase tracking-wider text-white bg-primary hover:bg-[#3d5728] rounded-xl shadow-sm transition-all active:scale-95">Lưu Thông Tin</button>
               </div>
             </form>
           </div>

@@ -198,18 +198,18 @@ const Login = () => {
         <div className="flex-1 flex flex-col justify-center px-8 sm:px-20 animate-slide-right">
           <div className="mb-10">
             <h2 className="text-3xl font-bold text-slate-900 mb-3 tracking-tight">
-              {view === 'login' ? 'Welcome back' : view === 'signup' ? 'Create an account' : 'Reset password'}
+              {view === 'login' ? 'Welcome back' : 'Reset password'}
             </h2>
             <p className="text-[15px] text-gray-500">
-              {view === 'login' ? 'Please enter your details to sign in.' : view === 'signup' ? 'Join Smart Farm today.' : 'Enter your email to receive a reset link.'}
+              {view === 'login' ? 'Please enter your details to sign in.' : 'Enter your email to receive a reset link.'}
             </p>
           </div>
 
-          {(view === 'login' || view === 'signup') && renderGoogleButton()}
+          {view === 'login' && renderGoogleButton()}
 
-          {(view === 'login' || view === 'signup') && (
+          {view === 'login' && (
             <div className="flex items-center text-center text-gray-400 text-[13px] mb-8 after:content-[''] after:flex-1 after:border-b after:border-gray-200 before:content-[''] before:flex-1 before:border-b before:border-gray-200">
-              <span className="px-4">or {view === 'login' ? 'sign in' : 'sign up'} with email</span>
+              <span className="px-4">or sign in with email</span>
             </div>
           )}
 
@@ -260,7 +260,7 @@ const Login = () => {
               </div>
             )}
 
-            {(view === 'login' || view === 'signup' || view === 'forgot') && (
+            {(view === 'login' || view === 'forgot') && (
               <div className="relative group">
                 <input 
                   type="email" 
@@ -284,7 +284,7 @@ const Login = () => {
               </div>
             )}
             
-            {(view === 'login' || view === 'signup' || view === 'reset_password') && (
+            {(view === 'login' || view === 'reset_password') && (
               <div className="relative group">
                 <input 
                   type={showPassword ? "text" : "password"} 
@@ -319,7 +319,7 @@ const Login = () => {
               </div>
             )}
 
-            {(view === 'signup' || view === 'reset_password') && (
+            {view === 'reset_password' && (
               <div className="relative group">
                 <input 
                   type={showPassword ? "text" : "password"} 
@@ -353,19 +353,13 @@ const Login = () => {
             )}
             
             <button type="submit" className="bg-slate-900 text-white p-4 rounded-xl text-[15px] font-semibold transition-all duration-300 mt-2 hover:bg-emerald-700 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]">
-              {view === 'login' ? 'Sign In' : view === 'signup' ? 'Create Account' : 'Reset Password'}
+              {view === 'login' ? 'Sign In' : 'Reset Password'}
             </button>
           </form>
 
 
 
           <p className="mt-8 text-center text-sm text-gray-500">
-            {view === 'login' && (
-              <>Don't have an account? <a href="#" className="text-slate-900 font-semibold hover:underline" onClick={(e) => { e.preventDefault(); setView('signup'); }}>Sign up</a></>
-            )}
-            {view === 'signup' && (
-              <>Already have an account? <a href="#" className="text-slate-900 font-semibold hover:underline" onClick={(e) => { e.preventDefault(); setView('login'); }}>Sign in</a></>
-            )}
             {view === 'forgot' && (
               <>Remember your password? <a href="#" className="text-slate-900 font-semibold hover:underline" onClick={(e) => { e.preventDefault(); setView('login'); }}>Back to login</a></>
             )}
