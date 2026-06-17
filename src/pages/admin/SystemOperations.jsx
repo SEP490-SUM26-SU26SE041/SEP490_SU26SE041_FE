@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { systemLogApi } from '../../api/systemLogApi';
 
 // --- Sub-components (Replicating the original logic) ---
 
@@ -87,19 +88,47 @@ const DeviceRow = ({ id, type, location, time, status, highlight }) => {
   );
 };
 
-const LogItem = ({ icon: iconPath, title, time, type }) => {
+const LogItem = ({ title, time, action }) => {
   const getColors = () => {
-    switch (type) {
-      case 'error': return 'bg-[#dc2626]/5 border-[#dc2626]/20 text-[#dc2626]';
-      case 'success': return 'bg-[#486730]/5 border-[#486730]/20 text-[#486730]';
-      case 'warning': return 'bg-[#7c5639]/5 border-[#7c5639]/20 text-[#7c5639]';
+    switch (action) {
+      case 'DELETE':
+      case 'ERROR': return 'bg-[#dc2626]/5 border-[#dc2626]/20 text-[#dc2626]';
+      case 'CREATE':
+      case 'APPROVE': return 'bg-[#486730]/5 border-[#486730]/20 text-[#486730]';
+      case 'UPDATE':
+      case 'REASSIGN': return 'bg-[#7c5639]/5 border-[#7c5639]/20 text-[#7c5639]';
+      case 'LOGIN': return 'bg-[#0ea5e9]/5 border-[#0ea5e9]/20 text-[#0ea5e9]';
+      case 'EXPORT': return 'bg-[#8b5cf6]/5 border-[#8b5cf6]/20 text-[#8b5cf6]';
       default: return 'bg-[#f3f4f3] border-[#74796c]/20 text-[#74796c]';
+    }
+  };
+
+  const getIcon = () => {
+    switch (action) {
+      case 'DELETE': 
+        return <svg className="w-5 h-5 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>;
+      case 'ERROR': 
+        return <svg className="w-5 h-5 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
+      case 'UPDATE': 
+        return <svg className="w-5 h-5 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>;
+      case 'REASSIGN': 
+        return <svg className="w-5 h-5 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 3v4"/><path d="M21 7h-4"/><path d="M7 21v-4"/><path d="M3 17h4"/><path d="M3 7v10"/><path d="M21 7v10"/><path d="M17 21h4"/><path d="M7 3H3"/></svg>;
+      case 'CREATE':
+        return <svg className="w-5 h-5 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14"/><path d="M5 12h14"/></svg>;
+      case 'APPROVE':
+        return <svg className="w-5 h-5 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>;
+      case 'LOGIN':
+        return <svg className="w-5 h-5 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>;
+      case 'EXPORT':
+        return <svg className="w-5 h-5 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
+      default: 
+        return <svg className="w-5 h-5 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>;
     }
   };
 
   return (
     <div className={`p-4 rounded-xl border ${getColors()} flex gap-4 items-start hover:shadow-md transition-shadow duration-200 cursor-default`}>
-      <svg className="w-5 h-5 shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">{iconPath}</svg>
+      {getIcon()}
       <div>
         <p className="text-sm font-bold text-[#1a1c1c] leading-tight">{title}</p>
         <p className="font-mono text-[10px] text-[#74796c] mt-1.5 opacity-80">{time}</p>
@@ -111,6 +140,24 @@ const LogItem = ({ icon: iconPath, title, time, type }) => {
 // --- Main Page Component ---
 
 const SystemOperations = () => {
+  const [logs, setLogs] = useState([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+
+  useEffect(() => {
+    const fetchRecentLogs = async () => {
+      try {
+        setLoadingLogs(true);
+        const data = await systemLogApi.getLogs({ pageNumber: 1, pageSize: 5 });
+        setLogs(data.items || []);
+      } catch (error) {
+        console.error('Error fetching logs for dashboard:', error);
+      } finally {
+        setLoadingLogs(false);
+      }
+    };
+    fetchRecentLogs();
+  }, []);
+
   return (
     <div className="flex flex-col animate-fade-in w-full bg-[#f9f9f8]">
       {/* Header - Hidden on mobile, shown on desktop */}
@@ -268,24 +315,20 @@ const SystemOperations = () => {
             </h3>
           </div>
           <div className="flex-1 overflow-y-auto space-y-3 pr-2 no-scrollbar">
-            <LogItem 
-              icon={<><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></>} 
-              title="Node 04 (Area C) disconnect" 
-              time="14:32 - 12/10/2023" 
-              type="error" 
-            />
-            <LogItem 
-              icon={<><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></>} 
-              title="Azure Data Lake Backup successful" 
-              time="02:00 - 12/10/2023" 
-              type="success" 
-            />
-            <LogItem 
-              icon={<><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></>} 
-              title="High latency on Node 02 (Area B)" 
-              time="18:15 - 11/10/2023" 
-              type="warning" 
-            />
+            {loadingLogs ? (
+              <p className="text-xs text-[#74796c] text-center mt-4">Đang tải...</p>
+            ) : logs.length === 0 ? (
+              <p className="text-xs text-[#74796c] text-center mt-4">Chưa có nhật ký</p>
+            ) : (
+              logs.map(log => (
+                <LogItem 
+                  key={log.id}
+                  title={log.description} 
+                  time={new Date(log.createdAt).toLocaleString('vi-VN')} 
+                  action={log.action} 
+                />
+              ))
+            )}
           </div>
         </div>
       </div>
