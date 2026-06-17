@@ -1,51 +1,31 @@
 import React, { useState } from 'react';
 import { CatalogTable } from './CatalogTable';
 import { StatsWidgets, FeatureGrid } from './Widgets';
-
-// Mock data for Areas
-const AREAS = [
-  { id: 'GH-01', name: 'Greenhouse North', type: 'Hydroponic', area: '450m²', status: 'Occupied', plants: 'Tomatoes' },
-  { id: 'GH-02', name: 'Greenhouse South', type: 'Soil-based', area: '600m²', status: 'Available', plants: 'None' },
-  { id: 'OA-03', name: 'Open Field A', type: 'Irrigated', area: '1200m²', status: 'Active', plants: 'Corn' },
-];
-
-// Mock data for Pests
-const PESTS = [
-  { name: 'Red Spider Mite', type: 'Pest', risk: 'High', treatment: 'Abamectin Spray', affected: 'Tomatoes, Peppers' },
-  { name: 'Powdery Mildew', type: 'Disease', risk: 'Medium', treatment: 'Sulfur Fungicide', affected: 'Cucumber, Squash' },
-  { name: 'Aphids', type: 'Pest', risk: 'Medium', treatment: 'Neem Oil', affected: 'General' },
-];
-
-// Mock data for Inventory
-const INVENTORY = [
-  { item: 'NPK 15-15-15', category: 'Fertilizer', stock: '240kg', unit: 'Bag', supplier: 'AgroCorp' },
-  { item: 'Fungicide-X', category: 'Chemical', stock: '45L', unit: 'Bottle', supplier: 'BioSafe' },
-  { item: 'Hybrid Tomato Seeds', category: 'Seeds', stock: '12,000', unit: 'Pack', supplier: 'SeedMaster' },
-];
+import { AREAS, PESTS, INVENTORY } from '../../api/mockData';
 
 const MasterData = () => {
   const [activeTab, setActiveTab] = useState('PLANT SPECIES CATALOG');
 
   const tabs = [
-    { label: 'PLANT SPECIES CATALOG' },
-    { label: 'AREA & GREENHOUSES' },
-    { label: 'PEST & DISEASE DATABASE' },
-    { label: 'INVENTORY REGISTRY' },
+    { label: 'DANH MỤC GIỐNG CÂY' },
+    { label: 'KHU VỰC & NHÀ MÀNG' },
+    { label: 'DỮ LIỆU SÂU BỆNH' },
+    { label: 'QUẢN LÝ KHO' },
   ];
 
   const renderContent = () => {
     switch (activeTab) {
-      case 'PLANT SPECIES CATALOG':
+      case 'DANH MỤC GIỐNG CÂY':
         return (
           <>
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 mb-8">
               <div>
-                <h3 className="font-hanken text-2xl font-bold text-on-surface">Plant Species Catalog</h3>
-                <p className="text-sm text-on-surface-variant">Manage taxonomical data, growth requirements, and lifecycle stages.</p>
+                <h3 className="font-hanken text-2xl font-bold text-on-surface">Danh Mục Giống Cây</h3>
+                <p className="text-sm text-on-surface-variant">Quản lý dữ liệu phân loại, yêu cầu sinh trưởng và các giai đoạn vòng đời.</p>
               </div>
               <button className="flex items-center gap-2 bg-primary text-white px-6 py-3 rounded-xl text-[10px] font-bold tracking-wider hover:bg-primary/90 transition-all shadow-md active:scale-95 uppercase">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                Add New Species
+                Thêm Giống Mới
               </button>
             </div>
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
@@ -60,17 +40,17 @@ const MasterData = () => {
           </>
         );
 
-      case 'AREA & GREENHOUSES':
+      case 'KHU VỰC & NHÀ MÀNG':
         return (
           <div className="space-y-8">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 mb-8">
               <div>
-                <h3 className="font-hanken text-2xl font-bold text-on-surface">Area & Greenhouses</h3>
-                <p className="text-sm text-on-surface-variant">Configure facility layouts, climate zones, and plot assignments.</p>
+                <h3 className="font-hanken text-2xl font-bold text-on-surface">Khu Vực & Nhà Màng</h3>
+                <p className="text-sm text-on-surface-variant">Cấu hình sơ đồ cơ sở, vùng khí hậu và phân bổ lô đất.</p>
               </div>
               <button className="flex items-center gap-2 bg-primary text-white px-6 py-3 rounded-xl text-[10px] font-bold tracking-wider hover:bg-primary/90 transition-all shadow-md active:scale-95 uppercase">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                Register Area
+                Thêm Khu Vực
               </button>
             </div>
             
@@ -86,15 +66,15 @@ const MasterData = () => {
                   <h4 className="font-bold text-lg text-on-surface group-hover:text-primary transition-colors">{area.name}</h4>
                   <div className="mt-4 space-y-2">
                     <div className="flex justify-between text-xs">
-                      <span className="text-on-surface-variant">Type</span>
+                      <span className="text-on-surface-variant">Loại</span>
                       <span className="font-bold text-on-surface">{area.type}</span>
                     </div>
                     <div className="flex justify-between text-xs">
-                      <span className="text-on-surface-variant">Total Area</span>
+                      <span className="text-on-surface-variant">Tổng Diện Tích</span>
                       <span className="font-bold text-on-surface">{area.area}</span>
                     </div>
                     <div className="flex justify-between text-xs border-t border-outline-variant pt-2 mt-2">
-                      <span className="text-on-surface-variant">Active Crop</span>
+                      <span className="text-on-surface-variant">Cây Trồng Hiện Tại</span>
                       <span className="font-bold text-primary">{area.plants}</span>
                     </div>
                   </div>
@@ -104,25 +84,25 @@ const MasterData = () => {
 
             <div className="bg-white border border-outline-variant rounded-xl p-8 flex items-center justify-between">
               <div>
-                <h4 className="font-bold text-on-surface">Spatial Mapping Services</h4>
-                <p className="text-sm text-on-surface-variant mt-1">Integrate satellite or drone-mapped data for precise area management.</p>
+                <h4 className="font-bold text-on-surface">Dịch vụ Bản đồ Không gian</h4>
+                <p className="text-sm text-on-surface-variant mt-1">Tích hợp dữ liệu từ vệ tinh hoặc flycam để quản lý khu vực chính xác.</p>
               </div>
-              <button className="px-6 py-2 border border-outline-variant rounded-lg text-xs font-bold hover:bg-surface-container transition-all">Configure GIS</button>
+              <button className="px-6 py-2 border border-outline-variant rounded-lg text-xs font-bold hover:bg-surface-container transition-all">Cấu hình GIS</button>
             </div>
           </div>
         );
 
-      case 'PEST & DISEASE DATABASE':
+      case 'DỮ LIỆU SÂU BỆNH':
         return (
           <div className="space-y-8">
              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 mb-8">
               <div>
-                <h3 className="font-hanken text-2xl font-bold text-on-surface">Pest & Disease Database</h3>
-                <p className="text-sm text-on-surface-variant">Comprehensive registry for biological threats and management protocols.</p>
+                <h3 className="font-hanken text-2xl font-bold text-on-surface">Dữ Liệu Sâu Bệnh</h3>
+                <p className="text-sm text-on-surface-variant">Sổ bộ tổng hợp các mối đe dọa sinh học và phương án xử lý.</p>
               </div>
               <button className="flex items-center gap-2 bg-primary text-white px-6 py-3 rounded-xl text-[10px] font-bold tracking-wider hover:bg-primary/90 transition-all shadow-md active:scale-95 uppercase">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                Log New Threat
+                Ghi Nhận Nguy Cơ Mới
               </button>
             </div>
 
@@ -130,11 +110,11 @@ const MasterData = () => {
               <table className="w-full text-left">
                 <thead>
                   <tr className="bg-surface-container-low/50 border-b border-outline-variant">
-                    <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Common Name</th>
-                    <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Classification</th>
-                    <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Risk Level</th>
-                    <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Primary Treatment</th>
-                    <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Susceptible Crops</th>
+                    <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Tên Thông Thường</th>
+                    <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Phân Loại</th>
+                    <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Mức Độ Rủi Ro</th>
+                    <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Biện Pháp Xử Lý Chính</th>
+                    <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Cây Dễ Mắc Phải</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-outline-variant">
@@ -157,17 +137,17 @@ const MasterData = () => {
           </div>
         );
 
-      case 'INVENTORY REGISTRY':
+      case 'QUẢN LÝ KHO':
         return (
           <div className="space-y-8">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-4 mb-8">
               <div>
-                <h3 className="font-hanken text-2xl font-bold text-on-surface">Inventory Registry</h3>
-                <p className="text-sm text-on-surface-variant">Track agricultural inputs, seeds, and equipment stock levels.</p>
+                <h3 className="font-hanken text-2xl font-bold text-on-surface">Quản Lý Kho</h3>
+                <p className="text-sm text-on-surface-variant">Theo dõi vật tư nông nghiệp, hạt giống và mức tồn kho thiết bị.</p>
               </div>
               <button className="flex items-center gap-2 bg-primary text-white px-6 py-3 rounded-xl text-[10px] font-bold tracking-wider hover:bg-primary/90 transition-all shadow-md active:scale-95 uppercase">
                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                Update Stock
+                Cập Nhật Tồn Kho
               </button>
             </div>
 
@@ -176,10 +156,10 @@ const MasterData = () => {
                 <table className="w-full text-left">
                   <thead>
                     <tr className="bg-surface-container-low/50 border-b border-outline-variant">
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Resource Item</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Category</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Quantity</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Supplier</th>
+                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Tên Vật Tư</th>
+                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Danh Mục</th>
+                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Số Lượng</th>
+                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Nhà Cung Cấp</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-outline-variant">
@@ -202,24 +182,24 @@ const MasterData = () => {
 
               <div className="lg:col-span-4 space-y-6">
                 <div className="bg-primary/5 border border-primary/20 p-6 rounded-xl">
-                  <h4 className="font-bold text-primary text-sm uppercase tracking-widest mb-4">Stock Alerts</h4>
+                  <h4 className="font-bold text-primary text-sm uppercase tracking-widest mb-4">Cảnh Báo Tồn Kho</h4>
                   <div className="space-y-4">
                     <div className="flex gap-3">
                       <div className="w-8 h-8 rounded bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">!</div>
                       <div>
-                        <p className="text-xs font-bold text-on-surface">Potassium Fertilizer Low</p>
-                        <p className="text-[10px] text-on-surface-variant mt-1">Remaining: 15kg. Re-order threshold met.</p>
+                        <p className="text-xs font-bold text-on-surface">Phân bón Kali đang sắp hết</p>
+                        <p className="text-[10px] text-on-surface-variant mt-1">Còn lại: 15kg. Đã chạm mức cần đặt hàng lại.</p>
                       </div>
                     </div>
                   </div>
                 </div>
 
                 <div className="bg-white border border-outline-variant p-6 rounded-xl">
-                  <h4 className="font-bold text-on-surface text-sm uppercase tracking-widest mb-4">Quick Links</h4>
+                  <h4 className="font-bold text-on-surface text-sm uppercase tracking-widest mb-4">Liên Kết Nhanh</h4>
                   <div className="space-y-2">
-                    <button className="w-full text-left px-3 py-2 text-xs font-medium hover:bg-surface-container rounded-md transition-colors">Generate Inventory Report</button>
-                    <button className="w-full text-left px-3 py-2 text-xs font-medium hover:bg-surface-container rounded-md transition-colors">Supplier Directory</button>
-                    <button className="w-full text-left px-3 py-2 text-xs font-medium hover:bg-surface-container rounded-md transition-colors">Order Tracking</button>
+                    <button className="w-full text-left px-3 py-2 text-xs font-medium hover:bg-surface-container rounded-md transition-colors">Xuất Báo Cáo Tồn Kho</button>
+                    <button className="w-full text-left px-3 py-2 text-xs font-medium hover:bg-surface-container rounded-md transition-colors">Danh bạ Nhà Cung Cấp</button>
+                    <button className="w-full text-left px-3 py-2 text-xs font-medium hover:bg-surface-container rounded-md transition-colors">Theo dõi Đơn Hàng</button>
                   </div>
                 </div>
               </div>
@@ -236,7 +216,7 @@ const MasterData = () => {
     <div className="flex flex-col animate-fade-in w-full">
       {/* Header - Hidden on mobile, shown on desktop */}
       <header className="hidden lg:flex min-h-20 py-4 border-b border-outline-variant items-center justify-between px-10 bg-white/50 backdrop-blur-md sticky top-0 z-20 gap-4">
-        <h2 className="font-hanken text-xl lg:text-2xl font-bold text-primary w-full lg:w-auto text-center lg:text-left">Master Data</h2>
+        <h2 className="font-hanken text-xl lg:text-2xl font-bold text-primary w-full lg:w-auto text-center lg:text-left">Dữ liệu Danh mục</h2>
         <div className="flex flex-col sm:flex-row items-center gap-4 w-full lg:w-auto">
           <div className="relative group w-full sm:w-80">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant group-focus-within:text-primary transition-colors">
@@ -244,7 +224,7 @@ const MasterData = () => {
             </span>
             <input 
               type="text" 
-              placeholder="Search data..." 
+              placeholder="Tìm kiếm dữ liệu..." 
               className="pl-10 pr-4 py-2.5 bg-surface-container-low border border-outline-variant rounded-xl text-sm focus:outline-none focus:ring-4 focus:ring-primary/10 focus:border-primary transition-all w-full"
             />
           </div>
