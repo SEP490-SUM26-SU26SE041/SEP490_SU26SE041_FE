@@ -6,12 +6,12 @@ export const StatsWidgets = () => {
       {/* Quick Stats */}
       <div className="rounded-xl border border-outline-variant bg-white p-6 shadow-sm">
         <div className="mb-4 flex items-center justify-between">
-          <h4 className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">Quick Stats</h4>
+          <h4 className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">Thống Kê Nhanh</h4>
           <svg className="h-5 w-5 text-primary" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>
         </div>
         <div className="space-y-6">
           <div className="flex items-end justify-between">
-            <span className="text-sm font-medium text-on-surface-variant">Total Species</span>
+            <span className="text-sm font-medium text-on-surface-variant">Tổng Số Giống</span>
             <span className="font-hanken text-3xl font-bold text-primary">142</span>
           </div>
           <div className="h-1 w-full overflow-hidden rounded-full bg-surface-container">
@@ -19,11 +19,11 @@ export const StatsWidgets = () => {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="rounded-lg bg-surface-container-low/50 p-4 border border-outline-variant/30">
-              <div className="text-[9px] font-bold uppercase tracking-wider text-on-surface-variant">Vegetative</div>
+              <div className="text-[9px] font-bold uppercase tracking-wider text-on-surface-variant">Sinh Trưởng</div>
               <div className="text-lg font-bold text-on-surface">58</div>
             </div>
             <div className="rounded-lg bg-surface-container-low/50 p-4 border border-outline-variant/30">
-              <div className="text-[9px] font-bold uppercase tracking-wider text-on-surface-variant">Flowering</div>
+              <div className="text-[9px] font-bold uppercase tracking-wider text-on-surface-variant">Ra Hoa</div>
               <div className="text-lg font-bold text-on-surface">24</div>
             </div>
           </div>
@@ -33,13 +33,13 @@ export const StatsWidgets = () => {
       {/* Database Status */}
       <div className="relative overflow-hidden rounded-xl bg-primary p-6 text-white shadow-lg">
         <div className="relative z-10">
-          <h4 className="mb-2 text-[9px] font-bold uppercase tracking-widest opacity-80">Database Status</h4>
-          <div className="font-hanken text-xl font-bold leading-tight mb-4 uppercase">All Systems Nominal</div>
+          <h4 className="mb-2 text-[9px] font-bold uppercase tracking-widest opacity-80">Trạng Thái Dữ Liệu</h4>
+          <div className="font-hanken text-xl font-bold leading-tight mb-4 uppercase">Tất Cả Hệ Thống Hoạt Động Tốt</div>
           <p className="mb-6 text-xs opacity-90 leading-relaxed">
-            Last cloud synchronization performed 14 minutes ago. 42 updates pending area deployment.
+            Lần đồng bộ đám mây cuối cách đây 14 phút. 42 cập nhật đang chờ triển khai.
           </p>
           <button className="w-full rounded-lg bg-white/10 backdrop-blur-md border border-white/20 py-2.5 text-[10px] font-bold uppercase tracking-wider text-white transition-all hover:bg-white/20">
-            Sync Now
+            Đồng Bộ Ngay
           </button>
         </div>
         <svg className="absolute -bottom-6 -right-6 h-32 w-32 opacity-10" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>
@@ -47,7 +47,7 @@ export const StatsWidgets = () => {
 
       {/* Recent Modifications */}
       <div className="rounded-xl border border-outline-variant bg-white p-6 shadow-sm">
-        <h4 className="mb-6 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">Recent Modifications</h4>
+        <h4 className="mb-6 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">Thay Đổi Gần Đây</h4>
         <div className="space-y-6">
           <ModificationItem 
             color="bg-tertiary" 
@@ -90,23 +90,23 @@ export const FeatureGrid = () => {
       <FeatureCard 
         icon={<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>}
         iconColor="text-primary"
-        title="Area Mapping"
-        desc="Define physical zoning, greenhouse dimensions, and sensor node placement across your facility."
-        linkText="MANAGE ZONES"
+        title="Bản Đồ Khu Vực"
+        desc="Thiết lập phân vùng vật lý, kích thước nhà màng và vị trí cảm biến."
+        linkText="QUẢN LÝ KHU VỰC"
       />
       <FeatureCard 
         icon={<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"/><path d="M12 9v6"/><path d="M9 12h6"/></svg>}
         iconColor="text-tertiary"
-        title="Bio-Security"
-        desc="Comprehensive database of localized pests and diseases with prevention protocols and treatment logs."
-        linkText="VIEW DATABASE"
+        title="An Toàn Sinh Học"
+        desc="Cơ sở dữ liệu toàn diện về sâu bệnh với phác đồ phòng ngừa và nhật ký điều trị."
+        linkText="XEM DỮ LIỆU"
       />
       <FeatureCard 
         icon={<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 2v8"/><path d="M14 2v8"/><path d="M8 10h8l1 12H7l1-12Z"/></svg>}
         iconColor="text-secondary"
-        title="Chemical Registry"
-        desc="Safety data sheets, application rates, and inventory management for fertilizers and pesticides."
-        linkText="OPEN REGISTRY"
+        title="Danh Mục Hóa Chất"
+        desc="Dữ liệu an toàn, liều lượng sử dụng và quản lý kho cho phân bón và thuốc trừ sâu."
+        linkText="MỞ DANH MỤC"
       />
     </div>
   );

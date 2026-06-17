@@ -26,14 +26,14 @@ const GreenhouseCard = ({ title, sensors, controllers }) => {
       <h4 className="font-hanken font-bold text-[#1a1c1c] mb-4 group-hover:text-[#486730] transition-colors">{title}</h4>
       <div className="space-y-3">
         <div className="flex justify-between items-center">
-          <span className="text-xs text-[#74796c] font-medium">Sensors</span>
+          <span className="text-xs text-[#74796c] font-medium">Cảm biến</span>
           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 ${getPillBg(sensors.status)}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${getStatusColor(sensors.status)}`}></span>
             {sensors.status} ({sensors.count})
           </span>
         </div>
         <div className="flex justify-between items-center">
-          <span className="text-xs text-[#74796c] font-medium">Controllers</span>
+          <span className="text-xs text-[#74796c] font-medium">Bộ Điều Khiển</span>
           <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 ${getPillBg(controllers.status)}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${getStatusColor(controllers.status)}`}></span>
             {controllers.status} ({controllers.count})
@@ -115,7 +115,7 @@ const SystemOperations = () => {
     <div className="flex flex-col animate-fade-in w-full bg-[#f9f9f8]">
       {/* Header - Hidden on mobile, shown on desktop */}
       <header className="hidden lg:flex min-h-20 py-4 border-b border-outline-variant items-center justify-between px-10 bg-white/50 backdrop-blur-md sticky top-0 z-20 gap-4">
-        <h2 className="font-hanken text-xl lg:text-2xl font-bold text-primary w-full lg:w-auto text-center lg:text-left">System Operations</h2>
+        <h2 className="font-hanken text-xl lg:text-2xl font-bold text-primary w-full lg:w-auto text-center lg:text-left">Vận Hành Hệ Thống</h2>
         <div className="flex flex-col sm:flex-row items-center gap-4 w-full lg:w-auto">
           <div className="relative group w-full sm:w-80">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant group-focus-within:text-primary transition-colors">
@@ -123,7 +123,7 @@ const SystemOperations = () => {
             </span>
             <input 
               type="text" 
-              placeholder="Search data..." 
+              placeholder="Tìm kiếm dữ liệu..." 
               className="pl-10 pr-4 py-2.5 bg-surface-container-low border border-outline-variant rounded-xl text-sm focus:outline-none focus:ring-4 focus:ring-primary/10 focus:border-primary transition-all w-full"
             />
           </div>
@@ -145,21 +145,21 @@ const SystemOperations = () => {
         {/* Page Sub-Header - Action Buttons here */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 lg:gap-6">
           <div className="max-w-md">
-            <h3 className="font-hanken text-lg lg:text-2xl font-bold text-on-surface">Operations & Monitoring</h3>
-            <p className="text-[10px] lg:text-sm text-on-surface-variant mt-0.5 lg:mt-1">Real-time IoT and storage status.</p>
+            <h3 className="font-hanken text-lg lg:text-2xl font-bold text-on-surface">Vận hành & Giám sát</h3>
+            <p className="text-[10px] lg:text-sm text-on-surface-variant mt-0.5 lg:mt-1">Trạng thái lưu trữ và IoT theo thời gian thực.</p>
           </div>
           <div className="flex flex-wrap gap-2 w-full md:w-auto">
             <button className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-white text-[#1a1c1c] border border-[#c4c8ba] rounded-xl hover:bg-[#e8e8e7] transition-all text-[9px] font-bold uppercase tracking-wider shadow-sm active:scale-95">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
-              Sync
+              Đồng Bộ
             </button>
             <button className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-white text-[#1a1c1c] border border-[#c4c8ba] rounded-xl hover:bg-[#e8e8e7] transition-all text-[9px] font-bold uppercase tracking-wider shadow-sm active:scale-95">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-              Diagnostic
+              Chẩn Đoán
             </button>
             <button className="flex-[2] md:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-[#486730] text-white rounded-xl hover:bg-opacity-90 transition-all text-[9px] font-bold uppercase tracking-wider shadow-md active:scale-95">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.5 19c.703 0 1.333-.34 1.732-.866a3.344 3.344 0 0 0 1.268.243c1.933 0 3.5-1.567 3.5-3.5 0-1.562-1.023-2.885-2.438-3.34A4.996 4.996 0 0 0 17 5a5 5 0 0 0-4.746 3.42A4 4 0 0 0 9 7.5a4 4 0 0 0-4 4c0 .354.046.697.132 1.023A3.335 3.335 0 0 0 2 15.5C2 17.433 3.567 19 5.5 19c.148 0 .292-.01.433-.028A3.344 3.344 0 0 0 7.2 19.866c.4.526 1.03.866 1.732.866 1.1 0 2-.853 2.147-1.944A4.966 4.966 0 0 0 13 20a5 5 0 0 0 4.5-1z"/></svg>
-              Cloud
+              Đám Mây
             </button>
           </div>
         </div>
@@ -170,7 +170,7 @@ const SystemOperations = () => {
           <div className="flex justify-between items-center mb-6 border-b border-[#c4c8ba] pb-3">
             <h3 className="text-[9px] lg:text-[10px] uppercase tracking-[0.2em] font-bold text-[#74796c] flex items-center gap-2">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="14" width="20" height="8" rx="2"/><rect x="2" y="2" width="20" height="8" rx="2"/><path d="M6 21v-2"/><path d="M18 21v-2"/><path d="M6 9V7"/><path d="M18 9V7"/></svg>
-              IoT Connectivity Status
+              Trạng thái Kết nối IoT
             </h3>
           </div>
           
@@ -198,7 +198,7 @@ const SystemOperations = () => {
           <div className="flex justify-between items-center mb-6 border-b border-[#c4c8ba] pb-3">
             <h3 className="text-[9px] lg:text-[10px] uppercase tracking-[0.2em] font-bold text-[#74796c] flex items-center gap-2">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.5 19c.703 0 1.333-.34 1.732-.866a3.344 3.344 0 0 0 1.268.243c1.933 0 3.5-1.567 3.5-3.5 0-1.562-1.023-2.885-2.438-3.34A4.996 4.996 0 0 0 17 5a5 5 0 0 0-4.746 3.42A4 4 0 0 0 9 7.5a4 4 0 0 0-4 4c0 .354.046.697.132 1.023A3.335 3.335 0 0 0 2 15.5C2 17.433 3.567 19 5.5 19c.148 0 .292-.01.433-.028A3.344 3.344 0 0 0 7.2 19.866c.4.526 1.03.866 1.732.866 1.1 0 2-.853 2.147-1.944A4.966 4.966 0 0 0 13 20a5 5 0 0 0 4.5-1z"/></svg>
-              Cloud Infrastructure
+              Hạ Tầng Đám Mây
             </h3>
           </div>
           <div className="flex-1 flex flex-col justify-center gap-6 lg:gap-8">
@@ -226,7 +226,7 @@ const SystemOperations = () => {
           <div className="p-4 lg:p-6 border-b border-[#c4c8ba] bg-[#f3f4f3] flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
             <h3 className="text-[9px] lg:text-[10px] uppercase tracking-[0.2em] font-bold text-[#74796c] flex items-center gap-2">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="15" x2="23" y2="15"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="15" x2="4" y2="15"/></svg>
-              Device Registry
+              Danh mục Thiết bị
             </h3>
             <div className="relative w-full sm:w-auto">
               <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-[#74796c] w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
@@ -241,11 +241,11 @@ const SystemOperations = () => {
             <table className="w-full text-left border-collapse min-w-[600px]">
               <thead>
                 <tr className="border-b border-[#c4c8ba] bg-[#f3f4f3]">
-                  <th className="py-3 px-6 text-[9px] lg:text-[10px] uppercase tracking-wider font-bold text-[#74796c]">Device ID</th>
-                  <th className="py-3 px-6 text-[9px] lg:text-[10px] uppercase tracking-wider font-bold text-[#74796c]">Type</th>
-                  <th className="py-3 px-6 text-[9px] lg:text-[10px] uppercase tracking-wider font-bold text-[#74796c]">Location</th>
-                  <th className="py-3 px-6 text-[9px] lg:text-[10px] uppercase tracking-wider font-bold text-[#74796c]">Last Ping</th>
-                  <th className="py-3 px-6 text-[9px] lg:text-[10px] uppercase tracking-wider font-bold text-[#74796c] text-center">Status</th>
+                  <th className="py-3 px-6 text-[9px] lg:text-[10px] uppercase tracking-wider font-bold text-[#74796c]">ID Thiết Bị</th>
+                  <th className="py-3 px-6 text-[9px] lg:text-[10px] uppercase tracking-wider font-bold text-[#74796c]">Loại</th>
+                  <th className="py-3 px-6 text-[9px] lg:text-[10px] uppercase tracking-wider font-bold text-[#74796c]">Vị Trí</th>
+                  <th className="py-3 px-6 text-[9px] lg:text-[10px] uppercase tracking-wider font-bold text-[#74796c]">Lần Cuối Phản Hồi</th>
+                  <th className="py-3 px-6 text-[9px] lg:text-[10px] uppercase tracking-wider font-bold text-[#74796c] text-center">Trạng Thái</th>
                 </tr>
               </thead>
               <tbody className="font-mono text-xs lg:text-sm">
@@ -264,7 +264,7 @@ const SystemOperations = () => {
           <div className="flex justify-between items-center mb-6 border-b border-[#c4c8ba] pb-3">
             <h3 className="text-[10px] uppercase tracking-[0.2em] font-bold text-[#74796c] flex items-center gap-2">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-              Infrastructure Log
+              Nhật Ký Hệ Thống
             </h3>
           </div>
           <div className="flex-1 overflow-y-auto space-y-3 pr-2 no-scrollbar">

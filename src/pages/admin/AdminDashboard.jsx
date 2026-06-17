@@ -19,14 +19,6 @@ const AdminDashboard = () => {
     { label: 'System Health', value: '99%', color: 'text-primary' },
   ];
 
-  const USERS = [
-    { name: 'Elena Martinez', email: 'elena.m@smartfarm.com', role: 'Researcher', roleColor: 'bg-primary-container text-on-primary-container', status: 'Active', lastLogin: '2023-10-24 09:15', initials: 'EM', avatarBg: 'bg-secondary-container text-on-secondary-container' },
-    { name: 'James Thompson', email: 'j.thompson@smartfarm.com', role: 'Farm Manager', roleColor: 'bg-[#f8e8d8] text-[#7c5639]', status: 'Active', lastLogin: '2023-10-24 07:42', initials: 'JT', avatarBg: 'bg-tertiary-container text-on-tertiary-container' },
-    { name: 'Sarah Chen', email: 's.chen@smartfarm.com', role: 'Technician', roleColor: 'bg-secondary-container text-on-secondary-container', status: 'Inactive', lastLogin: '2023-10-18 14:20', initials: 'SC', avatarBg: 'bg-slate-200 text-slate-600' },
-    { name: 'David Wu', email: 'd.wu@smartfarm.com', role: 'Student', roleColor: 'bg-slate-100 text-slate-600', status: 'Active', lastLogin: '2023-10-24 10:02', initials: 'DW', avatarBg: 'bg-emerald-100 text-emerald-700' },
-    { name: 'Admin (Root)', email: 'system@smartfarm.com', role: 'Admin', roleColor: 'bg-slate-800 text-white', status: 'Active', lastLogin: '2023-10-24 06:00', initials: 'AK', avatarBg: 'bg-primary text-white' }
-  ];
-
   return (
     <div className="flex flex-col h-screen w-full overflow-hidden font-inter fixed inset-0 z-[1000] bg-surface">
       <div className="flex flex-1 overflow-hidden relative">
@@ -51,7 +43,7 @@ const AdminDashboard = () => {
               </div>
               <div>
                 <h1 className="font-hanken text-lg font-bold text-primary leading-tight">Smart Farm</h1>
-                <p className="text-[9px] text-on-surface-variant font-bold uppercase tracking-widest">admin</p>
+                <p className="text-[9px] text-on-surface-variant font-bold uppercase tracking-widest">QUẢN TRỊ</p>
               </div>
             </div>
             <button
@@ -65,22 +57,22 @@ const AdminDashboard = () => {
           <nav className="flex-1 space-y-1">
             <button onClick={() => { setActiveTab('users'); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all group ${activeTab === 'users' ? 'bg-secondary-container text-primary font-bold' : 'text-on-surface-variant hover:bg-secondary-container/50 hover:text-on-secondary-container'}`}>
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
-              <span className="text-[11px] font-bold uppercase tracking-wider">User Management</span>
+              <span className="text-[11px] font-bold uppercase tracking-wider">Quản lý Người Dùng</span>
             </button>
             <button onClick={() => { setActiveTab('master'); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all group ${activeTab === 'master' ? 'bg-secondary-container text-primary font-bold' : 'text-on-surface-variant hover:bg-secondary-container/50 hover:text-on-secondary-container'}`}>
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5V19A9 3 0 0 0 21 19V5" /><path d="M3 12A9 3 0 0 0 21 12" /></svg>
-              <span className="text-[11px] font-bold uppercase tracking-wider">Master Data</span>
+              <span className="text-[11px] font-bold uppercase tracking-wider">Dữ liệu Danh mục</span>
             </button>
             <button onClick={() => { setActiveTab('ops'); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all group ${activeTab === 'ops' ? 'bg-secondary-container text-primary font-bold' : 'text-on-surface-variant hover:bg-secondary-container/50 hover:text-on-secondary-container'}`}>
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
-              <span className="text-[11px] font-bold uppercase tracking-wider">Operations</span>
+              <span className="text-[11px] font-bold uppercase tracking-wider">Vận hành</span>
             </button>
           </nav>
 
           <div className="mt-auto pt-4 border-t border-outline-variant">
             <button onClick={() => navigateTo('/login')} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-rose-600 hover:bg-rose-50 font-bold transition-all text-left">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
-              <span className="text-[11px] font-bold uppercase tracking-wider">Sign Out</span>
+              <span className="text-[11px] font-bold uppercase tracking-wider">Đăng Xuất</span>
             </button>
           </div>
         </aside>
@@ -97,7 +89,7 @@ const AdminDashboard = () => {
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12" /><line x1="4" y1="6" x2="20" y2="6" /><line x1="4" y1="18" x2="20" y2="18" /></svg>
               </button>
               <h2 className="font-hanken text-lg font-bold text-primary tracking-tight capitalize">
-                {activeTab === 'users' ? 'User Management' : activeTab === 'master' ? 'Master Data' : 'System Operations'}
+                {activeTab === 'users' ? 'Quản lý Người Dùng' : activeTab === 'master' ? 'Dữ liệu Danh mục' : 'Vận hành'}
               </h2>
             </div>
             <div className="flex items-center gap-3">
@@ -110,7 +102,7 @@ const AdminDashboard = () => {
             </div>
           </div>
 
-          {activeTab === 'users' && <UserManagement users={USERS} />}
+          {activeTab === 'users' && <UserManagement />}
           {activeTab === 'master' && <MasterData />}
           {activeTab === 'ops' && <SystemOperations />}
         </main>
@@ -126,18 +118,18 @@ const AdminDashboard = () => {
               </div>
               <span className="font-hanken font-bold text-primary text-sm tracking-tight">Smart Farm SEP490</span>
             </div>
-            <p className="text-[10px] text-on-surface-variant font-medium">© 2026 Intelligent Nursery Systems. All rights reserved.</p>
+            <p className="text-[10px] text-on-surface-variant font-medium">© 2026 Intelligent Nursery Systems. Bản quyền đã được bảo hộ.</p>
           </div>
 
           <div className="flex items-center gap-8">
             <div className="flex flex-col items-center md:items-end gap-1">
-              <span className="text-[9px] font-black text-on-surface-variant uppercase tracking-widest">Core Version</span>
+              <span className="text-[9px] font-black text-on-surface-variant uppercase tracking-widest">Phiên bản</span>
               <span className="text-[11px] font-mono font-bold text-primary">v1.2.4-stable</span>
             </div>
             <div className="h-8 w-px bg-outline-variant hidden md:block"></div>
             <div className="flex gap-4">
-              <button className="text-[10px] font-bold text-on-surface-variant hover:text-primary transition-colors uppercase tracking-wider">Support Hub</button>
-              <button className="text-[10px] font-bold text-on-surface-variant hover:text-primary transition-colors uppercase tracking-wider">Privacy Policy</button>
+              <button className="text-[10px] font-bold text-on-surface-variant hover:text-primary transition-colors uppercase tracking-wider">Hỗ Trợ</button>
+              <button className="text-[10px] font-bold text-on-surface-variant hover:text-primary transition-colors uppercase tracking-wider">Chính sách Bảo mật</button>
             </div>
           </div>
         </div>
