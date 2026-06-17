@@ -13,7 +13,11 @@ export const systemLogApi = {
     const res = await fetch(`${API_URL}/SystemLogs?${query}`, {
       headers: getHeaders()
     });
-    if (!res.ok) throw new Error('Failed to fetch logs');
+    if (!res.ok) {
+      const errorBody = await res.text();
+      console.error('API Error Response:', errorBody);
+      throw new Error('Failed to fetch logs');
+    }
     return res.json();
   },
   
