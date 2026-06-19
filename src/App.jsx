@@ -7,6 +7,7 @@ import FarmManagerDashboard from './pages/farm-manager/FarmManagerDashboard';
 import TechnicianDashboard from './pages/technician/TechnicianDashboard';
 import ResearcherDashboard from './pages/researcher/ResearcherDashboard';
 import StudentDashboard from './pages/student/StudentDashboard';
+import MorphologyDataEntry from './pages/student/MorphologyDataEntry';
 import AIAssistantDashboard from './pages/ai-assistant/AIAssistantDashboard';
 
 import { GoogleOAuthProvider } from '@react-oauth/google';
@@ -44,6 +45,8 @@ const App = () => {
         return <ResearcherDashboard />;
       case '/student':
         return <StudentDashboard />;
+      case '/student/morphology-entry':
+        return <MorphologyDataEntry />;
       case '/ai-assistant':
         return <AIAssistantDashboard />;
       case '/':
