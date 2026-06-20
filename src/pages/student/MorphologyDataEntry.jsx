@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useToast } from '../../context/ToastContext';
+import SharedSidebar from '../../components/SharedSidebar';
 
 const MorphologyDataEntry = () => {
   const { showToast } = useToast();
@@ -23,6 +24,16 @@ const MorphologyDataEntry = () => {
   });
 
   const [entries, setEntries] = useState([]);
+  const [currentPage, setCurrentPage] = useState(window.location.pathname);
+
+  useEffect(() => {
+    const handleNavigate = () => {
+      setCurrentPage(window.location.pathname);
+    };
+
+    window.addEventListener('navigate', handleNavigate);
+    return () => window.removeEventListener('navigate', handleNavigate);
+  }, []);
 
   const navigateTo = (path) => {
     window.history.pushState(null, '', path);
@@ -98,33 +109,8 @@ const MorphologyDataEntry = () => {
   };
 
   return (
-    <div className="flex min-h-screen bg-gradient-to-br from-amber-50 via-white to-blue-50 font-sans text-slate-900 fixed inset-0 z-[1000]">
-      {/* Sidebar */}
-      <aside className="w-64 bg-white border-r border-slate-200 flex flex-col fixed h-full z-50 overflow-y-auto">
-        <div className="p-8">
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Smart <span className="text-blue-600">Farm</span></h1>
-          <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-widest font-bold">STUDENT PORTAL</p>
-        </div>
-
-        <div className="px-4 py-6 border-b border-slate-100">
-          <div className="rounded-2xl bg-gradient-to-br from-blue-50 to-cyan-50 p-4 border border-blue-200">
-            <p className="text-xs font-bold text-blue-700 uppercase tracking-wider">Requirement 4</p>
-            <p className="text-lg font-bold text-blue-900 mt-1">Morphology Entry</p>
-            <p className="text-xs text-blue-700 mt-2">Plant data collection</p>
-          </div>
-        </div>
-
-        <nav className="flex-1 px-4 space-y-1 py-4">
-          <button onClick={() => navigateTo('/student')} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900 transition">📖 Lessons</button>
-          <button onClick={() => navigateTo('/student/task-list')} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900 transition">📋 My Tasks</button>
-          <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 text-blue-700 font-bold border border-blue-200">🌿 Morphology Entry</button>
-          {/* <button onClick={() => navigateTo('/')} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900 transition">🎮 Practice Simulation</button> */}
-        </nav>
-
-        <div className="p-4 border-t border-slate-100">
-          <button onClick={() => navigateTo('/login')} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-rose-500 hover:bg-rose-50 transition">🚪 Logout</button>
-        </div>
-      </aside>
+    <div className="flex min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 font-sans text-slate-900 fixed inset-0 z-[1000]">
+      <SharedSidebar userRole="Student" currentPage={currentPage} navigateTo={navigateTo} />
 
       {/* Main Content */}
       <main className="flex-1 ml-64 p-8 overflow-y-auto">
@@ -133,7 +119,7 @@ const MorphologyDataEntry = () => {
           <div className="mb-8">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <p className="text-sm font-semibold text-amber-600 uppercase tracking-wider">Requirement 4</p>
+                <p className="text-sm font-semibold text-blue-600 uppercase tracking-wider">Requirement T19</p>
                 <h1 className="text-4xl font-bold text-slate-900 mt-2">Nhập số liệu đo đạc hình thái cây</h1>
                 <p className="text-slate-600 mt-2 max-w-3xl">Thu thập các chỉ số sinh học định tính của cây trồng mà cảm biến IoT không thể đo được (Collect qualitative biological indicators of crops that IoT sensors cannot measure)</p>
               </div>

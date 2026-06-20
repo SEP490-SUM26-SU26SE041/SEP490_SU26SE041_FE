@@ -9,6 +9,7 @@ import ResearcherDashboard from './pages/researcher/ResearcherDashboard';
 import StudentDashboard from './pages/student/StudentDashboard';
 import MorphologyDataEntry from './pages/student/MorphologyDataEntry';
 import PersonalTaskList from './pages/PersonalTaskList';
+import CareCompletionForm from './pages/CareCompletionForm';
 import AIAssistantDashboard from './pages/ai-assistant/AIAssistantDashboard';
 
 import { GoogleOAuthProvider } from '@react-oauth/google';
@@ -44,6 +45,8 @@ const App = () => {
         return <TechnicianDashboard />;
       case '/technician/task-list':
         return <PersonalTaskList />;
+      case '/technician/care-completion':
+        return <CareCompletionForm />;
       case '/researcher':
         return <ResearcherDashboard />;
       case '/student':
@@ -52,6 +55,8 @@ const App = () => {
         return <MorphologyDataEntry />;
       case '/student/task-list':
         return <PersonalTaskList />;
+      case '/student/care-completion':
+        return <CareCompletionForm />;
       case '/ai-assistant':
         return <AIAssistantDashboard />;
       case '/':
