@@ -15,6 +15,7 @@ const TechnicianDashboard = () => {
         </div>
         <nav className="flex-1 px-4 space-y-1">
           <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-600 text-white shadow-lg">🛠️ IoT Maintenance</button>
+          <button onClick={() => navigateTo('/technician/task-list')} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-400 hover:bg-slate-700 hover:text-white">📋 My Tasks</button>
           <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-400 hover:bg-slate-700 hover:text-white">📡 Sensor Calibration</button>
           <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-400 hover:bg-slate-700 hover:text-white">🚨 System Alerts</button>
         </nav>

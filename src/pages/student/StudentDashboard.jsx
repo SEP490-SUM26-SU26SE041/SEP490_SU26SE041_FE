@@ -15,6 +15,7 @@ const StudentDashboard = () => {
         </div>
         <nav className="flex-1 px-4 space-y-1">
           <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-50 text-amber-700 font-bold">📖 Lessons</button>
+          <button onClick={() => navigateTo('/student/task-list')} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900">📋 My Tasks</button>
           <button onClick={() => navigateTo('/student/morphology-entry')} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900">🌿 Morphology Entry</button>
           <button onClick={() => navigateTo('/')} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900">🎮 Practice Simulation</button>
           <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900">🏆 Learning Progress</button>
