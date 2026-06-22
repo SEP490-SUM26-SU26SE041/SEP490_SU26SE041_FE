@@ -11,6 +11,8 @@ const SharedSidebar = ({ userRole, currentPage, navigateTo }) => {
       case '/student/care-completion':
       case '/technician/care-completion':
         return { label: 'T18 - Task 6', title: 'Care Completion', subtitle: 'Mark care actions as done' };
+      case '/technician/emergency-report':
+        return { label: 'T5 - Task 5', title: 'Emergency Report', subtitle: 'Report urgent issues' };
       default:
         return { label: 'Dashboard', title: 'Home', subtitle: 'Your ' + (userRole === 'Technician' ? 'work' : 'learning') + ' hub' };
     }
@@ -21,6 +23,7 @@ const SharedSidebar = ({ userRole, currentPage, navigateTo }) => {
   const isTaskList = currentPage === '/student/task-list' || currentPage === '/technician/task-list';
   const isMorphology = currentPage === '/student/morphology-entry';
   const isCareCompletion = currentPage === '/student/care-completion' || currentPage === '/technician/care-completion';
+  const isEmergencyReport = currentPage === '/technician/emergency-report';
 
   const getBackLabel = () => {
     return userRole === 'Technician' ? 'Dashboard' : 'Dashboard';
@@ -101,6 +104,21 @@ const SharedSidebar = ({ userRole, currentPage, navigateTo }) => {
           >
             ✅ Care Completion
           </button>
+        )}
+
+        {userRole === 'Technician' && (
+          <>
+            {isEmergencyReport ? (
+              <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-red-50 text-red-700 font-bold border border-red-200">🚨 Emergency Report</button>
+            ) : (
+              <button
+                onClick={() => navigateTo('/technician/emergency-report')}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900 transition"
+              >
+                🚨 Emergency Report
+              </button>
+            )}
+          </>
         )}
 
         {/* {userRole === 'Student' && !isDashboard && (
