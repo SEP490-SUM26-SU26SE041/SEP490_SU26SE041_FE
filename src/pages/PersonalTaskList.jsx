@@ -1,6 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { useToast } from '../context/ToastContext';
-import SharedSidebar from '../components/SharedSidebar';
+import { tasksApi, taskReportsApi } from '../api/sharedTaskApi';
+
+const TASK_TABS = [
+  { id: 'all', label: 'Tất Cả' },
+  { id: 'today', label: 'Hôm Nay' },
+  { id: 'upcoming', label: 'Sắp Tới' },
+  { id: 'overdue', label: 'Quá Hạn' },
+];
+
+const STATUS_COLORS = {
+  Pending: 'bg-blue-100 text-blue-700',
+  InProgress: 'bg-amber-100 text-amber-700',
+  Completed: 'bg-emerald-100 text-emerald-700',
+  Overdue: 'bg-rose-100 text-rose-700',
+  Cancelled: 'bg-slate-100 text-slate-600',
+};
+
+const TASK_TYPE_ICONS = {
+  Planting: '🌱', Watering: '💧', Fertilizing: '🧪',
+  Observation: '👁️', Inspection: '🔍', Harvest: '🌾', Other: '📋'
+};
 
 const PersonalTaskList = () => {
   const { showToast } = useToast();
@@ -8,85 +28,16 @@ const PersonalTaskList = () => {
     const path = window.location.pathname;
     return path.includes('technician') ? 'Technician' : 'Student';
   });
-
-  const [tasks, setTasks] = useState([
-    {
-      id: 'T001',
-      title: 'Check IoT sensor battery levels',
-      description: 'Inspect sensors in zones A-01 to A-05 and replace batteries if below 20%',
-      priority: 'High',
-      status: 'Pending',
-      dueDate: '2026-06-20',
-      zone: 'A-01 to A-05',
-      assignedBy: 'Manager Tran Minh',
-      createdAt: '2026-06-20T08:00:00'
-    },
-    {
-      id: 'T002',
-      title: 'Record plant morphology data - Block B',
-      description: 'Measure plant height, leaf count, and observe pest/disease symptoms for tomato plants in Block B',
-      priority: 'High',
-      status: 'In Progress',
-      dueDate: '2026-06-20',
-      zone: 'B-01 to B-10',
-      assignedBy: 'Manager Tran Minh',
-      createdAt: '2026-06-20T08:30:00'
-    },
-    {
-      id: 'T003',
-      title: 'Irrigation system maintenance',
-      description: 'Check drip irrigation lines and clear any blockages in zones C-01 to C-03',
-      priority: 'Medium',
-      status: 'Pending',
-      dueDate: '2026-06-20',
-      zone: 'C-01 to C-03',
-      assignedBy: 'Manager Tran Minh',
-      createdAt: '2026-06-19T14:00:00'
-    },
-    {
-      id: 'T004',
-      title: 'Weed removal - Rows 1-20',
-      description: 'Manual weed removal from vegetable rows 1-20 in the main field',
-      priority: 'Medium',
-      status: 'Pending',
-      dueDate: '2026-06-21',
-      zone: 'Main Field',
-      assignedBy: 'Manager Tran Minh',
-      createdAt: '2026-06-19T15:00:00'
-    },
-    {
-      id: 'T005',
-      title: 'Fertilizer application - Zone D',
-      description: 'Apply organic fertilizer according to schedule in Zone D. Consult spreadsheet for dosage.',
-      priority: 'Low',
-      status: 'Pending',
-      dueDate: '2026-06-22',
-      zone: 'D-01 to D-08',
-      assignedBy: 'Manager Tran Minh',
-      createdAt: '2026-06-19T16:00:00'
-    },
-    {
-      id: 'T006',
-      title: 'Study: IoT Sensor Calibration',
-      description: 'Complete the online module on sensor calibration and data accuracy',
-      priority: 'Medium',
-      status: 'Pending',
-      dueDate: '2026-06-25',
-      zone: 'Online',
-      assignedBy: 'Instructor Nguyen Lan',
-      createdAt: '2026-06-20T09:00:00'
-    }
-  ]);
-
-  const [filterStatus, setFilterStatus] = useState('All');
-  const [filterPriority, setFilterPriority] = useState('All');
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('all');
   const [currentPage, setCurrentPage] = useState(window.location.pathname);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [selectedTask, setSelectedTask] = useState(null);
+  const [showDetail, setShowDetail] = useState(false);
 
   useEffect(() => {
-    const handleNavigate = () => {
-      setCurrentPage(window.location.pathname);
-    };
-
+    const handleNavigate = () => setCurrentPage(window.location.pathname);
     window.addEventListener('navigate', handleNavigate);
     return () => window.removeEventListener('navigate', handleNavigate);
   }, []);
@@ -96,224 +47,387 @@ const PersonalTaskList = () => {
     window.dispatchEvent(new Event('navigate'));
   };
 
-  const updateTaskStatus = (taskId, newStatus) => {
-    setTasks(prev => prev.map(task => 
-      task.id === taskId ? { ...task, status: newStatus } : task
-    ));
-    showToast(`Task updated to: ${newStatus}`, 'success');
+  const fetchTasks = async () => {
+    try {
+      setLoading(true);
+      let data = [];
+      switch (activeTab) {
+        case 'today': data = await tasksApi.getToday(); break;
+        case 'upcoming': data = await tasksApi.getUpcoming(7); break;
+        case 'overdue': data = await tasksApi.getOverdue(); break;
+        default: data = await tasksApi.getMy(); break;
+      }
+      setTasks(Array.isArray(data) ? data : []);
+    } catch (err) {
+      showToast('Không thể tải tác vụ', 'error');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const filteredTasks = tasks.filter(task => {
-    const statusMatch = filterStatus === 'All' || task.status === filterStatus;
-    const priorityMatch = filterPriority === 'All' || task.priority === filterPriority;
-    return statusMatch && priorityMatch;
-  });
+  useEffect(() => { fetchTasks(); }, [activeTab]);
 
-  const taskStats = {
+  const handleStart = async (task) => {
+    try {
+      await tasksApi.start(task.id);
+      showToast('Đã bắt đầu thực hiện tác vụ', 'success');
+      fetchTasks();
+    } catch (err) { showToast(err.message || 'Không thể bắt đầu tác vụ', 'error'); }
+  };
+
+  const handleComplete = async (task) => {
+    try {
+      await tasksApi.complete(task.id);
+      showToast('Đã hoàn thành tác vụ!', 'success');
+      fetchTasks();
+    } catch (err) { showToast(err.message || 'Không thể hoàn thành tác vụ', 'error'); }
+  };
+
+  const handleCancel = async (task) => {
+    try {
+      await tasksApi.cancel(task.id);
+      showToast('Đã hủy tác vụ', 'info');
+      fetchTasks();
+    } catch (err) { showToast(err.message || 'Không thể hủy tác vụ', 'error'); }
+  };
+
+  const openReportModal = (task) => {
+    setSelectedTask(task);
+    setShowReportModal(true);
+  };
+
+  const openDetail = (task) => {
+    setSelectedTask(task);
+    setShowDetail(true);
+  };
+
+  const stats = {
     total: tasks.length,
     pending: tasks.filter(t => t.status === 'Pending').length,
-    inProgress: tasks.filter(t => t.status === 'In Progress').length,
-    completed: tasks.filter(t => t.status === 'Completed').length
-  };
-
-  const getPriorityColor = (priority) => {
-    switch (priority) {
-      case 'High': return 'bg-red-100 text-red-700 border-red-300';
-      case 'Medium': return 'bg-yellow-100 text-yellow-700 border-yellow-300';
-      case 'Low': return 'bg-green-100 text-green-700 border-green-300';
-      default: return 'bg-slate-100 text-slate-700 border-slate-300';
-    }
-  };
-
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'Pending': return 'bg-blue-50 border-blue-200';
-      case 'In Progress': return 'bg-orange-50 border-orange-200';
-      case 'Completed': return 'bg-green-50 border-green-200';
-      default: return 'bg-slate-50 border-slate-200';
-    }
-  };
-
-  const getStatusBadgeColor = (status) => {
-    switch (status) {
-      case 'Pending': return 'bg-blue-200 text-blue-800';
-      case 'In Progress': return 'bg-orange-200 text-orange-800';
-      case 'Completed': return 'bg-green-200 text-green-800';
-      default: return 'bg-slate-200 text-slate-800';
-    }
+    inProgress: tasks.filter(t => t.status === 'InProgress').length,
+    completed: tasks.filter(t => t.status === 'Completed').length,
   };
 
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 font-sans text-slate-900 fixed inset-0 z-[1000]">
-      <SharedSidebar userRole={userRole} currentPage={currentPage} navigateTo={navigateTo} />
+      <SharedSidebar2 userRole={userRole} currentPage={currentPage} navigateTo={navigateTo} />
 
-      {/* Main Content */}
       <main className="flex-1 ml-64 p-8 overflow-y-auto">
-        <div className="max-w-6xl">
+        <div className="max-w-5xl">
           {/* Header */}
           <div className="mb-8">
-            <div>
-              <p className="text-sm font-semibold text-blue-600 uppercase tracking-wider">Requirement T16</p>
-              <h1 className="text-4xl font-bold text-slate-900 mt-2">Xem danh sách công việc cá nhân được giao</h1>
-              <p className="text-slate-600 mt-2 max-w-3xl">View your personal assigned tasks for today. Stay informed about what you need to complete at the farm without needing to contact the manager.</p>
-            </div>
+            <p className="text-xs font-bold text-blue-600 uppercase tracking-wider">Requirement T16</p>
+            <h1 className="text-3xl font-bold text-slate-900 mt-2">Danh Sách Công Việc Cá Nhân</h1>
+            <p className="text-sm text-slate-500 mt-1">Xem và thực hiện các công việc được giao</p>
           </div>
 
-          {/* Stats Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-            <div className="bg-white rounded-2xl shadow-md p-6 border border-slate-200">
-              <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Tasks</p>
-              <p className="text-3xl font-bold text-slate-900 mt-2">{taskStats.total}</p>
-            </div>
-            <div className="bg-blue-50 rounded-2xl shadow-md p-6 border border-blue-200">
-              <p className="text-xs font-bold text-blue-600 uppercase tracking-wider">Pending</p>
-              <p className="text-3xl font-bold text-blue-900 mt-2">{taskStats.pending}</p>
-            </div>
-            <div className="bg-orange-50 rounded-2xl shadow-md p-6 border border-orange-200">
-              <p className="text-xs font-bold text-orange-600 uppercase tracking-wider">In Progress</p>
-              <p className="text-3xl font-bold text-orange-900 mt-2">{taskStats.inProgress}</p>
-            </div>
-            <div className="bg-green-50 rounded-2xl shadow-md p-6 border border-green-200">
-              <p className="text-xs font-bold text-green-600 uppercase tracking-wider">Completed</p>
-              <p className="text-3xl font-bold text-green-900 mt-2">{taskStats.completed}</p>
-            </div>
-          </div>
-
-          {/* Filters */}
-          <div className="bg-white rounded-2xl shadow-md p-6 border border-slate-200 mb-8">
-            <h2 className="font-bold text-slate-900 mb-4">Filters</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Status</label>
-                <select
-                  value={filterStatus}
-                  onChange={(e) => setFilterStatus(e.target.value)}
-                  className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-900"
-                >
-                  <option>All</option>
-                  <option>Pending</option>
-                  <option>In Progress</option>
-                  <option>Completed</option>
-                </select>
+          {/* Stats */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            {[
+              { label: 'Tổng', value: stats.total, bg: 'bg-white border-slate-200', color: 'text-slate-900' },
+              { label: 'Chờ', value: stats.pending, bg: 'bg-blue-50 border-blue-200', color: 'text-blue-700' },
+              { label: 'Đang Làm', value: stats.inProgress, bg: 'bg-amber-50 border-amber-200', color: 'text-amber-700' },
+              { label: 'Hoàn Thành', value: stats.completed, bg: 'bg-emerald-50 border-emerald-200', color: 'text-emerald-700' },
+            ].map(s => (
+              <div key={s.label} className={`${s.bg} rounded-2xl p-5 border shadow-sm`}>
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">{s.label}</p>
+                <p className={`text-3xl font-bold mt-1 ${s.color}`}>{loading ? '…' : s.value}</p>
               </div>
-              <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Priority</label>
-                <select
-                  value={filterPriority}
-                  onChange={(e) => setFilterPriority(e.target.value)}
-                  className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-900"
-                >
-                  <option>All</option>
-                  <option>High</option>
-                  <option>Medium</option>
-                  <option>Low</option>
-                </select>
-              </div>
+            ))}
+          </div>
+
+          {/* Tabs */}
+          <div className="bg-white rounded-2xl border-slate-200 shadow-sm mb-6 overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex items-center gap-2 flex-wrap">
+              {TASK_TABS.map(tab => (
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                  className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                    activeTab === tab.id
+                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}>
+                  {tab.label}
+                </button>
+              ))}
+              <span className="ml-auto text-xs text-slate-500 font-semibold">{tasks.length} tác vụ</span>
             </div>
           </div>
 
-          {/* Tasks List */}
-          <div className="space-y-4">
-            {filteredTasks.length > 0 ? (
-              filteredTasks.map((task) => (
-                <div
+          {/* Tasks */}
+          {loading ? (
+            <div className="bg-white rounded-2xl border-slate-200 p-12 text-center text-slate-400">Đang tải...</div>
+          ) : tasks.length === 0 ? (
+            <div className="bg-white rounded-2xl border-slate-200 p-12 text-center text-slate-400">Không có công việc nào.</div>
+          ) : (
+            <div className="space-y-4">
+              {tasks.map(task => (
+                <TaskItem
                   key={task.id}
-                  className={`rounded-2xl shadow-md border-l-4 p-6 transition hover:shadow-lg ${getStatusColor(task.status)} ${
-                    task.priority === 'High' ? 'border-l-red-500' : task.priority === 'Medium' ? 'border-l-yellow-500' : 'border-l-green-500'
-                  }`}
-                >
-                  <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-4">
-                    <div className="lg:col-span-2">
-                      <div className="flex items-start gap-3 mb-3">
-                        <div>
-                          <h3 className="text-xl font-bold text-slate-900">{task.title}</h3>
-                          <p className="text-sm text-slate-600 mt-1">{task.description}</p>
-                        </div>
-                      </div>
-                    </div>
-                    <div>
-                      <div className="space-y-2">
-                        <div>
-                          <p className="text-xs text-slate-500 font-semibold">Priority</p>
-                          <span className={`inline-block px-3 py-1 rounded-full text-xs font-bold border ${getPriorityColor(task.priority)}`}>
-                            {task.priority}
-                          </span>
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-500 font-semibold">Status</p>
-                          <span className={`inline-block px-3 py-1 rounded-full text-xs font-bold ${getStatusBadgeColor(task.status)}`}>
-                            {task.status}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                    <div>
-                      <div className="space-y-2">
-                        <div>
-                          <p className="text-xs text-slate-500 font-semibold">Due Date</p>
-                          <p className="text-sm font-bold text-slate-900">{task.dueDate}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-500 font-semibold">Zone</p>
-                          <p className="text-sm font-bold text-slate-900">{task.zone}</p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                  task={task}
+                  userRole={userRole}
+                  onStart={() => handleStart(task)}
+                  onComplete={() => handleComplete(task)}
+                  onCancel={() => handleCancel(task)}
+                  onReport={() => openReportModal(task)}
+                  onDetail={() => openDetail(task)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
 
-                  <div className="border-t border-slate-300/30 pt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                    <div>
-                      <p className="text-xs text-slate-500">
-                        <span className="font-semibold">Assigned by:</span> {task.assignedBy}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {task.status === 'Pending' && (
-                        <button
-                          onClick={() => updateTaskStatus(task.id, 'In Progress')}
-                          className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition"
-                        >
-                          Start Task
-                        </button>
-                      )}
-                      {task.status === 'In Progress' && (
-                        <>
-                          <button
-                            onClick={() => updateTaskStatus(task.id, 'Completed')}
-                            className="px-4 py-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 transition"
-                          >
-                            Mark Complete
-                          </button>
-                          <button
-                            onClick={() => updateTaskStatus(task.id, 'Pending')}
-                            className="px-4 py-2 bg-slate-400 text-white font-semibold rounded-lg hover:bg-slate-500 transition"
-                          >
-                            Back to Pending
-                          </button>
-                        </>
-                      )}
-                      {task.status === 'Completed' && (
-                        <button
-                          onClick={() => updateTaskStatus(task.id, 'In Progress')}
-                          className="px-4 py-2 bg-slate-400 text-white font-semibold rounded-lg hover:bg-slate-500 transition"
-                        >
-                          Reopen
-                        </button>
-                      )}
-                    </div>
-                  </div>
+      {showReportModal && selectedTask && (
+        <TaskReportModal
+          task={selectedTask}
+          onClose={() => setShowReportModal(false)}
+          onSuccess={() => { setShowReportModal(false); fetchTasks(); }}
+        />
+      )}
+
+      {showDetail && selectedTask && (
+        <TaskDetailModal
+          task={selectedTask}
+          onClose={() => setShowDetail(false)}
+          onStart={() => { handleStart(selectedTask); setShowDetail(false); }}
+          onComplete={() => { handleComplete(selectedTask); setShowDetail(false); }}
+        />
+      )}
+    </div>
+  );
+};
+
+// ── Task Item ──────────────────────────────────────────────────────────────────
+
+const TaskItem = ({ task, userRole, onStart, onComplete, onCancel, onReport, onDetail }) => {
+  const icon = TASK_TYPE_ICONS[task.taskType] || '📋';
+  const statusColor = STATUS_COLORS[task.status] || 'bg-slate-100 text-slate-600';
+  const statusBg = task.status === 'InProgress' ? 'bg-amber-50 border-l-4 border-l-amber-500' : task.status === 'Completed' ? 'bg-emerald-50 border-l-4 border-l-emerald-500' : 'bg-white border-l-4 border-l-slate-200';
+  const isOverdue = task.dueDate && new Date(task.dueDate) < new Date() && task.status !== 'Completed' && task.status !== 'Completed';
+  const statusLabel = { Pending: 'Chờ', InProgress: 'Đang Làm', Completed: 'Hoàn Thành', Overdue: 'Quá Hạn' }[task.status] || task.status;
+
+  return (
+    <div className={`${statusBg} rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition-all`}>
+      <div className="flex items-start gap-4">
+        <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-xl shrink-0">{icon}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap mb-1">
+            <button onClick={onDetail} className="font-hanken font-bold text-sm text-slate-900 hover:text-blue-600 transition-colors">{task.title || '—'}</button>
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${statusColor}`}>{statusLabel}</span>
+            {isOverdue && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-700">Quá hạn</span>}
+            {task.taskType && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600">{task.taskType}</span>}
+          </div>
+          {task.description && <p className="text-xs text-slate-500 line-clamp-2 mb-2">{task.description}</p>}
+          <div className="flex items-center gap-4 text-[10px] text-slate-400 flex-wrap">
+            {task.experimentTitle && <span>🧪 {task.experimentTitle}</span>}
+            {task.batchCode && <span>📦 {task.batchCode}</span>}
+            {task.dueDate && <span className={isOverdue ? 'text-rose-500 font-bold' : ''}>📅 {new Date(task.dueDate).toLocaleDateString('vi-VN')}</span>}
+            {task.createdByName && <span>👤 {task.createdByName}</span>}
+            {task.requiredSkillDescription && <span>🎯 {task.requiredSkillDescription}</span>}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          <button onClick={onDetail} className="px-3 py-2 border border-slate-300 text-slate-600 hover:bg-slate-50 rounded-xl text-xs font-semibold transition-all">👁️ Chi tiết</button>
+          {task.status === 'Pending' && (
+            <>
+              <button onClick={onStart} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/20 transition-all">▶ Bắt Đầu</button>
+              <button onClick={onReport} className="px-3 py-2 border border-blue-300 text-blue-600 hover:bg-blue-50 rounded-xl text-xs font-bold transition-all">📝 Báo Cáo</button>
+            </>
+          )}
+          {task.status === 'InProgress' && (
+            <>
+              <button onClick={onComplete} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all">✅ Hoàn Thành</button>
+              <button onClick={onReport} className="px-3 py-2 border border-emerald-300 text-emerald-600 hover:bg-emerald-50 rounded-xl text-xs font-bold transition-all">📝 Báo Cáo</button>
+            </>
+          )}
+          {(task.status === 'Pending' || task.status === 'InProgress') && (
+            <button onClick={onCancel} className="px-3 py-2 border border-rose-300 text-rose-500 hover:bg-rose-50 rounded-xl text-xs font-semibold transition-all">✕ Hủy</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ── Task Report Modal ──────────────────────────────────────────────────────────
+
+const TaskReportModal = ({ task, onClose, onSuccess }) => {
+  const { showToast } = useToast();
+  const [reportText, setReportText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [resultData, setResultData] = useState([{ key: '', value: '' }]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!reportText.trim()) { showToast('Vui lòng nhập nội dung báo cáo', 'error'); return; }
+    try {
+      setSaving(true);
+      const dataObj = {};
+      resultData.forEach(r => { if (r.key.trim()) dataObj[r.key.trim()] = r.value; });
+      await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
+      showToast('Đã gửi báo cáo tác vụ!', 'success');
+      onSuccess();
+    } catch (err) {
+      showToast(err.message || 'Không thể gửi báo cáo', 'error');
+    } finally { setSaving(false); }
+  };
+
+  const updateResult = (idx, field, value) => setResultData(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r));
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4 animate-fade-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center">
+          <h3 className="font-hanken font-bold text-lg text-slate-900">Báo Cáo Tác Vụ</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div className="p-3 bg-slate-50 rounded-xl">
+            <p className="text-xs text-slate-500 font-semibold">Tác vụ</p>
+            <p className="font-bold text-sm text-slate-900">{task.title || '—'}</p>
+            {task.description && <p className="text-xs text-slate-500 mt-1">{task.description}</p>}
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Nội Dung Báo Cáo <span className="text-rose-500">*</span></label>
+            <textarea value={reportText} onChange={e => setReportText(e.target.value)} rows={4}
+              placeholder="Mô tả kết quả đã thực hiện, các quan sát, và bài học rút ra..."
+              className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Dữ Liệu Kết Quả (tùy chọn)</label>
+            <div className="space-y-2">
+              {resultData.map((r, idx) => (
+                <div key={idx} className="flex gap-2">
+                  <input type="text" value={r.key} placeholder="Key (VD: plantsObserved)"
+                    onChange={e => updateResult(idx, 'key', e.target.value)}
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <input type="text" value={r.value} placeholder="Giá trị"
+                    onChange={e => updateResult(idx, 'value', e.target.value)}
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  {resultData.length > 1 && (
+                    <button type="button" onClick={() => setResultData(prev => prev.filter((_, i) => i !== idx))} className="text-rose-500 font-bold">✕</button>
+                  )}
                 </div>
-              ))
-            ) : (
-              <div className="bg-white rounded-2xl shadow-md p-12 border border-slate-200 text-center">
-                <p className="text-2xl text-slate-400 mb-4">📭</p>
-                <p className="text-slate-600">No tasks match your filters</p>
+              ))}
+            </div>
+            <button type="button" onClick={() => setResultData(prev => [...prev, { key: '', value: '' }])} className="mt-2 text-xs text-blue-600 font-semibold hover:underline">+ Thêm dữ liệu</button>
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="px-5 py-2.5 border border-slate-300 rounded-xl text-sm font-medium hover:bg-slate-50">Hủy</button>
+            <button type="submit" disabled={saving}
+              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20 disabled:opacity-50">
+              {saving ? 'Đang gửi...' : 'Gửi Báo Cáo'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// ── Task Detail Modal ──────────────────────────────────────────────────────────
+
+const TaskDetailModal = ({ task, onClose, onStart, onComplete }) => {
+  const statusColor = STATUS_COLORS[task.status] || 'bg-slate-100 text-slate-600';
+  const statusLabel = { Pending: 'Chờ', InProgress: 'Đang Làm', Completed: 'Hoàn Thành', Overdue: 'Quá Hạn' }[task.status] || task.status;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center">
+          <div>
+            <h3 className="font-bold text-lg text-slate-900">Chi Tiết Tác Vụ</h3>
+            <p className="text-xs text-slate-400">{task.title || '—'}</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            {[
+              { label: 'Loại', value: task.taskType || '—' },
+              { label: 'Trạng thái', value: statusLabel },
+              { label: 'Thí nghiệm', value: task.experimentTitle || '—' },
+              { label: 'Batch', value: task.batchCode || '—' },
+              { label: 'Giai đoạn', value: task.experimentStageName || '—' },
+              { label: 'Hạn chót', value: task.dueDate ? new Date(task.dueDate).toLocaleDateString('vi-VN') : '—' },
+              { label: 'Người giao', value: task.createdByName || '—' },
+              { label: 'Yêu cầu kỹ năng', value: task.requiredSkillDescription || '—' },
+            ].map(item => (
+              <div key={item.label} className="p-3 bg-slate-50 rounded-xl">
+                <p className="text-[10px] text-slate-400 font-bold uppercase">{item.label}</p>
+                <p className="font-semibold text-slate-900 text-xs mt-0.5">{item.value}</p>
               </div>
+            ))}
+          </div>
+          {task.description && (
+            <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
+              <p className="text-[10px] text-blue-400 font-bold uppercase mb-1">Mô tả</p>
+              <p className="text-sm text-slate-700">{task.description}</p>
+            </div>
+          )}
+          <div className="flex justify-end gap-3 pt-2 border-t border-slate-200">
+            <button onClick={onClose} className="px-5 py-2.5 border border-slate-300 rounded-xl text-sm font-medium hover:bg-slate-50">Đóng</button>
+            {task.status === 'Pending' && (
+              <button onClick={onStart} className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20">▶ Bắt Đầu</button>
+            )}
+            {task.status === 'InProgress' && (
+              <button onClick={onComplete} className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20">✅ Hoàn Thành</button>
             )}
           </div>
         </div>
-      </main>
+      </div>
     </div>
+  );
+};
+
+// ── Inline Sidebar ─────────────────────────────────────────────────────────────
+
+const SharedSidebar2 = ({ userRole, currentPage, navigateTo }) => {
+  const role = userRole || 'Student';
+  const tabs = role === 'Technician'
+    ? [
+        { id: '/technician', label: 'Tổng Quan', icon: '🏠' },
+        { id: '/technician/task-list', label: 'T16 Công Việc', icon: '📋' },
+        { id: '/technician/care-completion', label: 'T18 Hoàn Thành', icon: '✅' },
+        { id: '/technician/emergency-report', label: 'T5 Báo Cáo', icon: '🚨' },
+      ]
+    : [
+        { id: '/student', label: 'Tổng Quan', icon: '🏠' },
+        { id: '/student/task-list', label: 'T16 Công Việc', icon: '📋' },
+        { id: '/student/care-completion', label: 'T18 Hoàn Thành', icon: '✅' },
+        { id: '/student/morphology-entry', label: 'T19 Ghi Nhận', icon: '📊' },
+      ];
+
+  return (
+    <aside className="w-64 bg-white border-r border-slate-200 text-slate-900 flex flex-col fixed h-full z-50 shadow-sm">
+      <div className="px-6 py-6 border-b border-slate-100">
+        <h1 className="text-lg font-bold text-slate-900">Smart <span className="text-blue-600">Farm</span></h1>
+        <p className="text-[9px] text-slate-400 uppercase tracking-widest font-bold mt-0.5">{role} Portal</p>
+      </div>
+      <nav className="flex-1 px-3 py-4 space-y-1">
+        {tabs.map(tab => (
+          <button key={tab.id} onClick={() => navigateTo(tab.id)}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+              currentPage === tab.id
+                ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}>
+            <span className="text-base">{tab.icon}</span>
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+      <div className="p-3 border-t border-slate-100">
+        <button onClick={() => { localStorage.clear(); window.location.href = '/login'; }}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-rose-500 hover:bg-rose-50 text-sm font-medium transition-all">
+          <span className="text-base">🚪</span> Đăng Xuất
+        </button>
+      </div>
+    </aside>
   );
 };
 

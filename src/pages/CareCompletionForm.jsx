@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useToast } from '../context/ToastContext';
-import SharedSidebar from '../components/SharedSidebar';
+import { taskReportsApi } from '../api/sharedTaskApi';
+import { tasksApi } from '../api/sharedTaskApi';
 
 const CareCompletionForm = () => {
   const { showToast } = useToast();
@@ -9,34 +10,39 @@ const CareCompletionForm = () => {
     return path.includes('technician') ? 'Technician' : 'Student';
   });
 
-  const [formData, setFormData] = useState({
+  const [form, setForm] = useState({
     taskId: '',
-    taskDate: new Date().toISOString().split('T')[0],
-    zoneArea: '',
-    careActions: {
-      watering: false,
-      fertilizing: false,
-      pruning: false,
-      pestControl: false,
-      weeding: false,
-      inspection: false
-    },
-    completionNotes: '',
-    performedBy: '',
-    supervisor: '',
-    completionTime: ''
+    reportText: '',
   });
 
-  const [completions, setCompletions] = useState([]);
-  const [currentPage, setCurrentPage] = useState(window.location.pathname);
+  const [careActions, setCareActions] = useState({
+    watering: false, fertilizing: false, pruning: false,
+    pestControl: false, weeding: false, inspection: false
+  });
+
+  const [resultItems, setResultItems] = useState([{ key: '', value: '' }]);
+  const [reports, setReports] = useState([]);
+  const [myTasks, setMyTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [showTaskPicker, setShowTaskPicker] = useState(false);
 
   useEffect(() => {
-    const handleNavigate = () => {
-      setCurrentPage(window.location.pathname);
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        // Fetch my tasks
+        const tasks = await tasksApi.getMy();
+        setMyTasks(Array.isArray(tasks) ? tasks : []);
+        // Fetch recent reports using /api/task-reports (paginated list)
+        const token = localStorage.getItem('token');
+        const repData = await fetch('/api/task-reports', {
+          headers: { Authorization: `Bearer ${token}` }
+        }).then(r => r.json()).then(d => d.data || []);
+        setReports(Array.isArray(repData) ? repData.slice(0, 10) : []);
+      } catch { /* silent */ } finally { setLoading(false); }
     };
-
-    window.addEventListener('navigate', handleNavigate);
-    return () => window.removeEventListener('navigate', handleNavigate);
+    fetchData();
   }, []);
 
   const navigateTo = (path) => {
@@ -44,304 +50,256 @@ const CareCompletionForm = () => {
     window.dispatchEvent(new Event('navigate'));
   };
 
-  const handleChange = (e) => {
-    const { name, value, type, checked } = e.target;
-    
-    if (name.startsWith('careActions.')) {
-      const actionName = name.split('.')[1];
-      setFormData(prev => ({
-        ...prev,
-        careActions: {
-          ...prev.careActions,
-          [actionName]: checked
-        }
-      }));
-    } else {
-      setFormData(prev => ({
-        ...prev,
-        [name]: type === 'checkbox' ? checked : value
-      }));
-    }
+  const toggleCareAction = (key) => {
+    setCareActions(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!form.taskId.trim()) { showToast('Vui lòng chọn hoặc nhập Task ID', 'error'); return; }
+    if (!form.reportText.trim()) { showToast('Vui lòng nhập nội dung báo cáo', 'error'); return; }
 
-    // Validation
-    if (!formData.taskId.trim()) {
-      showToast('Please enter Task ID', 'error');
-      return;
+    const selectedActions = Object.entries(careActions)
+      .filter(([_, v]) => v).map(([k]) => k);
+
+    const resultDataObj = {};
+    resultItems.forEach(r => { if (r.key.trim()) resultDataObj[r.key.trim()] = r.value; });
+    if (selectedActions.length > 0) resultDataObj.careActions = selectedActions;
+
+    try {
+      setSaving(true);
+      await taskReportsApi.create({ taskId: form.taskId.trim(), reportText: form.reportText.trim(), resultData: resultDataObj });
+      showToast('Đã gửi báo cáo hoàn thành chăm sóc!', 'success');
+      setForm({ taskId: '', reportText: '' });
+      setCareActions({ watering: false, fertilizing: false, pruning: false, pestControl: false, weeding: false, inspection: false });
+      setResultItems([{ key: '', value: '' }]);
+
+      // Refresh reports
+      const token = localStorage.getItem('token');
+      const repData = await fetch('/api/task-reports', {
+        headers: { Authorization: `Bearer ${token}` }
+      }).then(r => r.json()).then(d => d.data || []);
+      setReports(Array.isArray(repData) ? repData.slice(0, 10) : []);
+    } catch (err) {
+      showToast(err.message || 'Không thể gửi báo cáo', 'error');
+    } finally {
+      setSaving(false);
     }
-
-    if (!formData.zoneArea.trim()) {
-      showToast('Please enter Zone/Area', 'error');
-      return;
-    }
-
-    const selectedActions = Object.entries(formData.careActions)
-      .filter(([_, selected]) => selected)
-      .map(([action, _]) => action);
-
-    if (selectedActions.length === 0) {
-      showToast('Please select at least one care action', 'error');
-      return;
-    }
-
-    if (!formData.performedBy.trim()) {
-      showToast('Please enter name of person who performed actions', 'error');
-      return;
-    }
-
-    // Create completion record
-    const completion = {
-      id: `CARE-${Date.now()}`,
-      ...formData,
-      careActions: selectedActions,
-      completedAt: new Date().toISOString()
-    };
-
-    setCompletions(prev => [...prev, completion]);
-    showToast('✅ Care completion confirmed successfully!', 'success');
-
-    // Reset form
-    setFormData({
-      taskId: '',
-      taskDate: new Date().toISOString().split('T')[0],
-      zoneArea: '',
-      careActions: {
-        watering: false,
-        fertilizing: false,
-        pruning: false,
-        pestControl: false,
-        weeding: false,
-        inspection: false
-      },
-      completionNotes: '',
-      performedBy: '',
-      supervisor: '',
-      completionTime: ''
-    });
   };
 
-  const handleReset = () => {
-    setFormData({
-      taskId: '',
-      taskDate: new Date().toISOString().split('T')[0],
-      zoneArea: '',
-      careActions: {
-        watering: false,
-        fertilizing: false,
-        pruning: false,
-        pestControl: false,
-        weeding: false,
-        inspection: false
-      },
-      completionNotes: '',
-      performedBy: '',
-      supervisor: '',
-      completionTime: ''
-    });
-    showToast('Form cleared', 'info');
-  };
-
-  const CareActionCheckbox = ({ label, name }) => (
-    <label className="flex items-center gap-3 p-3 rounded-lg bg-slate-50 border border-slate-200 hover:bg-slate-100 cursor-pointer transition">
-      <input
-        type="checkbox"
-        name={`careActions.${name}`}
-        checked={formData.careActions[name]}
-        onChange={handleChange}
-        className="w-5 h-5 text-blue-600 rounded"
-      />
-      <span className="text-slate-700 font-medium">{label}</span>
-    </label>
+  const CareActionBtn = ({ label, icon, name }) => (
+    <button type="button" onClick={() => toggleCareAction(name)}
+      className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-all border ${
+        careActions[name]
+          ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-600/20'
+          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+      }`}>
+      <span>{icon}</span> {label}
+    </button>
   );
+
+  const updateResult = (idx, field, val) => {
+    setResultItems(prev => prev.map((r, i) => i === idx ? { ...r, [field]: val } : r));
+  };
 
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 font-sans text-slate-900 fixed inset-0 z-[1000]">
-      <SharedSidebar userRole={userRole} currentPage={currentPage} navigateTo={navigateTo} />
+      <SharedSidebar3 userRole={userRole} />
 
-      {/* Main Content */}
       <main className="flex-1 ml-64 p-8 overflow-y-auto">
         <div className="max-w-4xl">
           {/* Header */}
           <div className="mb-8">
-            <p className="text-sm font-semibold text-blue-600 uppercase tracking-wider">Requirement T18</p>
-            <h1 className="text-4xl font-bold text-slate-900 mt-2">Đánh dấu hoàn thành việc chăm sóc</h1>
-            <p className="text-slate-600 mt-2 max-w-3xl">Confirm physical care actions (watering, fertilizing, etc.) have been performed correctly according to procedure.</p>
+            <p className="text-xs font-bold text-blue-600 uppercase tracking-wider"> Requirement T18</p>
+            <h1 className="text-3xl font-bold text-slate-900 mt-2">Đánh Dấu Hoàn Thành Chăm Sóc</h1>
+            <p className="text-sm text-slate-500 mt-1">Ghi nhận và xác nhận các công việc chăm sóc đã thực hiện.</p>
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 mb-8">
-            {/* Task Information */}
-            <div className="mb-8">
-              <h2 className="text-xl font-bold text-slate-900 mb-4">Task Information</h2>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">Task ID *</label>
-                  <input
-                    type="text"
-                    name="taskId"
-                    placeholder="e.g., T001"
-                    value={formData.taskId}
-                    onChange={handleChange}
-                    className="w-full px-4 py-3 rounded-lg bg-white text-slate-900 border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+          <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8 mb-8 space-y-6">
+            {/* Task ID */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Task ID <span className="text-rose-500">*</span></label>
+                <div className="flex gap-2">
+                  <input type="text" value={form.taskId} onChange={e => setForm(f => ({ ...f, taskId: e.target.value }))}
+                    placeholder="VD: task-guid hoặc chọn bên dưới"
+                    className="flex-1 w-full px-4 py-3 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-900" />
+                  <button type="button" onClick={() => setShowTaskPicker(!showTaskPicker)}
+                    className="px-4 py-3 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl text-sm font-semibold text-slate-600 transition-all">
+                    📋 Chọn Task
+                  </button>
                 </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">Task Date *</label>
-                  <input
-                    type="date"
-                    name="taskDate"
-                    value={formData.taskDate}
-                    onChange={handleChange}
-                    className="w-full px-4 py-3 rounded-lg bg-white text-slate-900 border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">Zone / Area *</label>
-                  <input
-                    type="text"
-                    name="zoneArea"
-                    placeholder="e.g., A-01, B-05, Main Field"
-                    value={formData.zoneArea}
-                    onChange={handleChange}
-                    className="w-full px-4 py-3 rounded-lg bg-white text-slate-900 border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">Completion Time</label>
-                  <input
-                    type="time"
-                    name="completionTime"
-                    value={formData.completionTime}
-                    onChange={handleChange}
-                    className="w-full px-4 py-3 rounded-lg bg-white text-slate-900 border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
+                {showTaskPicker && (
+                  <div className="mt-2 max-h-40 overflow-y-auto border border-slate-200 rounded-xl bg-slate-50">
+                    {myTasks.filter(t => t.status === 'Pending' || t.status === 'InProgress').length === 0 ? (
+                      <p className="p-3 text-xs text-slate-400 text-center">Không có task đang chờ/xử lý</p>
+                    ) : (
+                      myTasks.filter(t => t.status === 'Pending' || t.status === 'InProgress').map(t => (
+                        <button type="button" key={t.id} onClick={() => { setForm(f => ({ ...f, taskId: t.id })); setShowTaskPicker(false); }}
+                          className="w-full text-left px-4 py-2 hover:bg-blue-50 border-b border-slate-100 last:border-b-0 transition-colors">
+                          <p className="text-xs font-semibold text-slate-900 truncate">{t.title || '—'}</p>
+                          <p className="text-[10px] text-slate-400 font-mono">{t.id}</p>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-slate-700 mb-2">Ngày Thực Hiện</label>
+                <input type="date" value={new Date().toISOString().split('T')[0]}
+                  className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-900" />
               </div>
             </div>
 
             {/* Care Actions */}
-            <div className="mb-8">
-              <h2 className="text-xl font-bold text-slate-900 mb-4">Physical Care Actions Completed *</h2>
-              <div className="grid grid-cols-2 gap-4">
-                <CareActionCheckbox label="🚿 Watering (Tưới cây)" name="watering" />
-                <CareActionCheckbox label="🌾 Fertilizing (Bón phân)" name="fertilizing" />
-                <CareActionCheckbox label="✂️ Pruning (Cắt tỉa)" name="pruning" />
-                <CareActionCheckbox label="🐛 Pest Control (Phòng trừ sâu bệnh)" name="pestControl" />
-                <CareActionCheckbox label="🌱 Weeding (Nhổ cỏ)" name="weeding" />
-                <CareActionCheckbox label="🔍 Inspection (Kiểm tra)" name="inspection" />
+            <div>
+              <h2 className="text-base font-bold text-slate-900 mb-3">Công Việc Chăm Sóc Đã Thực Hiện <span className="text-rose-500">*</span></h2>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <CareActionBtn label="Tưới nước" icon="💧" name="watering" />
+                <CareActionBtn label="Bón phân" icon="🧪" name="fertilizing" />
+                <CareActionBtn label="Cắt tỉa" icon="✂️" name="pruning" />
+                <CareActionBtn label="Phòng trừ sâu" icon="🐛" name="pestControl" />
+                <CareActionBtn label="Nhổ cỏ" icon="🌱" name="weeding" />
+                <CareActionBtn label="Kiểm tra" icon="🔍" name="inspection" />
               </div>
             </div>
 
-            {/* Personnel Information */}
-            <div className="mb-8">
-              <h2 className="text-xl font-bold text-slate-900 mb-4">Personnel Information</h2>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">Performed By (Name) *</label>
-                  <input
-                    type="text"
-                    name="performedBy"
-                    placeholder="Name of person who performed actions"
-                    value={formData.performedBy}
-                    onChange={handleChange}
-                    className="w-full px-4 py-3 rounded-lg bg-white text-slate-900 border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
+            {/* Report Text */}
+            <div>
+              <label className="block text-sm font-semibold text-slate-700 mb-2">Nội Dung Báo Cáo <span className="text-rose-500">*</span></label>
+              <textarea value={form.reportText} onChange={e => setForm(f => ({ ...f, reportText: e.target.value }))}
+                placeholder="Mô tả chi tiết công việc đã thực hiện, kết quả, và các quan sát..."
+                rows={5}
+                className="w-full px-4 py-3 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-slate-900 resize-none" />
+            </div>
 
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700 mb-2">Supervisor / Verified By</label>
-                  <input
-                    type="text"
-                    name="supervisor"
-                    placeholder="Supervisor or manager name (optional)"
-                    value={formData.supervisor}
-                    onChange={handleChange}
-                    className="w-full px-4 py-3 rounded-lg bg-white text-slate-900 border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
+            {/* Result Data */}
+            <div>
+              <label className="block text-sm font-semibold text-slate-700 mb-2">Dữ Liệu Kết Quả (tùy chọn)</label>
+              <div className="space-y-2">
+                {resultItems.map((r, idx) => (
+                  <div key={idx} className="flex gap-2">
+                    <input type="text" value={r.key} placeholder="Trường (VD: lượng nước, thời gian)"
+                      onChange={e => updateResult(idx, 'key', e.target.value)}
+                      className="flex-1 px-4 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-sm" />
+                    <input type="text" value={r.value} placeholder="Giá trị (VD: 500 lít, 45 phút)"
+                      onChange={e => updateResult(idx, 'value', e.target.value)}
+                      className="flex-1 px-4 py-2 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-sm" />
+                    {resultItems.length > 1 && (
+                      <button type="button" onClick={() => setResultItems(prev => prev.filter((_, i) => i !== idx))}
+                        className="px-3 text-rose-500 hover:text-rose-700 font-bold">✕</button>
+                    )}
+                  </div>
+                ))}
               </div>
+              <button type="button" onClick={() => setResultItems(prev => [...prev, { key: '', value: '' }])}
+                className="mt-2 text-xs text-blue-600 font-semibold hover:underline">+ Thêm trường dữ liệu</button>
             </div>
 
-            {/* Completion Notes */}
-            <div className="mb-8">
-              <label className="block text-sm font-semibold text-slate-700 mb-2">Additional Notes</label>
-              <textarea
-                name="completionNotes"
-                placeholder="Any observations, issues, or additional notes about the care completion..."
-                value={formData.completionNotes}
-                onChange={handleChange}
-                rows="4"
-                className="w-full px-4 py-3 rounded-lg bg-white text-slate-900 border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex gap-4 justify-end pt-6 border-t border-slate-200">
-              <button
-                type="button"
-                onClick={handleReset}
-                className="px-6 py-3 rounded-lg bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200 transition"
-              >
-                Clear Form
+            {/* Submit */}
+            <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">
+              <button type="button" onClick={() => {
+                setForm({ taskId: '', reportText: '' });
+                setCareActions({ watering: false, fertilizing: false, pruning: false, pestControl: false, weeding: false, inspection: false });
+                setResultItems([{ key: '', value: '' }]);
+              }}
+                className="px-6 py-3 bg-slate-100 text-slate-700 rounded-xl font-semibold hover:bg-slate-200 transition">
+                Xóa Form
               </button>
-              <button
-                type="submit"
-                className="px-8 py-3 rounded-lg bg-gradient-to-r from-green-500 to-emerald-600 text-white font-bold hover:from-green-600 hover:to-emerald-700 transition shadow-lg"
-              >
-                ✅ Confirm Completion
+              <button type="submit" disabled={saving}
+                className="px-8 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold rounded-xl shadow-lg shadow-blue-600/20 hover:from-blue-700 hover:to-indigo-700 transition disabled:opacity-50">
+                {saving ? 'Đang gửi...' : '✅ Gửi Báo Cáo'}
               </button>
             </div>
           </form>
 
-          {/* Recent Completions */}
-          {completions.length > 0 && (
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
-              <h2 className="text-2xl font-bold text-slate-900 mb-6">Recent Completions</h2>
-              <div className="space-y-4">
-                {completions.map((completion) => (
-                  <div key={completion.id} className="p-4 rounded-lg bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200">
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <p className="text-slate-600 font-semibold">Task ID:</p>
-                        <p className="text-slate-900 font-bold">{completion.taskId}</p>
-                      </div>
-                      <div>
-                        <p className="text-slate-600 font-semibold">Completion ID:</p>
-                        <p className="text-slate-900 font-bold">{completion.id}</p>
-                      </div>
-                      <div>
-                        <p className="text-slate-600 font-semibold">Zone:</p>
-                        <p className="text-slate-900">{completion.zoneArea}</p>
-                      </div>
-                      <div>
-                        <p className="text-slate-600 font-semibold">Performed By:</p>
-                        <p className="text-slate-900">{completion.performedBy}</p>
-                      </div>
-                      <div className="col-span-2">
-                        <p className="text-slate-600 font-semibold">Actions Completed:</p>
-                        <div className="flex flex-wrap gap-2 mt-1">
-                          {completion.careActions.map((action) => (
-                            <span key={action} className="px-3 py-1 rounded-full bg-green-200 text-green-800 text-xs font-semibold capitalize">
-                              {action}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
+          {/* Recent reports */}
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
+            <h2 className="text-xl font-bold text-slate-900 mb-4">Báo Cáo Gần Đây</h2>
+            {loading ? (
+              <p className="text-sm text-slate-400 text-center py-4">Đang tải...</p>
+            ) : reports.length === 0 ? (
+              <p className="text-sm text-slate-400 text-center py-4">Chưa có báo cáo nào.</p>
+            ) : (
+              <div className="space-y-3">
+                {reports.map(r => (
+                  <div key={r.id} className="p-4 bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border border-green-200">
+                    <div className="flex justify-between items-start mb-2">
+                      <p className="text-xs font-mono text-green-700 font-bold">Task: {r.taskId || r.id}</p>
+                      <p className="text-[10px] text-slate-400 font-mono">
+                        {r.createdAt ? new Date(r.createdAt).toLocaleString('vi-VN') : '—'}
+                      </p>
                     </div>
+                    <p className="text-sm text-slate-700">{r.reportText}</p>
+                    {r.resultData && Object.keys(r.resultData).length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {Object.entries(r.resultData).map(([k, v]) => (
+                          <span key={k} className="px-2 py-0.5 bg-green-200 text-green-800 rounded-full text-[10px] font-bold capitalize">
+                            {k}: {String(v)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </main>
     </div>
+  );
+};
+
+const SharedSidebar3 = ({ userRole }) => {
+  const navigateTo = (path) => {
+    window.history.pushState(null, '', path);
+    window.dispatchEvent(new Event('navigate'));
+  };
+  const currentPage = window.location.pathname;
+  const role = userRole || 'Student';
+  const tabs = role === 'Technician'
+    ? [
+        { id: '/technician', label: 'Tổng Quan', icon: '🏠' },
+        { id: '/technician/task-list', label: 'T16 Công Việc', icon: '📋' },
+        { id: '/technician/care-completion', label: 'T18 Hoàn Thành', icon: '✅' },
+        { id: '/technician/emergency-report', label: 'T5 Báo Cáo', icon: '🚨' },
+      ]
+    : [
+        { id: '/student', label: 'Tổng Quan', icon: '🏠' },
+        { id: '/student/task-list', label: 'T16 Công Việc', icon: '📋' },
+        { id: '/student/care-completion', label: 'T18 Hoàn Thành', icon: '✅' },
+        { id: '/student/morphology-entry', label: 'T19 Ghi Nhận', icon: '📊' },
+      ];
+
+  return (
+    <aside className="w-64 bg-white border-r border-slate-200 text-slate-900 flex flex-col fixed h-full z-50 shadow-sm">
+      <div className="px-6 py-6 border-b border-slate-100">
+        <h1 className="text-lg font-bold text-slate-900">Smart <span className="text-blue-600">Farm</span></h1>
+        <p className="text-[9px] text-slate-400 uppercase tracking-widest font-bold mt-0.5">{role} Portal</p>
+      </div>
+      <nav className="flex-1 px-3 py-4 space-y-1">
+        {tabs.map(tab => (
+          <button key={tab.id} onClick={() => navigateTo(tab.id)}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+              currentPage === tab.id
+                ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
+                : 'text-slate-600 hover:bg-slate-100'
+            }`}>
+            <span className="text-base">{tab.icon}</span>
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+      <div className="p-3 border-t border-slate-100">
+        <button onClick={() => { localStorage.clear(); window.location.href = '/login'; }}
+          className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-rose-500 hover:bg-rose-50 text-sm font-medium transition-all">
+          <span className="text-base">🚪</span> Đăng Xuất
+        </button>
+      </div>
+    </aside>
   );
 };
 
