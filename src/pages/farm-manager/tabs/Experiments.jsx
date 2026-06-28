@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { experimentsApi } from '../../../api/experimentApi';
+import { bedAssignmentsApi } from '../../../api/managerResourcesApi';
 import { useToast } from '../../../context/ToastContext';
 import {
   Card,
@@ -37,6 +38,8 @@ const Experiments = () => {
       setLoading(true);
       const params = {};
       if (filterFarm) params.farmId = filterFarm;
+      if (filterStatus) params.status = filterStatus;
+      // experimentsApi.getAll already unwraps data via .then(u)
       const data = await experimentsApi.getAll(params);
       setExperiments(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -47,7 +50,7 @@ const Experiments = () => {
     }
   };
 
-  useEffect(() => { fetch(); }, [filterFarm]);
+  useEffect(() => { fetch(); }, [filterFarm, filterStatus]);
 
   const farmOptions = useMemo(() => {
     const map = new Map();
@@ -88,12 +91,14 @@ const Experiments = () => {
     setSchedules([]);
     try {
       setDetailLoading(true);
-      const [ba, sc] = await Promise.allSettled([
-        fetch(`/farms/experiments/${exp.id}/bed-assignments`, {
-          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-        }).then(r => r.ok ? r.json() : []),
-        experimentsApi.getSchedules(exp.id)
+      const [detail, ba, sc] = await Promise.allSettled([
+        experimentsApi.getById(exp.id),          // Lấy chi tiết experiment BẰNG ID
+        bedAssignmentsApi.getByExperiment(exp.id), // Luống đã gán
+        experimentsApi.getSchedules(exp.id)       // Lịch chăm sóc
       ]);
+      if (detail.status === 'fulfilled' && detail.value) {
+        setActive(detail.value);
+      }
       if (ba.status === 'fulfilled') setBedAssignments(Array.isArray(ba.value) ? ba.value : []);
       if (sc.status === 'fulfilled') setSchedules(Array.isArray(sc.value) ? sc.value : []);
     } catch (err) {

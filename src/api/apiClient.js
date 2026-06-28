@@ -2,6 +2,52 @@ const API_BASE_URL = 'https://localhost:7048/api';
 
 const getToken = () => localStorage.getItem('token');
 
+// Format date về ISO string để backend .NET DateOnly parse được
+const formatDateForBE = (date) => {
+  if (!date) return undefined;
+  if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return undefined;
+  return d.toISOString().split('T')[0];
+};
+
+// Deep format all date fields trong object
+const formatDatesDeep = (obj) => {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(formatDatesDeep);
+  
+  const result = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === null || value === undefined) {
+      result[key] = value;
+    } else if (Array.isArray(value)) {
+      result[key] = value.map(v => typeof v === 'object' ? formatDatesDeep(v) : v);
+    } else if (typeof value === 'object') {
+      if (value instanceof Date) {
+        result[key] = value.toISOString().split('T')[0];
+      } else {
+        result[key] = formatDatesDeep(value);
+      }
+    } else if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      // String date format "2026-06-28" - giữ nguyên
+      result[key] = value;
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+};
+
+// Custom JSON replacer để format tất cả date fields
+const jsonReplacer = (key, value) => {
+  if (value === null || value === undefined) return value;
+  if (value instanceof Date) {
+    return value.toISOString().split('T')[0];
+  }
+  return value;
+};
+
 const buildHeaders = (extra = {}) => {
   const token = getToken();
   const headers = { ...extra };
@@ -40,7 +86,10 @@ const request = async (path, { method = 'GET', body, headers = {}, params } = {}
     method,
     headers: buildHeaders(body ? { 'Content-Type': 'application/json', ...headers } : headers)
   };
-  if (body !== undefined) fetchOptions.body = JSON.stringify(body);
+  if (body !== undefined) {
+    const formattedBody = formatDatesDeep(body);
+    fetchOptions.body = JSON.stringify(formattedBody, jsonReplacer);
+  }
 
   try {
     const res = await fetch(url, fetchOptions);
