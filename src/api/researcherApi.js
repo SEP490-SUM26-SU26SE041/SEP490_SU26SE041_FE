@@ -59,3 +59,15 @@ export const bedAssignmentsApi = {
   update: (id, payload) => apiClient.request('/farms/bed-assignments/' + id, { method: 'PUT', body: payload }),
   remove: (id) => apiClient.request('/farms/bed-assignments/' + id, { method: 'DELETE' }),
 };
+
+export const areasApi = {
+  getByFarm: (farmId) => apiClient.request('/farms/farms/' + farmId + '/areas').then(u),
+};
+
+export const tasksApi = {
+  getByExperiment: (expId) => apiClient.request('/tasks/experiment/' + expId).then(u),
+  getById: (id) => apiClient.request('/tasks/' + id).then(u),
+  create: (payload) => apiClient.request('/tasks', { method: 'POST', body: payload }),
+  update: (id, payload) => apiClient.request('/tasks/' + id, { method: 'PUT', body: payload }),
+  remove: (id) => apiClient.request('/tasks/' + id, { method: 'DELETE' })
+};

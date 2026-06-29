@@ -1,9 +1,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { experimentsApi, tasksApi } from '../../../api/experimentApi';
 import { farmsApi, bedsApi } from '../../../api/managerResourcesApi';
-import { stagesApi, groupsApi, designApi, measurementsApi, schedulesApi, batchesApi, bedAssignmentsApi, userApi } from '../../../api/researcherApi';
+import { stagesApi, groupsApi, designApi, measurementsApi, schedulesApi, batchesApi, bedAssignmentsApi, userApi, areasApi } from '../../../api/researcherApi';
 import { cropsApi } from '../../../api/cropApi';
 import { useToast } from '../../../context/ToastContext';
+import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
 
 const STATUS_FILTERS = [
   { value: '', label: 'Tất Cả' },
@@ -20,7 +21,6 @@ const DETAIL_TABS = [
   { id: 'measurements', label: 'Đo Lường' },
   { id: 'schedules', label: 'Lịch Chăm Sóc' },
   { id: 'batches', label: 'Lô' },
-  { id: 'beds', label: 'Luống' },
   { id: 'tasks', label: 'Tác Vụ' },
 ];
 
@@ -277,6 +277,11 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   const [loading, setLoading] = useState(true);
   const [tabLoading, setTabLoading] = useState(false);
 
+  // Helper to open confirm dialog
+  const openConfirm = (title, message, onConfirm) => {
+    setConfirmDialog({ isOpen: true, title, message, onConfirm });
+  };
+
   // Tab data
   const [stages, setStages] = useState([]);
   const [groups, setGroups] = useState([]);
@@ -301,10 +306,29 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   const [showEditExp, setShowEditExp] = useState(false);
   const [savingExp, setSavingExp] = useState(false);
 
+  // Confirm dialog state
+  const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
+
+  // Cache fetched tabs - only fetch once per tab
+  const [fetchedTabs, setFetchedTabs] = useState(new Set());
+
   // Forms
   const [stageForm, setStageForm] = useState({ stageName: '', stageOrder: 1, stageType: 1, objective: '', startDate: '', endDate: '' });
   const [groupForm, setGroupForm] = useState({ groupName: '', groupType: 1, treatmentDescription: '' });
   const [designForm, setDesignForm] = useState({ designType: 2, replicationCount: 3, randomizationMethod: '', designParameters: '' });
+
+  // Populate designForm when design data loads
+  useEffect(() => {
+    if (design) {
+      setDesignForm({
+        designType: design.designType || 2,
+        replicationCount: design.replicationCount || 3,
+        randomizationMethod: design.randomizationMethod || '',
+        designParameters: typeof design.designParameters === 'string' ? design.designParameters : JSON.stringify(design.designParameters || {}),
+      });
+    }
+  }, [design]);
+
   const [measurementForm, setMeasurementForm] = useState({ groupId: '', metricName: '', unit: '', targetValue: '', description: '' });
   const [scheduleForm, setScheduleForm] = useState({ experimentStageId: '', batchId: '', title: '', instruction: '', frequencyDays: 1, taskType: 1, startDate: '', endDate: '' });
   const [batchForm, setBatchForm] = useState({ experimentBedAssignmentId: '', groupId: '', batchCode: '', plantingDate: '', expectedHarvestDate: '', plantCount: '', notes: '' });
@@ -315,35 +339,59 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   const fetchDetail = useCallback(async () => {
     try {
       setLoading(true);
+      // Check localStorage first
+      const cached = localStorage.getItem(`exp_detail_${experiment.id}`);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        setExpDetail(parsed);
+        setEditExp(parsed);
+        setLoading(false);
+        return;
+      }
       const data = await experimentsApi.getById(experiment.id);
-      setExpDetail(data || experiment);
-      setEditExp(data || experiment);
+      const exp = data || experiment;
+      setExpDetail(exp);
+      setEditExp(exp);
+      // Cache to localStorage
+      localStorage.setItem(`exp_detail_${experiment.id}`, JSON.stringify(exp));
     } catch (err) {
       showToast(err.message || 'Không thể tải chi tiết', 'error');
     } finally { setLoading(false); }
   }, [experiment.id]);
 
+  // Fetch tab data based on selected tab only
   const fetchTabData = useCallback(async (tab) => {
     try {
       setTabLoading(true);
-      const [s, g, d, m, sc, b, ba, t] = await Promise.allSettled([
-        stagesApi.getByExperiment(experiment.id),
-        groupsApi.getByExperiment(experiment.id),
-        designApi.getByExperiment(experiment.id),
-        measurementsApi.getByExperiment(experiment.id),
-        schedulesApi.getByExperiment(experiment.id),
-        batchesApi.getByExperiment(experiment.id),
-        bedAssignmentsApi.getByExperiment(experiment.id),
-        experimentsApi.getByExperiment ? experimentsApi.getByExperiment(experiment.id) : Promise.resolve([]),
-      ]);
-      setStages(Array.isArray(s.value) ? s.value : []);
-      setGroups(Array.isArray(g.value) ? g.value : []);
-      setDesign(d.value || null);
-      setMeasurements(Array.isArray(m.value) ? m.value : []);
-      setSchedules(Array.isArray(sc.value) ? sc.value : []);
-      setBatches(Array.isArray(b.value) ? b.value : []);
-      setBedAssignments(Array.isArray(ba.value) ? ba.value : []);
-      setTasks(Array.isArray(t.value) ? t.value : []);
+      
+      if (tab === 'tasks') {
+        const data = await tasksApi.getByExperiment(experiment.id);
+        setTasks(Array.isArray(data) ? data : []);
+      } else if (tab === 'stages') {
+        const data = await stagesApi.getByExperiment(experiment.id);
+        setStages(Array.isArray(data) ? data : []);
+      } else if (tab === 'groups') {
+        const data = await groupsApi.getByExperiment(experiment.id);
+        setGroups(Array.isArray(data) ? data : []);
+      } else if (tab === 'design') {
+        const data = await designApi.getByExperiment(experiment.id);
+        setDesign(data || null);
+      } else if (tab === 'measurements') {
+        const data = await measurementsApi.getByExperiment(experiment.id);
+        setMeasurements(Array.isArray(data) ? data : []);
+      } else if (tab === 'schedules') {
+        const data = await schedulesApi.getByExperiment(experiment.id);
+        setSchedules(Array.isArray(data) ? data : []);
+      } else if (tab === 'batches') {
+        const data = await batchesApi.getByExperiment(experiment.id);
+        setBatches(Array.isArray(data) ? data : []);
+        const ba = await bedAssignmentsApi.getByExperiment(experiment.id);
+        setBedAssignments(Array.isArray(ba) ? ba : []);
+      } else if (tab === 'beds') {
+        const ba = await bedAssignmentsApi.getByExperiment(experiment.id);
+        setBedAssignments(Array.isArray(ba) ? ba : []);
+      }
+      // overview tab doesn't need data fetch
     } catch (err) {
       showToast(err.message || 'Lỗi tải dữ liệu tab', 'error');
     } finally { setTabLoading(false); }
@@ -358,7 +406,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
 
   const fetchBeds = async (farmId) => {
     try {
-      const areaData = await farmsApi.getByFarm ? farmsApi.getByFarm(farmId) : [];
+      const areaData = await areasApi.getByFarm(farmId);
       setAreas(Array.isArray(areaData) ? areaData : []);
       const bedData = await bedsApi.getAvailableByFarm(farmId);
       setAvailableBeds(Array.isArray(bedData) ? bedData : []);
@@ -367,7 +415,11 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
 
   useEffect(() => {
     fetchDetail();
-    fetchTabData(activeTab);
+    // Only fetch tab data if not already cached
+    if (!fetchedTabs.has(activeTab)) {
+      fetchTabData(activeTab);
+      setFetchedTabs(prev => new Set([...prev, activeTab]));
+    }
     if (activeTab === 'tasks' || activeTab === 'beds') {
       fetchUsers();
       fetchBeds(expDetail?.farmId);
@@ -416,7 +468,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
       fetchTabData('stages');
     } catch (err) { showToast(err.message || 'Lỗi tạo giai đoạn', 'error'); }
   };
-  const handleDeleteStage = async (id) => { if (!confirm('Xóa giai đoạn này?')) return; try { await stagesApi.remove(id); showToast('Đã xóa giai đoạn', 'success'); fetchTabData('stages'); } catch (err) { showToast(err.message, 'error'); } };
+  const handleDeleteStage = async (id) => { openConfirm('Xóa Giai Đoạn', 'Bạn có chắc muốn xóa giai đoạn này?', async () => { try { await stagesApi.remove(id); showToast('Đã xóa giai đoạn', 'success'); fetchTabData('stages'); } catch (err) { showToast(err.message, 'error'); } }); };
 
   // Group CRUD
   const handleCreateGroup = async () => {
@@ -428,7 +480,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
       fetchTabData('groups');
     } catch (err) { showToast(err.message || 'Lỗi tạo nhóm', 'error'); }
   };
-  const handleDeleteGroup = async (id) => { if (!confirm('Xóa nhóm này?')) return; try { await groupsApi.remove(id); showToast('Đã xóa nhóm', 'success'); fetchTabData('groups'); } catch (err) { showToast(err.message, 'error'); } };
+  const handleDeleteGroup = async (id) => { openConfirm('Xóa Nhóm', 'Bạn có chắc muốn xóa nhóm này?', async () => { try { await groupsApi.remove(id); showToast('Đã xóa nhóm', 'success'); fetchTabData('groups'); } catch (err) { showToast(err.message, 'error'); } }); };
 
   // Design CRUD
   const handleSaveDesign = async () => {
@@ -442,7 +494,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
       fetchTabData('design');
     } catch (err) { showToast(err.message || 'Lỗi lưu thiết kế', 'error'); }
   };
-  const handleDeleteDesign = async () => { if (!confirm('Xóa thiết kế?')) return; try { await designApi.remove(experiment.id); showToast('Đã xóa thiết kế', 'success'); fetchTabData('design'); } catch (err) { showToast(err.message, 'error'); } };
+  const handleDeleteDesign = async () => { openConfirm('Xóa Thiết Kế', 'Bạn có chắc muốn xóa thiết kế?', async () => { try { await designApi.remove(experiment.id); showToast('Đã xóa thiết kế', 'success'); fetchTabData('design'); } catch (err) { showToast(err.message, 'error'); } }); };
 
   // Measurement CRUD
   const handleCreateMeasurement = async () => {
@@ -454,7 +506,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
       fetchTabData('measurements');
     } catch (err) { showToast(err.message || 'Lỗi tạo đo lường', 'error'); }
   };
-  const handleDeleteMeasurement = async (id) => { if (!confirm('Xóa đo lường?')) return; try { await measurementsApi.remove(id); showToast('Đã xóa đo lường', 'success'); fetchTabData('measurements'); } catch (err) { showToast(err.message, 'error'); } };
+  const handleDeleteMeasurement = async (id) => { openConfirm('Xóa Đo Lường', 'Bạn có chắc muốn xóa đo lường này?', async () => { try { await measurementsApi.remove(id); showToast('Đã xóa đo lường', 'success'); fetchTabData('measurements'); } catch (err) { showToast(err.message, 'error'); } }); };
 
   // Schedule CRUD
   const handleCreateSchedule = async () => {
@@ -466,11 +518,12 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
       fetchTabData('schedules');
     } catch (err) { showToast(err.message || 'Lỗi tạo lịch', 'error'); }
   };
-  const handleDeleteSchedule = async (id) => { if (!confirm('Xóa lịch?')) return; try { await schedulesApi.remove(id); showToast('Đã xóa lịch', 'success'); fetchTabData('schedules'); } catch (err) { showToast(err.message, 'error'); } };
+  const handleDeleteSchedule = async (id) => { openConfirm('Xóa Lịch', 'Bạn có chắc muốn xóa lịch chăm sóc này?', async () => { try { await schedulesApi.remove(id); showToast('Đã xóa lịch', 'success'); fetchTabData('schedules'); } catch (err) { showToast(err.message, 'error'); } }); };
 
   // Batch CRUD
   const handleCreateBatch = async () => {
     if (!batchForm.batchCode.trim()) { showToast('Mã lô không được trống', 'error'); return; }
+    if (!batchForm.experimentBedAssignmentId) { showToast('Vui lòng chọn luống đã gán', 'error'); return; }
     try {
       await batchesApi.create({ experimentId: experiment.id, ...batchForm, plantCount: batchForm.plantCount ? parseInt(batchForm.plantCount) : undefined });
       showToast('Đã tạo lô', 'success');
@@ -478,7 +531,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
       fetchTabData('batches');
     } catch (err) { showToast(err.message || 'Lỗi tạo lô', 'error'); }
   };
-  const handleDeleteBatch = async (id) => { if (!confirm('Xóa lô?')) return; try { await batchesApi.remove(id); showToast('Đã xóa lô', 'success'); fetchTabData('batches'); } catch (err) { showToast(err.message, 'error'); } };
+  const handleDeleteBatch = async (id) => { openConfirm('Xóa Lô', 'Bạn có chắc muốn xóa lô này?', async () => { try { await batchesApi.remove(id); showToast('Đã xóa lô', 'success'); fetchTabData('batches'); } catch (err) { showToast(err.message, 'error'); } }); };
 
   // Bed assignment CRUD
   const handleAssignBed = async () => {
@@ -490,7 +543,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
       fetchTabData('beds');
     } catch (err) { showToast(err.message || 'Lỗi gán luống', 'error'); }
   };
-  const handleDeleteBedAssignment = async (id) => { if (!confirm('Xóa gán luống?')) return; try { await bedAssignmentsApi.remove(id); showToast('Đã xóa gán luống', 'success'); fetchTabData('beds'); } catch (err) { showToast(err.message, 'error'); } };
+  const handleDeleteBedAssignment = async (id) => { openConfirm('Xóa Gán Luống', 'Bạn có chắc muốn xóa gán luống này?', async () => { try { await bedAssignmentsApi.remove(id); showToast('Đã xóa gán luống', 'success'); fetchTabData('beds'); } catch (err) { showToast(err.message, 'error'); } }); };
 
   // Task generation
   const handleGenerateTasks = async (type) => {
@@ -513,7 +566,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
       fetchTabData('tasks');
     } catch (err) { showToast(err.message || 'Lỗi tạo tác vụ', 'error'); }
   };
-  const handleDeleteTask = async (id) => { if (!confirm('Xóa tác vụ?')) return; try { await tasksApi.remove(id); showToast('Đã xóa tác vụ', 'success'); fetchTabData('tasks'); } catch (err) { showToast(err.message, 'error'); } };
+  const handleDeleteTask = async (id) => { openConfirm('Xóa Tác Vụ', 'Bạn có chắc muốn xóa tác vụ này?', async () => { try { await tasksApi.remove(id); showToast('Đã xóa tác vụ', 'success'); fetchTabData('tasks'); } catch (err) { showToast(err.message, 'error'); } }); };
 
   // Skill match
   const handleSkillMatch = async (taskId) => {
@@ -550,9 +603,9 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-4 animate-fade-in">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl overflow-hidden max-h-[95vh] flex flex-col">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl overflow-hidden max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-outline-variant flex justify-between items-center shrink-0 bg-indigo-50">
+        <div className="px-6 py-4 border-b border-outline-variant flex justify-between items-center shrink-0 bg-indigo-50 min-h-[72px]">
           <div>
             <h3 className="font-hanken font-bold text-lg text-primary">
               {expDetail?.experimentCode || 'Chi Tiết Thí Nghiệm'}
@@ -579,7 +632,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
         </div>
 
         {/* Tabs */}
-        <div className="px-4 border-b border-outline-variant flex gap-1 overflow-x-auto shrink-0 bg-white">
+        <div className="px-4 border-b border-outline-variant flex gap-1 overflow-x-auto shrink-0 bg-white min-h-[48px]">
           {DETAIL_TABS.map(tab => (
             <button key={tab.id} onClick={() => setActiveTab(tab.id)}
               className={`px-4 py-3 text-xs font-bold whitespace-nowrap border-b-2 transition-colors ${
@@ -593,7 +646,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
         </div>
 
         {/* Content */}
-        <div className="overflow-y-auto flex-1 p-6">
+        <div className="overflow-y-auto flex-1 p-6 min-h-[500px]">
           {loading ? (
             <div className="text-center py-12 text-on-surface-variant">Đang tải...</div>
           ) : (
@@ -619,9 +672,6 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
               {activeTab === 'batches' && (
                 <BatchesTab batches={batches} bedAssignments={bedAssignments} groups={groups} form={batchForm} setForm={setBatchForm} onCreate={handleCreateBatch} onDelete={handleDeleteBatch} loading={tabLoading} />
               )}
-              {activeTab === 'beds' && (
-                <BedsTab bedAssignments={bedAssignments} availableBeds={availableBeds} areas={areas} form={bedForm} setForm={setBedForm} onAssign={handleAssignBed} onDelete={handleDeleteBedAssignment} loading={tabLoading} />
-              )}
               {activeTab === 'tasks' && (
                 <TasksTab
                   tasks={tasks} stages={stages} batches={batches}
@@ -638,6 +688,15 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
           )}
         </div>
       </div>
+
+      {/* Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        onConfirm={() => { confirmDialog.onConfirm?.(); setConfirmDialog({ ...confirmDialog, isOpen: false }); }}
+        onCancel={() => setConfirmDialog({ ...confirmDialog, isOpen: false })}
+      />
     </div>
   );
 };
@@ -813,51 +872,213 @@ const GroupsTab = ({ groups, form, setForm, onCreate, onDelete, loading }) => (
 
 // ── Design Tab ────────────────────────────────────────────────────────────────
 
-const DesignTab = ({ design, form, setForm, onSave, onDelete, loading }) => (
-  <div className="space-y-4">
-    <div className="bg-purple-50 rounded-xl p-4 border border-purple-100">
-      <h4 className="text-xs font-bold text-purple-700 mb-3">{design ? 'Chỉnh Sửa Thiết Kế' : 'Tạo Thiết Kế Thí Nghiệm'}</h4>
-      <div className="grid grid-cols-2 gap-3 mb-3">
-        <div>
-          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Loại Thiết Kế</label>
-          <select value={form.designType} onChange={e => setForm({ ...form, designType: parseInt(e.target.value) })}
-            className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm bg-white">
-            {DESIGN_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Số Lần Lặp</label>
-          <input type="number" value={form.replicationCount} onChange={e => setForm({ ...form, replicationCount: e.target.value })}
-            className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm bg-white" />
-        </div>
-        <div className="col-span-2">
-          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Phương Pháp Ngẫu Nhiên Hóa</label>
-          <input value={form.randomizationMethod} onChange={e => setForm({ ...form, randomizationMethod: e.target.value })}
-            placeholder="VD: Randomized Complete Block Design (RCBD)"
-            className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm bg-white" />
-        </div>
-        <div className="col-span-2">
-          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Tham Số Thiết Kế (JSON)</label>
-          <textarea value={form.designParameters} onChange={e => setForm({ ...form, designParameters: e.target.value })}
-            placeholder='{"blockSize": 5, "spacing": "20x20cm"}'
-            rows={2} className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm bg-white font-mono resize-none" />
+// Parse designParameters từ JSON string/object
+const parseDesignParams = (params) => {
+  if (!params) return {};
+  if (typeof params === 'string') {
+    try { return JSON.parse(params); } catch { return {}; }
+  }
+  return params;
+};
+
+// Section card component
+const SectionCard = ({ title, icon, children, color = 'purple' }) => {
+  const colorMap = {
+    purple: 'bg-purple-50 border-purple-100',
+    blue: 'bg-blue-50 border-blue-100',
+    green: 'bg-green-50 border-green-100',
+    amber: 'bg-amber-50 border-amber-100',
+  };
+  const iconColor = {
+    purple: 'text-purple-600',
+    blue: 'text-blue-600',
+    green: 'text-green-600',
+    amber: 'text-amber-600',
+  };
+  return (
+    <div className={`rounded-xl p-4 border ${colorMap[color]}`}>
+      <div className="flex items-center gap-2 mb-3">
+        <span className={`text-lg ${iconColor[color]}`}>{icon}</span>
+        <h4 className={`text-xs font-bold ${color === 'purple' ? 'text-purple-700' : color === 'blue' ? 'text-blue-700' : color === 'green' ? 'text-green-700' : 'text-amber-700'}`}>{title}</h4>
+      </div>
+      {children}
+    </div>
+  );
+};
+
+// Input field component
+const DesignField = ({ label, value, onChange, type = 'text', unit, step, placeholder, readOnly }) => (
+  <div>
+    <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">{label}</label>
+    <div className="relative">
+      <input
+        type={type}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        readOnly={readOnly}
+        step={step}
+        className="w-full px-3 py-2 border border-white/50 rounded-lg text-sm bg-white/70 focus:bg-white focus:border-purple-400 transition-colors" />
+      {unit && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">{unit}</span>}
+    </div>
+  </div>
+);
+
+const DesignTab = ({ design, form, setForm, onSave, onDelete, loading }) => {
+  const params = parseDesignParams(form.designParameters);
+
+  const updateParam = (key, value) => {
+    const newParams = { ...params, [key]: value };
+    setForm({ ...form, designParameters: JSON.stringify(newParams) });
+  };
+
+  const generateSeed = () => {
+    updateParam('randomSeed', Math.floor(Math.random() * 999999) + 1);
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="bg-purple-50 rounded-xl p-4 border border-purple-100">
+        <h4 className="text-xs font-bold text-purple-700 mb-3">
+          {design ? '🔧 Chỉnh Sửa Thiết Kế Thí Nghiệm' : '📐 Tạo Thiết Kế Thí Nghiệm'}
+        </h4>
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Loại Thiết Kế</label>
+            <select value={form.designType} onChange={e => setForm({ ...form, designType: parseInt(e.target.value) })}
+              className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm bg-white">
+              {DESIGN_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Số Lần Lặp</label>
+            <input type="number" value={form.replicationCount} onChange={e => setForm({ ...form, replicationCount: parseInt(e.target.value) || 1 })}
+              min="1" max="10" className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm bg-white" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Số Nhóm Xử Lý</label>
+            <input type="number" value={params.treatments || ''} onChange={e => updateParam('treatments', parseInt(e.target.value) || 0)}
+              min="1" placeholder="VD: 4" className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm bg-white" />
+          </div>
         </div>
       </div>
+
+      {/* 1. Experimental Layout */}
+      <SectionCard title="1. Experimental Layout" icon="📏" color="purple">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <DesignField label="Row Spacing" value={params.spacing?.row || ''} onChange={e => updateParam('spacing', { ...params.spacing, row: e.target.value })} unit="cm" placeholder="50" />
+          <DesignField label="Plant Spacing" value={params.spacing?.plant || ''} onChange={e => updateParam('spacing', { ...params.spacing, plant: e.target.value })} unit="cm" placeholder="30" />
+          <DesignField label="Plants per Plot" value={params.plantsPerPlot || ''} onChange={e => updateParam('plantsPerPlot', parseInt(e.target.value) || 0)} placeholder="25" />
+          <DesignField label="Rows per Plot" value={params.rowsPerPlot || ''} onChange={e => updateParam('rowsPerPlot', parseInt(e.target.value) || 0)} placeholder="5" />
+          <DesignField label="Beds Required" value={params.bedsRequired || ''} onChange={e => updateParam('bedsRequired', parseInt(e.target.value) || 0)} placeholder="Auto" readOnly />
+          <DesignField label="Layout Type" value={params.layout || ''} onChange={e => updateParam('layout', e.target.value)} placeholder="RCBD" />
+        </div>
+      </SectionCard>
+
+      {/* 2. Plot Configuration */}
+      <SectionCard title="2. Plot Configuration" icon="📐" color="blue">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <DesignField label="Plot Length" value={params.plotLength || ''} onChange={e => updateParam('plotLength', parseFloat(e.target.value) || 0)} unit="m" step="0.1" placeholder="5" />
+          <DesignField label="Plot Width" value={params.plotWidth || ''} onChange={e => updateParam('plotWidth', parseFloat(e.target.value) || 0)} unit="m" step="0.1" placeholder="2" />
+          <DesignField label="Plot Area" value={params.plotArea ? `${params.plotArea} m²` : ''} onChange={e => updateParam('plotArea', parseFloat(e.target.value) || 0)} unit="m²" step="0.1" placeholder="10" />
+          <DesignField label="Buffer Zone" value={params.bufferZone || ''} onChange={e => updateParam('bufferZone', e.target.value)} unit="m" placeholder="1" />
+          <DesignField label="Buffer Distance" value={params.bufferDistance || ''} onChange={e => updateParam('bufferDistance', parseInt(e.target.value) || 0)} unit="cm" placeholder="50" />
+          <DesignField label="Border Rows" value={params.borderRows || ''} onChange={e => updateParam('borderRows', parseInt(e.target.value) || 0)} placeholder="1" />
+          <DesignField label="Block Count" value={params.blockCount || ''} onChange={e => updateParam('blockCount', parseInt(e.target.value) || 0)} placeholder="3" />
+          <DesignField label="Total Plots" value={params.totalPlots || ''} onChange={e => updateParam('totalPlots', parseInt(e.target.value) || 0)} placeholder="Auto" readOnly />
+        </div>
+      </SectionCard>
+
+      {/* 3. Randomization */}
+      <SectionCard title="3. Randomization" icon="🎲" color="green">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <DesignField label="Random Seed" value={params.randomSeed || ''} onChange={e => updateParam('randomSeed', parseInt(e.target.value) || 0)} placeholder="2026" />
+          <div>
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Randomization Method</label>
+            <select value={form.randomizationMethod} onChange={e => setForm({ ...form, randomizationMethod: e.target.value })}
+              className="w-full px-3 py-2 border border-green-200 rounded-lg text-sm bg-white">
+              <option value="CRD">CRD - Completely Randomized Design</option>
+              <option value="RCBD">RCBD - Randomized Complete Block Design</option>
+              <option value="RBCD">RBCD - Randomized Block Complete Design</option>
+              <option value="LSD">LSD - Latin Square Design</option>
+              <option value="Factorial">Factorial Design</option>
+              <option value="SplitPlot">Split-Plot Design</option>
+            </select>
+          </div>
+          <DesignField label="Blocking Variable" value={params.blockingVariable || ''} onChange={e => updateParam('blockingVariable', e.target.value)} placeholder="Light, Soil, etc." />
+        </div>
+        <div className="mt-3">
+          <button onClick={generateSeed} type="button"
+            className="px-4 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-medium transition-colors">
+            🎲 Generate Random Seed
+          </button>
+        </div>
+      </SectionCard>
+
+      {/* 4. Environmental Conditions */}
+      <SectionCard title="4. Environmental Conditions" icon="🌡️" color="amber">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div>
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Target Temperature</label>
+            <div className="flex items-center gap-1">
+              <input type="number" value={params.envConditions?.temperatureMin || ''} onChange={e => updateParam('envConditions', { ...params.envConditions, temperatureMin: parseFloat(e.target.value) || 0 })}
+                placeholder="20" className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white/70" />
+              <span className="text-gray-400">-</span>
+              <input type="number" value={params.envConditions?.temperatureMax || ''} onChange={e => updateParam('envConditions', { ...params.envConditions, temperatureMax: parseFloat(e.target.value) || 0 })}
+                placeholder="30" className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white/70" />
+              <span className="text-xs text-gray-400">°C</span>
+            </div>
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Target Humidity</label>
+            <div className="flex items-center gap-1">
+              <input type="number" value={params.envConditions?.humidityMin || ''} onChange={e => updateParam('envConditions', { ...params.envConditions, humidityMin: parseFloat(e.target.value) || 0 })}
+                placeholder="60" className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white/70" />
+              <span className="text-gray-400">-</span>
+              <input type="number" value={params.envConditions?.humidityMax || ''} onChange={e => updateParam('envConditions', { ...params.envConditions, humidityMax: parseFloat(e.target.value) || 0 })}
+                placeholder="80" className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white/70" />
+              <span className="text-xs text-gray-400">%</span>
+            </div>
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Target pH</label>
+            <div className="flex items-center gap-1">
+              <input type="number" value={params.envConditions?.phMin || ''} onChange={e => updateParam('envConditions', { ...params.envConditions, phMin: parseFloat(e.target.value) || 0 })}
+                placeholder="6.0" step="0.1" className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white/70" />
+              <span className="text-gray-400">-</span>
+              <input type="number" value={params.envConditions?.phMax || ''} onChange={e => updateParam('envConditions', { ...params.envConditions, phMax: parseFloat(e.target.value) || 0 })}
+                placeholder="6.5" step="0.1" className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white/70" />
+            </div>
+          </div>
+          <DesignField label="Target Light" value={params.envConditions?.light || ''} onChange={e => updateParam('envConditions', { ...params.envConditions, light: e.target.value })} unit="Lux" placeholder="10000" />
+        </div>
+      </SectionCard>
+
+      {/* Notes */}
+      <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+        <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Ghi Chú Thiết Kế</label>
+        <textarea value={params.notes || ''} onChange={e => updateParam('notes', e.target.value)}
+          placeholder="Mô tả chi tiết về thiết kế thí nghiệm..."
+          rows={2} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white resize-none" />
+      </div>
+
+      {/* Actions */}
       <div className="flex gap-3">
         <button onClick={onSave} disabled={loading}
-          className="px-5 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50">
-          💾 {design ? 'Cập Nhật' : 'Tạo'} Thiết Kế
+          className="px-6 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 transition-colors shadow-lg shadow-purple-200">
+          💾 {design ? 'Cập Nhật Thiết Kế' : 'Tạo Thiết Kế'}
         </button>
         {design && (
           <button onClick={onDelete}
-            className="px-5 py-2 border border-rose-300 text-rose-500 hover:bg-rose-50 rounded-xl text-sm font-bold">
+            className="px-6 py-2.5 border border-rose-300 text-rose-500 hover:bg-rose-50 rounded-xl text-sm font-bold transition-colors">
             ✕ Xóa Thiết Kế
           </button>
         )}
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 // ── Measurements Tab ─────────────────────────────────────────────────────────────
 
@@ -1024,6 +1245,12 @@ const SchedulesTab = ({ schedules, stages, batches, form, setForm, onCreate, onD
 
 const BatchesTab = ({ batches, bedAssignments, groups, form, setForm, onCreate, onDelete, loading }) => (
   <div className="space-y-4">
+    {/* Info banner if no beds assigned */}
+    {bedAssignments.length === 0 && (
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-700">
+        ⚠️ Chưa có luống nào được gán cho thí nghiệm này. Vui lòng liên hệ Manager để gán luống trước khi tạo lô.
+      </div>
+    )}
     <div className="bg-rose-50 rounded-xl p-4 border border-rose-100">
       <h4 className="text-xs font-bold text-rose-700 mb-3">+ Thêm Lô Mới</h4>
       <div className="grid grid-cols-2 gap-3 mb-3">
@@ -1032,6 +1259,18 @@ const BatchesTab = ({ batches, bedAssignments, groups, form, setForm, onCreate, 
           <input value={form.batchCode} onChange={e => setForm({ ...form, batchCode: e.target.value })}
             placeholder="VD: BATCH001"
             className="w-full px-3 py-2 border border-rose-200 rounded-lg text-sm bg-white" />
+        </div>
+        <div>
+          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Luống Đã Gán *</label>
+          <select value={form.experimentBedAssignmentId} onChange={e => setForm({ ...form, experimentBedAssignmentId: e.target.value })}
+            className="w-full px-3 py-2 border border-rose-200 rounded-lg text-sm bg-white">
+            <option value="">— Chọn luống —</option>
+            {bedAssignments.map(ba => (
+              <option key={ba.id} value={ba.id}>
+                {ba.bedName || ba.bedCode || 'Luống'} {ba.areaName ? `(${ba.areaName})` : ''}
+              </option>
+            ))}
+          </select>
         </div>
         <div>
           <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Nhóm</label>
@@ -1073,7 +1312,7 @@ const BatchesTab = ({ batches, bedAssignments, groups, form, setForm, onCreate, 
       <div className="overflow-x-auto bg-white border border-outline-variant rounded-xl">
         <table className="w-full text-xs">
           <thead className="bg-rose-50 border-b border-rose-100">
-            <tr>{['Mã Lô', 'Nhóm', 'Ngày Trồng', 'Dự Kiến Thu Hoạch', 'Số Cây', ''].map(h => (
+            <tr>{['Mã Lô', 'Luống', 'Nhóm', 'Ngày Trồng', 'Dự Kiến Thu Hoạch', 'Số Cây', ''].map(h => (
               <th key={h} className="px-4 py-3 text-left font-bold text-rose-700 uppercase">{h}</th>
             ))}</tr>
           </thead>
@@ -1081,6 +1320,7 @@ const BatchesTab = ({ batches, bedAssignments, groups, form, setForm, onCreate, 
             {batches.map(b => (
               <tr key={b.id} className="hover:bg-surface-container/20">
                 <td className="px-4 py-3 font-bold font-mono">{b.batchCode || '—'}</td>
+                <td className="px-4 py-3">{b.bedName || b.bedCode || bedAssignments.find(ba => ba.id === b.experimentBedAssignmentId)?.bedName || '—'}</td>
                 <td className="px-4 py-3">{groups.find(g => g.id === b.groupId)?.groupName || '—'}</td>
                 <td className="px-4 py-3 font-mono">{b.plantingDate || '—'}</td>
                 <td className="px-4 py-3 font-mono">{b.expectedHarvestDate || '—'}</td>

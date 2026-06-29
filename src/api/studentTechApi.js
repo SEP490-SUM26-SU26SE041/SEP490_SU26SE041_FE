@@ -29,9 +29,9 @@ export const farmsApi = {
   getAll: () =>
     apiClient.request('/farms').then(u),
   getById: (id) =>
-    apiClient.request(`/farms/${id}`).then(u),
+    apiClient.request(`/farms/farms/${id}`).then(u),
   getAreas: (farmId) =>
-    apiClient.request(`/farms/${farmId}/areas`).then(u),
+    apiClient.request(`/farms/farms/${farmId}/areas`).then(u),
   getBeds: (areaId) =>
     apiClient.request(`/farms/areas/${areaId}/beds`).then(u)
 };
