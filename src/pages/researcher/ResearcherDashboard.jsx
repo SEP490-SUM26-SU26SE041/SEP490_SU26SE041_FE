@@ -17,12 +17,18 @@ const TABS = [
 const ResearcherDashboard = () => {
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState('overview');
+  const [experimentPrefill, setExperimentPrefill] = useState(null);
   const navigateTo = (path) => {
     window.history.pushState(null, '', path);
     window.dispatchEvent(new Event('navigate'));
   };
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
+
+  const handleConvertToExperiment = (request) => {
+    setExperimentPrefill(request);
+    setActiveTab('experiments');
+  };
 
   return (
     <div className="flex min-h-screen bg-[#f1f5f9] font-sans text-slate-900 fixed inset-0 z-[1000]">
@@ -82,8 +88,8 @@ const ResearcherDashboard = () => {
 
           {/* Tab content */}
           {activeTab === 'overview' && <ResearcherOverview />}
-          {activeTab === 'experiments' && <ResearcherExperiments />}
-          {activeTab === 'requests' && <ResearcherRequests />}
+          {activeTab === 'experiments' && <ResearcherExperiments prefillData={experimentPrefill} onPrefillConsumed={() => setExperimentPrefill(null)} />}
+          {activeTab === 'requests' && <ResearcherRequests onConvertToExperiment={handleConvertToExperiment} />}
           {activeTab === 'templates' && <ResearcherTemplates />}
           {activeTab === 'tasks' && <ResearcherTasks />}
         </div>

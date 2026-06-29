@@ -3,15 +3,18 @@ import { experimentsApi } from '../../../api/experimentApi';
 import { cropsApi } from '../../../api/cropApi';
 import { useToast } from '../../../context/ToastContext';
 import { Modal } from '../../farm-manager/components/ui';
+import { useConfirm, ConfirmDialog } from '../../../components/common/ConfirmDialog';
 
 const ResearcherTemplates = () => {
   const { showToast } = useToast();
+  const { ask: askConfirm, state: confirmState, handleClose: closeConfirm } = useConfirm();
   const [templates, setTemplates] = useState([]);
   const [crops, setCrops] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formErrors, setFormErrors] = useState({});
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
 
   const [form, setForm] = useState({
     templateName: '',
@@ -81,7 +84,7 @@ const ResearcherTemplates = () => {
   };
 
   const handleRemove = async (id) => {
-    if (!window.confirm('Xóa quy trình này?')) return;
+    if (!(await askConfirm({ title: 'Xóa quy trình', message: 'Bạn có chắc muốn xóa quy trình này?', confirmText: 'Xóa' }))) return;
     try {
       await experimentsApi.removeProcedureTemplate(id);
       showToast('Đã xóa quy trình', 'success');
@@ -149,13 +152,14 @@ const ResearcherTemplates = () => {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {templates.map(t => (
-            <div key={t.id} className="bg-white border border-outline-variant rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow">
+            <div key={t.id} className="bg-white border border-outline-variant rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow cursor-pointer hover:border-indigo-300"
+              onClick={() => setSelectedTemplate(t)}>
               <div className="flex items-start justify-between gap-3 mb-3">
                 <div className="flex-1 min-w-0">
                   <h3 className="font-hanken font-bold text-sm text-on-surface line-clamp-1">{t.templateName || '—'}</h3>
                   <p className="text-[10px] text-on-surface-variant mt-0.5">{t.cropVarietyName || '—'}</p>
                 </div>
-                <button onClick={() => handleRemove(t.id)}
+                <button onClick={(e) => { e.stopPropagation(); handleRemove(t.id); }}
                   className="text-rose-400 hover:text-rose-600 shrink-0">
                   <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                 </button>
@@ -174,6 +178,105 @@ const ResearcherTemplates = () => {
           ))}
         </div>
       )}
+
+      {/* Detail Modal */}
+      <Modal open={!!selectedTemplate} onClose={() => setSelectedTemplate(null)} title={selectedTemplate?.templateName || 'Chi Tiết Quy Trình'} width="max-w-3xl">
+        {selectedTemplate && (
+          <div className="p-6 space-y-6">
+            {/* Header Info */}
+            <div className="bg-indigo-50 rounded-xl p-4 border border-indigo-100">
+              <div className="flex items-center gap-3 mb-3">
+                <span className="px-3 py-1 bg-indigo-600 text-white text-xs font-bold rounded-full">{selectedTemplate.cropVarietyName || '—'}</span>
+                <span className="text-xs text-on-surface-variant">Ngày tạo: {selectedTemplate.createdAt ? new Date(selectedTemplate.createdAt).toLocaleDateString('vi-VN') : '—'}</span>
+              </div>
+              {selectedTemplate.objective && (
+                <div className="mb-2">
+                  <p className="text-[10px] font-bold uppercase text-indigo-600 mb-1">Mục Tiêu</p>
+                  <p className="text-sm text-on-surface">{selectedTemplate.objective}</p>
+                </div>
+              )}
+              {selectedTemplate.description && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase text-indigo-600 mb-1">Mô Tả</p>
+                  <p className="text-sm text-on-surface">{selectedTemplate.description}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Steps */}
+            <div>
+              <h4 className="text-xs font-bold uppercase text-on-surface-variant mb-3">
+                Các Bước Thực Hiện ({selectedTemplate.steps?.length || 0})
+              </h4>
+              {selectedTemplate.steps && selectedTemplate.steps.length > 0 ? (
+                <div className="space-y-3">
+                  {selectedTemplate.steps
+                    .sort((a, b) => a.stepOrder - b.stepOrder)
+                    .map((step) => {
+                      const stageColors = {
+                        'Nursery': 'bg-green-100 text-green-700 border-green-200',
+                        'Care': 'bg-blue-100 text-blue-700 border-blue-200',
+                        'Growth': 'bg-emerald-100 text-emerald-700 border-emerald-200',
+                        'Harvest': 'bg-amber-100 text-amber-700 border-amber-200',
+                        'Evaluation': 'bg-purple-100 text-purple-700 border-purple-200',
+                      };
+                      const stageIcons = {
+                        'Nursery': '🌱',
+                        'Care': '💧',
+                        'Growth': '📈',
+                        'Harvest': '🌾',
+                        'Evaluation': '✅',
+                      };
+                      return (
+                        <div key={step.id} className="bg-white border border-outline-variant rounded-xl p-4 hover:shadow-md transition-shadow">
+                          <div className="flex items-start gap-4">
+                            <div className="flex-shrink-0 w-10 h-10 bg-indigo-600 text-white rounded-full flex items-center justify-center font-bold text-sm">
+                              {step.stepOrder}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-2 mb-2">
+                                <h5 className="font-bold text-sm text-on-surface">{step.title}</h5>
+                                {step.stageType && (
+                                  <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full border ${stageColors[step.stageType] || 'bg-gray-100 text-gray-600 border-gray-200'}`}>
+                                    {stageIcons[step.stageType] || '📌'} {step.stageType}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-on-surface-variant mb-3 leading-relaxed">{step.instruction}</p>
+                              <div className="flex flex-wrap items-center gap-4 text-[11px]">
+                                {step.expectedDurationDays && (
+                                  <div className="flex items-center gap-1 text-on-surface-variant">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                                    <span>{step.expectedDurationDays} ngày</span>
+                                  </div>
+                                )}
+                                {step.requiredSkillDescription && (
+                                  <div className="flex items-center gap-1 text-on-surface-variant">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                                    <span className="truncate max-w-[200px]">{step.requiredSkillDescription}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-sm text-on-surface-variant">Chưa có bước nào.</div>
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button onClick={() => setSelectedTemplate(null)}
+                className="px-5 py-2.5 border border-outline-variant rounded-xl text-sm font-medium hover:bg-surface-container/50 transition-all">
+                Đóng
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* Create Modal */}
       <Modal open={showCreate} onClose={() => { setShowCreate(false); setFormErrors({}); }} title="Tạo Quy Trình Canh Tác Mẫu" width="max-w-3xl">
@@ -284,6 +387,7 @@ const ResearcherTemplates = () => {
           </div>
         </form>
       </Modal>
+      <ConfirmDialog state={confirmState} onClose={closeConfirm} />
     </div>
   );
 };

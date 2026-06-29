@@ -5,18 +5,25 @@ const u = unwrapData;
 // ── Experiment Requests (Manager: inbox + review) ────────────────────────────────
 
 export const experimentRequestsApi = {
-  // Manager inbox
-  getInbox: (status) =>
-    apiClient.request('/experiment-requests/manager/inbox', { params: status ? { status } : {} }).then(u),
+  // Manager inbox - filter by status and/or farmId
+  getInbox: (params = {}) =>
+    apiClient.request('/experiment-requests/manager/inbox', { params }).then(u),
   // Lấy tất cả / filter
   getAll: (params = {}) =>
     apiClient.request('/experiment-requests', { params }).then(u),
   getById: (id) => apiClient.request(`/experiment-requests/${id}`).then(u),
   getResourceSummary: (id) => apiClient.request(`/experiment-requests/${id}/resource-summary`).then(u),
   getReservedBeds: (id) => apiClient.request(`/experiment-requests/${id}/reserved-beds`).then(u),
+  // Researcher tạo yêu cầu
+  create: (payload) =>
+    apiClient.request('/experiment-requests', { method: 'POST', body: payload }).then(u),
+  update: (id, payload) =>
+    apiClient.request(`/experiment-requests/${id}`, { method: 'PUT', body: payload }).then(u),
+  cancel: (id) =>
+    apiClient.request(`/experiment-requests/${id}/cancel`, { method: 'POST' }).then(u),
   // Manager duyệt/từ chối
   review: (id, payload) =>
-    apiClient.request(`/experiment-requests/${id}/review`, { method: 'POST', body: payload })
+    apiClient.request(`/experiment-requests/${id}/review`, { method: 'POST', body: payload }).then(u)
 };
 
 // ── Experiments (Manager: read-only, Researcher: full CRUD) ────────────────────
