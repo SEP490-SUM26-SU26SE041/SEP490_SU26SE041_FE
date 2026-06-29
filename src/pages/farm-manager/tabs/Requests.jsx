@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { experimentRequestsApi } from '../../../api/experimentApi';
+import { farmsApi } from '../../../api/managerResourcesApi';
 import { useToast } from '../../../context/ToastContext';
 import {
   Card,
@@ -25,8 +26,10 @@ const STATUS_FILTERS = [
 const Requests = () => {
   const { showToast } = useToast();
   const [filter, setFilter] = useState('');
-  const [requests, setRequests] = useState([]);
+  const [filterFarm, setFilterFarm] = useState('');
+  const [allRequests, setAllRequests] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [farms, setFarms] = useState([]);
 
   const [detailOpen, setDetailOpen] = useState(false);
   const [activeRequest, setActiveRequest] = useState(null);
@@ -47,18 +50,35 @@ const Requests = () => {
   const loadInbox = async () => {
     try {
       setLoading(true);
-      const res = await experimentRequestsApi.getInbox(filter || undefined);
-      const data = res?.data ?? res ?? [];
-      setRequests(Array.isArray(data) ? data : []);
+      const data = await experimentRequestsApi.getInbox();
+      setAllRequests(Array.isArray(data) ? data : []);
     } catch (err) {
       showToast(err.message || 'Không thể tải danh sách yêu cầu', 'error');
-      setRequests([]);
+      setAllRequests([]);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { loadInbox(); }, [filter]);
+  const loadFarms = async () => {
+    try {
+      const data = await farmsApi.getMyFarms();
+      setFarms(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.warn('Không thể tải danh sách nông trại');
+    }
+  };
+
+  useEffect(() => { loadInbox(); loadFarms(); }, []);
+
+  // Filter requests by farm and status
+  const requests = useMemo(() => {
+    return allRequests.filter(r => {
+      if (filter && r.status !== filter) return false;
+      if (filterFarm && String(r.farmId) !== String(filterFarm)) return false;
+      return true;
+    });
+  }, [allRequests, filter, filterFarm]);
 
   const openDetail = async (req) => {
     setActiveRequest(req);
@@ -151,16 +171,36 @@ const Requests = () => {
           <StatPill label="Từ Chối" value={stats.rejected} color="text-rose-600" />
         </div>
 
-        <div className="flex flex-wrap gap-2 bg-white border border-outline-variant rounded-xl p-2 shadow-sm">
-          {STATUS_FILTERS.map(f => (
-            <button
-              key={f.value}
-              onClick={() => setFilter(f.value)}
-              className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors ${filter === f.value ? 'bg-primary text-white' : 'text-on-surface-variant hover:bg-surface-container'}`}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 bg-white border border-outline-variant rounded-xl p-4 shadow-sm">
+          <div>
+            <label className="block text-xs font-bold text-on-surface-variant mb-1">Tìm kiếm</label>
+            <input
+              type="text"
+              placeholder="Tên yêu cầu..."
+              className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-on-surface-variant mb-1">Trạng Thái</label>
+            <select
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
             >
-              {f.label}
-            </button>
-          ))}
+              {STATUS_FILTERS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-on-surface-variant mb-1">Nông Trại</label>
+            <select
+              value={filterFarm}
+              onChange={e => setFilterFarm(e.target.value)}
+              className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+            >
+              <option value="">Tất Cả Nông Trại</option>
+              {farms.map(f => <option key={f.id} value={f.id}>{f.farmName}</option>)}
+            </select>
+          </div>
         </div>
 
         <Card className="overflow-hidden">

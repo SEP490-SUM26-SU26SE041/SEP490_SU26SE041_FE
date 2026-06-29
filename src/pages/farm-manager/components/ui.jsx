@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 
 export const StatCard = ({ label, value, color = 'text-primary', sub }) => (
   <div className="bg-white border border-outline-variant p-4 lg:p-6 rounded-xl flex flex-col gap-1 lg:gap-2 transition-transform hover:-translate-y-1 shadow-sm">
@@ -194,9 +195,17 @@ const ErrorIcon = () => (
 
 export const Modal = ({ open, onClose, title, children, width = 'max-w-2xl' }) => {
   if (!open) return null;
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-4 animate-fade-in">
-      <div className={`bg-white rounded-2xl shadow-2xl w-full ${width} overflow-hidden flex flex-col max-h-[92vh]`}>
+  
+  const modalContent = (
+    <div 
+      className="fixed z-[9999]"
+      style={{ top: 0, left: 0, right: 0, bottom: 0, height: '100vh', width: '100vw', backgroundColor: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', boxSizing: 'border-box' }}
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <div 
+        className={`bg-white rounded-2xl shadow-2xl w-full ${width} flex flex-col`}
+        style={{ maxHeight: '95vh', boxSizing: 'border-box' }}
+      >
         {title !== null && (
           <div className="px-6 py-4 border-b border-outline-variant flex justify-between items-center shrink-0">
             <h3 className="font-hanken font-bold text-lg text-primary">{title}</h3>
@@ -205,8 +214,10 @@ export const Modal = ({ open, onClose, title, children, width = 'max-w-2xl' }) =
             </button>
           </div>
         )}
-        <div className="overflow-y-auto flex-1">{children}</div>
+        <div className="overflow-y-auto flex-1 p-6">{children}</div>
       </div>
     </div>
   );
+  
+  return createPortal(modalContent, document.body);
 };

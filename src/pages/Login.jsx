@@ -1,5 +1,26 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useGoogleLogin } from '@react-oauth/google';
+
+const SimpleToast = ({ message, type = 'info', onClose }) => {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 4000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  const colors = {
+    error: 'bg-rose-500 text-white',
+    success: 'bg-emerald-600 text-white',
+    warning: 'bg-amber-500 text-white',
+    info: 'bg-slate-800 text-white'
+  };
+
+  return (
+    <div className={`fixed top-6 right-6 z-[99999] px-5 py-3 rounded-xl shadow-2xl ${colors[type]} animate-slide-down flex items-center gap-3`}>
+      <span className="text-sm font-semibold">{message}</span>
+      <button onClick={onClose} className="ml-2 opacity-70 hover:opacity-100">✕</button>
+    </div>
+  );
+};
 
 const Login = () => {
   const [view, setView] = useState('login'); // 'login', 'signup', 'forgot'
@@ -8,8 +29,10 @@ const Login = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [name, setName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-
   const [otpCode, setOtpCode] = useState('');
+  const [toast, setToast] = useState(null);
+
+  const showMsg = (msg, type = 'info') => setToast({ message: msg, type });
 
   const navigateTo = (path) => {
     window.history.pushState(null, '', path);
@@ -40,17 +63,17 @@ const Login = () => {
         };
         navigateTo(rolePaths[data.role] || '/');
       } else {
-        alert('Google Login failed at backend!');
+        showMsg('Google Login failed at backend!', 'error');
       }
     } catch (err) {
       console.error(err);
-      alert('Connection failed!');
+      showMsg('Connection failed!', 'error');
     }
   };
 
   const loginWithGoogle = useGoogleLogin({
     onSuccess: handleGoogleSuccess,
-    onError: () => alert('Google Login Failed'),
+    onError: () => showMsg('Google Login Failed', 'error'),
   });
 
   const handleSubmit = async (e) => {
@@ -79,11 +102,11 @@ const Login = () => {
           navigateTo(rolePaths[data.role] || '/');
         } else {
           const error = await response.json();
-          alert(error.message || 'Login failed!');
+          showMsg(error.message || 'Login failed!', 'error');
         }
       } else if (view === 'signup') {
         if (password !== confirmPassword) {
-          alert('Passwords do not match!');
+          showMsg('Passwords do not match!', 'warning');
           return;
         }
 
@@ -94,11 +117,11 @@ const Login = () => {
         });
 
         if (response.ok) {
-          alert('Registration successful! Please sign in.');
+          showMsg('Registration successful! Please sign in.', 'success');
           setView('login');
         } else {
           const error = await response.json();
-          alert(error.message || 'Registration failed!');
+          showMsg(error.message || 'Registration failed!', 'error');
         }
       } else if (view === 'forgot') {
         const response = await fetch(`${API_URL}/forgot-password`, {
@@ -107,11 +130,11 @@ const Login = () => {
           body: JSON.stringify({ email }),
         });
         if (response.ok) {
-          alert('Mã xác nhận đã được gửi về Email của bạn!');
+          showMsg('Mã xác nhận đã được gửi về Email của bạn!', 'success');
           setView('verify_code');
         } else {
           const error = await response.json();
-          alert(error.message || 'Gửi mail thất bại!');
+          showMsg(error.message || 'Gửi mail thất bại!', 'error');
         }
       } else if (view === 'verify_code') {
         const response = await fetch(`${API_URL}/verify-code`, {
@@ -123,11 +146,11 @@ const Login = () => {
           setView('reset_password');
         } else {
           const error = await response.json();
-          alert(error.message || 'Mã xác nhận không đúng!');
+          showMsg(error.message || 'Mã xác nhận không đúng!', 'error');
         }
       } else if (view === 'reset_password') {
         if (password !== confirmPassword) {
-          alert('Mật khẩu không khớp!');
+          showMsg('Mật khẩu không khớp!', 'warning');
           return;
         }
         const response = await fetch(`${API_URL}/reset-password`, {
@@ -136,16 +159,16 @@ const Login = () => {
           body: JSON.stringify({ email, code: otpCode, newPassword: password }),
         });
         if (response.ok) {
-          alert('Mật khẩu đã được đổi thành công!');
+          showMsg('Mật khẩu đã được đổi thành công!', 'success');
           setView('login');
         } else {
           const error = await response.json();
-          alert(error.message || 'Đổi mật khẩu thất bại!');
+          showMsg(error.message || 'Đổi mật khẩu thất bại!', 'error');
         }
       }
     } catch (err) {
       console.error(err);
-      alert('Lỗi kết nối Server!');
+      showMsg('Lỗi kết nối Server!', 'error');
     }
   };
 
@@ -169,6 +192,7 @@ const Login = () => {
 
   return (
     <div className="flex min-h-screen w-screen font-sans bg-white overflow-hidden fixed inset-0 z-[9999]">
+      {toast && <SimpleToast {...toast} onClose={() => setToast(null)} />}
       {/* Left Side: Image & Branding */}
       <div className="hidden lg:flex flex-1 relative flex-col bg-[#f0f2f5] bg-cover bg-center" style={{ backgroundImage: "url('/background/background-login.jpg')" }}>
         <div className="flex-1 bg-gradient-to-b from-black/10 to-black/70 flex flex-col justify-between p-14 text-white">

@@ -4,6 +4,7 @@ import { farmsApi } from '../../../api/managerResourcesApi';
 import { experimentsApi } from '../../../api/experimentApi';
 import { useToast } from '../../../context/ToastContext';
 import { Modal } from '../../farm-manager/components/ui';
+import { useConfirm, ConfirmDialog } from '../../../components/common/ConfirmDialog';
 
 const STATUS_FILTERS = [
   { value: '', label: 'Tất Cả' },
@@ -13,8 +14,9 @@ const STATUS_FILTERS = [
   { value: 'Cancelled', label: 'Đã Hủy' }
 ];
 
-const ResearcherRequests = () => {
+const ResearcherRequests = ({ onConvertToExperiment }) => {
   const { showToast } = useToast();
+  const { ask: askConfirm, state: confirmState, handleClose: closeConfirm } = useConfirm();
   const [requests, setRequests] = useState([]);
   const [farms, setFarms] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -28,7 +30,17 @@ const ResearcherRequests = () => {
     objective: '',
     expectedStartDate: '',
     expectedEndDate: '',
-    monitoringPlan: ''
+    monitoringPlan: {
+      groups: '',
+      expectedBeds: '',
+      replications: '',
+      expectedPlants: '',
+      monitoring: {
+        temperature: { min: '', max: '' },
+        humidity: { min: '', max: '' },
+        soilMoisture: { min: '', max: '' }
+      }
+    }
   });
   const [formErrors, setFormErrors] = useState({});
 
@@ -60,7 +72,7 @@ const ResearcherRequests = () => {
 
   const validateForm = () => {
     const errs = {};
-    if (!form.farmId) errs.farmId = 'Vui lòng chọn nông trại';
+    if (!form.farmId || form.farmId.length !== 36) errs.farmId = 'Vui lòng chọn nông trại';
     if (!form.title.trim()) errs.title = 'Tiêu đề không được để trống';
     else if (form.title.trim().length < 5) errs.title = 'Tiêu đề phải có ít nhất 5 ký tự';
     if (!form.objective.trim()) errs.objective = 'Mục tiêu không được để trống';
@@ -76,14 +88,46 @@ const ResearcherRequests = () => {
     if (!validateForm()) return;
     try {
       setCreating(true);
-      const payload = { ...form };
-      if (!payload.expectedStartDate) delete payload.expectedStartDate;
-      if (!payload.expectedEndDate) delete payload.expectedEndDate;
-      if (!payload.monitoringPlan) delete payload.monitoringPlan;
+      const payload = {
+        farmId: form.farmId,
+        title: form.title.trim(),
+        objective: form.objective.trim()
+      };
+      if (form.expectedStartDate) payload.expectedStartDate = form.expectedStartDate;
+      if (form.expectedEndDate) payload.expectedEndDate = form.expectedEndDate;
+
+      const mp = form.monitoringPlan;
+      const hasMonData = mp.groups || mp.expectedBeds || mp.replications || mp.expectedPlants ||
+        mp.monitoring.temperature.min || mp.monitoring.temperature.max ||
+        mp.monitoring.humidity.min || mp.monitoring.humidity.max ||
+        mp.monitoring.soilMoisture.min || mp.monitoring.soilMoisture.max;
+      if (hasMonData) {
+        payload.monitoringPlan = JSON.stringify({
+          groups: mp.groups ? Number(mp.groups) : undefined,
+          expectedBeds: mp.expectedBeds ? Number(mp.expectedBeds) : undefined,
+          replications: mp.replications ? Number(mp.replications) : undefined,
+          expectedPlants: mp.expectedPlants ? Number(mp.expectedPlants) : undefined,
+          monitoring: {
+            temperature: {
+              min: mp.monitoring.temperature.min ? Number(mp.monitoring.temperature.min) : undefined,
+              max: mp.monitoring.temperature.max ? Number(mp.monitoring.temperature.max) : undefined
+            },
+            humidity: {
+              min: mp.monitoring.humidity.min ? Number(mp.monitoring.humidity.min) : undefined,
+              max: mp.monitoring.humidity.max ? Number(mp.monitoring.humidity.max) : undefined
+            },
+            soilMoisture: {
+              min: mp.monitoring.soilMoisture.min ? Number(mp.monitoring.soilMoisture.min) : undefined,
+              max: mp.monitoring.soilMoisture.max ? Number(mp.monitoring.soilMoisture.max) : undefined
+            }
+          }
+        });
+      }
+
       await experimentRequestsApi.create(payload);
       showToast('Đã gửi yêu cầu thí nghiệm thành công!', 'success');
       setShowCreate(false);
-      setForm({ farmId: '', title: '', objective: '', expectedStartDate: '', expectedEndDate: '', monitoringPlan: '' });
+      setForm({ farmId: '', title: '', objective: '', expectedStartDate: '', expectedEndDate: '', monitoringPlan: { groups: '', expectedBeds: '', replications: '', expectedPlants: '', monitoring: { temperature: { min: '', max: '' }, humidity: { min: '', max: '' }, soilMoisture: { min: '', max: '' } } } });
       setFormErrors({});
       fetchRequests();
     } catch (err) {
@@ -94,7 +138,8 @@ const ResearcherRequests = () => {
   };
 
   const handleCancel = async (id) => {
-    if (!window.confirm('Hủy yêu cầu này?')) return;
+    const ok = await askConfirm({ title: 'Hủy yêu cầu', message: 'Bạn có chắc muốn hủy yêu cầu này?', confirmText: 'Hủy yêu cầu' });
+    if (!ok) return;
     try {
       await experimentRequestsApi.remove(id);
       showToast('Đã hủy yêu cầu', 'success');
@@ -104,14 +149,23 @@ const ResearcherRequests = () => {
     }
   };
 
-  const handleConvertToExperiment = async (requestId) => {
-    if (!window.confirm('Tạo thí nghiệm từ yêu cầu này?')) return;
-    try {
-      const result = await experimentsApi.createFromRequest(requestId);
-      showToast(`Đã tạo thí nghiệm: ${result?.experimentCode || 'thành công'}`, 'success');
-      fetchRequests();
-    } catch (err) {
-      showToast(err.message || 'Không thể tạo thí nghiệm', 'error');
+  const handleConvertToExperiment = (request) => {
+    if (onConvertToExperiment) {
+      onConvertToExperiment(request);
+    } else {
+      // Fallback: gọi trực tiếp API nếu không có callback
+      const run = async () => {
+        const ok = await askConfirm({ title: 'Tạo thí nghiệm', message: 'Tạo thí nghiệm từ yêu cầu này?', confirmText: 'Tạo thí nghiệm', variant: 'primary' });
+        if (!ok) return;
+        try {
+          const result = await experimentsApi.createFromRequest(request.id);
+          showToast(`Đã tạo thí nghiệm: ${result?.experimentCode || 'thành công'}`, 'success');
+          fetchRequests();
+        } catch (err) {
+          showToast(err.message || 'Không thể tạo thí nghiệm', 'error');
+        }
+      };
+      run();
     }
   };
 
@@ -201,7 +255,7 @@ const ResearcherRequests = () => {
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-2">
                         {req.status === 'Approved' && (
-                          <button onClick={() => handleConvertToExperiment(req.id)}
+                          <button onClick={() => handleConvertToExperiment(req)}
                             className="text-emerald-600 font-bold text-[10px] uppercase hover:underline whitespace-nowrap">
                             Tạo TN
                           </button>
@@ -221,6 +275,8 @@ const ResearcherRequests = () => {
           </table>
         </div>
       </div>
+
+      <ConfirmDialog state={confirmState} onClose={closeConfirm} />
 
       {/* Create Modal */}
       <Modal open={showCreate} onClose={() => { setShowCreate(false); setFormErrors({}); }} title="Gửi Yêu Cầu Thí Nghiệm" width="max-w-2xl">
@@ -262,12 +318,62 @@ const ResearcherRequests = () => {
               {formErrors.expectedEndDate && <p className="text-xs text-rose-600 mt-1">{formErrors.expectedEndDate}</p>}
             </div>
           </div>
-          <div>
-            <label className="block text-xs font-bold text-on-surface-variant mb-1">Kế Hoạch Theo Dõi</label>
-            <textarea value={form.monitoringPlan} onChange={e => setForm(f => ({ ...f, monitoringPlan: e.target.value }))}
-              placeholder="VD: Đo chiều cao cây, số bông, năng suất/ha..."
-              rows={2}
-              className="w-full px-3 py-2.5 border border-outline-variant rounded-xl bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 resize-none" />
+          {/* Monitoring Plan */}
+          <div className="border border-indigo-200 rounded-xl p-4 bg-indigo-50/30">
+            <p className="text-xs font-bold text-indigo-700 mb-3">Kế Hoạch Theo Dõi (Tùy Chọn)</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+              <div>
+                <label className="block text-[10px] font-semibold text-on-surface-variant mb-1">Số Nhóm</label>
+                <input type="number" min="1" value={form.monitoringPlan.groups} onChange={e => setForm(f => ({ ...f, monitoringPlan: { ...f.monitoringPlan, groups: e.target.value } }))}
+                  placeholder="VD: 1" className="w-full px-2.5 py-2 border border-outline-variant rounded-lg bg-white text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-on-surface-variant mb-1">Số Luống</label>
+                <input type="number" min="1" value={form.monitoringPlan.expectedBeds} onChange={e => setForm(f => ({ ...f, monitoringPlan: { ...f.monitoringPlan, expectedBeds: e.target.value } }))}
+                  placeholder="VD: 1" className="w-full px-2.5 py-2 border border-outline-variant rounded-lg bg-white text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-on-surface-variant mb-1">Số Lần Lặp Lại</label>
+                <input type="number" min="1" value={form.monitoringPlan.replications} onChange={e => setForm(f => ({ ...f, monitoringPlan: { ...f.monitoringPlan, replications: e.target.value } }))}
+                  placeholder="VD: 1" className="w-full px-2.5 py-2 border border-outline-variant rounded-lg bg-white text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-on-surface-variant mb-1">Số Cây Dự Kiến</label>
+                <input type="number" min="1" value={form.monitoringPlan.expectedPlants} onChange={e => setForm(f => ({ ...f, monitoringPlan: { ...f.monitoringPlan, expectedPlants: e.target.value } }))}
+                  placeholder="VD: 180" className="w-full px-2.5 py-2 border border-outline-variant rounded-lg bg-white text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              </div>
+            </div>
+            <p className="text-[10px] font-bold text-indigo-700 mb-2">Ngưỡng Theo Dõi</p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {[
+                { key: 'temperature', label: 'Nhiệt Độ (°C)', path: 'monitoring.temperature' },
+                { key: 'humidity', label: 'Độ Ẩm (%)', path: 'monitoring.humidity' },
+                { key: 'soilMoisture', label: 'Độ Ẩm Đất (%)', path: 'monitoring.soilMoisture' }
+              ].map(item => {
+                const [parent, child] = item.path.split('.');
+                return (
+                  <div key={item.key} className="bg-white rounded-lg p-3 border border-outline-variant">
+                    <p className="text-[10px] font-bold text-on-surface mb-2">{item.label}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[9px] text-on-surface-variant mb-0.5">Tối thiểu</label>
+                        <input type="number" value={form.monitoringPlan[parent][child].min} onChange={e => {
+                          setForm(f => ({ ...f, monitoringPlan: { ...f.monitoringPlan, [parent]: { ...f.monitoringPlan[parent], [child]: { ...f.monitoringPlan[parent][child], min: e.target.value } } } }));
+                        }}
+                          placeholder="Min" className="w-full px-2 py-1.5 border border-outline-variant rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+                      </div>
+                      <div>
+                        <label className="block text-[9px] text-on-surface-variant mb-0.5">Tối đa</label>
+                        <input type="number" value={form.monitoringPlan[parent][child].max} onChange={e => {
+                          setForm(f => ({ ...f, monitoringPlan: { ...f.monitoringPlan, [parent]: { ...f.monitoringPlan[parent], [child]: { ...f.monitoringPlan[parent][child], max: e.target.value } } } }));
+                        }}
+                          placeholder="Max" className="w-full px-2 py-1.5 border border-outline-variant rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={() => { setShowCreate(false); setFormErrors({}); }}

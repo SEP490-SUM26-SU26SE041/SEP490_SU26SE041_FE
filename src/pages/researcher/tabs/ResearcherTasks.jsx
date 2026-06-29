@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { tasksApi } from '../../../api/experimentApi';
 import { useToast } from '../../../context/ToastContext';
+import { useConfirm, ConfirmDialog } from '../../../components/common/ConfirmDialog';
 
 const TASK_TABS = [
   { id: 'all', label: 'Tất Cả' },
@@ -125,6 +126,7 @@ const ResearcherTasks = () => {
 
 const TaskCard = ({ task, onRefresh }) => {
   const { showToast } = useToast();
+  const { ask: askConfirm, state: confirmState, handleClose: closeConfirm } = useConfirm();
   const [expanded, setExpanded] = useState(false);
 
   const handleStart = async () => {
@@ -148,7 +150,7 @@ const TaskCard = ({ task, onRefresh }) => {
   };
 
   const handleCancel = async () => {
-    if (!window.confirm('Hủy tác vụ này?')) return;
+    if (!(await askConfirm({ title: 'Hủy tác vụ', message: 'Bạn có chắc muốn hủy tác vụ này?', confirmText: 'Hủy tác vụ' }))) return;
     try {
       await tasksApi.cancel(task.id);
       showToast('Đã hủy tác vụ', 'success');
@@ -250,6 +252,7 @@ const TaskCard = ({ task, onRefresh }) => {
           </div>
         </div>
       )}
+      <ConfirmDialog state={confirmState} onClose={closeConfirm} />
     </div>
   );
 };

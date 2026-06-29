@@ -68,7 +68,7 @@ const TASK_TYPES = [
 
 // ── Researcher Experiments List ───────────────────────────────────────────────────
 
-const ResearcherExperiments = () => {
+const ResearcherExperiments = ({ prefillData, onPrefillConsumed }) => {
   const { showToast } = useToast();
   const [experiments, setExperiments] = useState([]);
   const [farms, setFarms] = useState([]);
@@ -117,6 +117,28 @@ const ResearcherExperiments = () => {
 
   useEffect(() => { fetchFarms(); fetchCropVarieties(); }, []);
   useEffect(() => { fetchExperiments(); }, [filterFarm, filterStatus]);
+
+  // Xử lý prefill từ trang Requests
+  useEffect(() => {
+    if (prefillData) {
+      const expCode = `EXP-${Date.now().toString().slice(-6)}`;
+      setCreateForm({
+        farmId: prefillData.farmId || '',
+        cropVarietyId: '',
+        experimentCode: expCode,
+        title: prefillData.title || '',
+        objective: prefillData.objective || '',
+        hypothesis: '',
+        startDate: prefillData.expectedStartDate || '',
+        endDate: prefillData.expectedEndDate || ''
+      });
+      setCreateErrors({});
+      setShowCreateExp(true);
+      showToast(`Đã tải dữ liệu từ yêu cầu. Mã thí nghiệm gợi ý: ${expCode}`, 'info');
+      if (onPrefillConsumed) onPrefillConsumed();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillData]);
 
   const handleCreateExp = async (e) => {
     e.preventDefault();
@@ -196,11 +218,7 @@ const ResearcherExperiments = () => {
         <p className="text-xs font-bold text-on-surface-variant uppercase tracking-wider">
           {filtered.length} thí nghiệm
         </p>
-        <button onClick={() => setShowCreateExp(true)}
-          className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-600/20 transition-all">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Tạo Thí Nghiệm Mới
-        </button>
+        <p className="text-xs text-on-surface-variant italic">Tạo thí nghiệm từ trang Yêu Cầu</p>
       </div>
       <div className="bg-white border border-outline-variant rounded-2xl overflow-hidden shadow-sm">
         <div className="overflow-x-auto">

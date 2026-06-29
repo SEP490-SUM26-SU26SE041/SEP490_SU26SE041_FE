@@ -23,7 +23,7 @@ export const ToastProvider = ({ children }) => {
     <ToastContext.Provider value={{ showToast }}>
       {children}
       {/* Container hiển thị Toasts */}
-      <div className="fixed top-5 right-5 z-[9999] flex flex-col gap-3">
+      <div className="fixed top-5 right-5 z-[99999] flex flex-col gap-3">
         {toasts.map((toast) => {
           // Các style tùy theo loại thông báo
           const typeStyles = {
