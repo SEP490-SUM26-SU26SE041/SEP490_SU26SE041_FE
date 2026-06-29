@@ -3,7 +3,7 @@ import { apiClient, unwrapData } from './apiClient';
 const u = unwrapData;
 
 export const farmsApi = {
-  getMyFarms: () => apiClient.request('/farms/my-farms').then(u),
+  getMyFarms: () => apiClient.request('/farms').then(u),
   getAll: () => apiClient.request('/farms').then(u),
   getById: (id) => apiClient.request('/farms/' + id).then(u),
   create: (payload) => apiClient.request('/farms', { method: 'POST', body: payload }),
@@ -14,7 +14,7 @@ export const farmsApi = {
 };
 
 export const areasApi = {
-  getByFarm: (farmId) => apiClient.request('/farms/' + farmId + '/areas').then(u),
+  getByFarm: (farmId) => apiClient.request('/farms/farms/' + farmId + '/areas').then(u),
   getById: (id) => apiClient.request('/farms/areas/' + id).then(u),
   create: (payload) => apiClient.request('/farms/areas', { method: 'POST', body: payload }),
   update: (id, payload) => apiClient.request('/farms/areas/' + id, { method: 'PUT', body: payload }),
