@@ -57,13 +57,13 @@ const DESIGN_TYPES = [
 ];
 
 const TASK_TYPES = [
-  { value: 1, label: 'Trồng (Planting)' },
-  { value: 2, label: 'Tưới nước (Watering)' },
-  { value: 3, label: 'Bón phân (Fertilizing)' },
-  { value: 4, label: 'Quan sát (Observation)' },
-  { value: 5, label: 'Kiểm tra (Inspection)' },
-  { value: 6, label: 'Thu hoạch (Harvest)' },
-  { value: 7, label: 'Khác (Other)' },
+  { value: 'Planting', label: 'Trồng (Planting)' },
+  { value: 'Watering', label: 'Tưới nước (Watering)' },
+  { value: 'Fertilizing', label: 'Bón phân (Fertilizing)' },
+  { value: 'Observation', label: 'Quan sát (Observation)' },
+  { value: 'Inspection', label: 'Kiểm tra (Inspection)' },
+  { value: 'Harvest', label: 'Thu hoạch (Harvest)' },
+  { value: 'Other', label: 'Khác (Other)' },
 ];
 
 // ── Researcher Experiments List ───────────────────────────────────────────────────
@@ -351,7 +351,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   const [scheduleForm, setScheduleForm] = useState({ experimentStageId: '', batchId: '', title: '', instruction: '', frequencyDays: 1, taskType: 1, startDate: '', endDate: '' });
   const [batchForm, setBatchForm] = useState({ experimentBedAssignmentId: '', groupId: '', batchCode: '', plantingDate: '', expectedHarvestDate: '', plantCount: '', notes: '' });
   const [bedForm, setBedForm] = useState({ areaId: '', bedId: '' });
-  const [taskForm, setTaskForm] = useState({ experimentStageId: '', batchId: '', careScheduleId: '', taskType: 2, title: '', description: '', requiredSkillDescription: '', dueDate: '' });
+  const [taskForm, setTaskForm] = useState({ experimentStageId: '', batchId: '', careScheduleId: '', taskType: 'Watering', title: '', description: '', requiredSkillDescription: '', dueDate: '' });
   const [assignForm, setAssignForm] = useState({ assigneeId: '', reason: '' });
 
   const fetchDetail = useCallback(async () => {
@@ -400,6 +400,11 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
       } else if (tab === 'schedules') {
         const data = await schedulesApi.getByExperiment(experiment.id);
         setSchedules(Array.isArray(data) ? data : []);
+        // Also ensure stages are loaded for schedule-stage mapping
+        if (stages.length === 0) {
+          const stageData = await stagesApi.getByExperiment(experiment.id);
+          setStages(Array.isArray(stageData) ? stageData : []);
+        }
       } else if (tab === 'batches') {
         const data = await batchesApi.getByExperiment(experiment.id);
         setBatches(Array.isArray(data) ? data : []);
@@ -433,16 +438,17 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
 
   useEffect(() => {
     fetchDetail();
-    // Only fetch tab data if not already cached
-    if (!fetchedTabs.has(activeTab)) {
-      fetchTabData(activeTab);
-      setFetchedTabs(prev => new Set([...prev, activeTab]));
-    }
-    if (activeTab === 'tasks' || activeTab === 'beds') {
-      fetchUsers();
-      fetchBeds(expDetail?.farmId);
-    }
-  }, [activeTab, experiment.id]);
+    // Fetch all tab data upfront so dropdowns are populated even before user clicks each tab
+    ['tasks', 'stages', 'groups', 'design', 'measurements', 'schedules', 'batches'].forEach(tab => {
+      if (!fetchedTabs.has(tab)) {
+        fetchTabData(tab);
+        setFetchedTabs(prev => new Set([...prev, tab]));
+      }
+    });
+    fetchUsers();
+    if (expDetail?.farmId) fetchBeds(expDetail.farmId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [experiment.id]);
 
   // Update exp status
   const handleStatusChange = async (newStatus) => {
@@ -567,9 +573,30 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   const handleGenerateTasks = async (type) => {
     try {
       if (type === 'experiment') {
+        if (stages.length === 0) {
+          showToast('Thí nghiệm chưa có giai đoạn nào. Vui lòng thêm giai đoạn trước.', 'error');
+          return;
+        }
+        if (groups.length === 0) {
+          showToast('Thí nghiệm chưa có nhóm nào. Vui lòng thêm nhóm trước.', 'error');
+          return;
+        }
         await tasksApi.generateByExperiment(experiment.id);
+        showToast('Đã tạo tác vụ tự động cho thí nghiệm', 'success');
+      } else if (type === 'stage') {
+        let stageId = taskForm.experimentStageId;
+        // Auto-select first stage if none selected and only one stage exists
+        if (!stageId && stages.length === 1) {
+          stageId = stages[0].id;
+          setTaskForm(f => ({ ...f, experimentStageId: stageId }));
+        }
+        if (!stageId) {
+          showToast('Vui lòng chọn giai đoạn hoặc thêm giai đoạn trước', 'error');
+          return;
+        }
+        await tasksApi.generateByStage(stageId);
+        showToast('Đã tạo tác vụ tự động cho giai đoạn', 'success');
       }
-      showToast('Đã tạo tác vụ tự động', 'success');
       fetchTabData('tasks');
     } catch (err) { showToast(err.message || 'Lỗi tạo tác vụ', 'error'); }
   };
@@ -578,9 +605,16 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   const handleCreateTask = async () => {
     if (!taskForm.title.trim()) { showToast('Tiêu đề tác vụ không được trống', 'error'); return; }
     try {
-      await tasksApi.create({ experimentId: experiment.id, ...taskForm });
+      const payload = { experimentId: experiment.id, ...taskForm };
+      if (!payload.experimentStageId) delete payload.experimentStageId;
+      if (!payload.batchId) delete payload.batchId;
+      if (!payload.careScheduleId) delete payload.careScheduleId;
+      if (!payload.dueDate) delete payload.dueDate;
+      if (!payload.description) delete payload.description;
+      if (!payload.requiredSkillDescription) delete payload.requiredSkillDescription;
+      await tasksApi.create(payload);
       showToast('Đã tạo tác vụ', 'success');
-      setTaskForm({ experimentStageId: '', batchId: '', careScheduleId: '', taskType: 2, title: '', description: '', requiredSkillDescription: '', dueDate: '' });
+      setTaskForm({ experimentStageId: '', batchId: '', careScheduleId: '', taskType: 'Watering', title: '', description: '', requiredSkillDescription: '', dueDate: '' });
       fetchTabData('tasks');
     } catch (err) { showToast(err.message || 'Lỗi tạo tác vụ', 'error'); }
   };
@@ -692,7 +726,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
               )}
               {activeTab === 'tasks' && (
                 <TasksTab
-                  tasks={tasks} stages={stages} batches={batches}
+                  tasks={tasks} stages={stages} batches={batches} schedules={schedules}
                   form={taskForm} setForm={setTaskForm}
                   users={users} assignForm={assignForm} setAssignForm={setAssignForm}
                   skillMatches={skillMatches} selectedTaskForAssign={selectedTaskForAssign}
@@ -1199,7 +1233,7 @@ const SchedulesTab = ({ schedules, stages, batches, form, setForm, onCreate, onD
         </div>
         <div>
           <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Loại Tác Vụ</label>
-          <select value={form.taskType} onChange={e => setForm({ ...form, taskType: parseInt(e.target.value) })}
+          <select value={form.taskType} onChange={e => setForm({ ...form, taskType: e.target.value })}
             className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white">
             {TASK_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
           </select>
@@ -1406,7 +1440,7 @@ const BedsTab = ({ bedAssignments, availableBeds, areas, form, setForm, onAssign
 // ── Tasks Tab ────────────────────────────────────────────────────────────────
 
 const TasksTab = ({
-  tasks, stages, batches, form, setForm,
+  tasks, stages, batches, schedules, form, setForm,
   users, assignForm, setAssignForm, skillMatches, selectedTaskForAssign,
   onCreate, onDelete, onGenerate, onSkillMatch, onAssign, onReassign, loading
 }) => (
@@ -1442,8 +1476,18 @@ const TasksTab = ({
           </select>
         </div>
         <div>
+          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Lịch Chăm Sóc</label>
+          <select value={form.careScheduleId} onChange={e => setForm({ ...form, careScheduleId: e.target.value })}
+            className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white">
+            <option value="">— Chọn lịch (tùy chọn) —</option>
+            {schedules.map(sc => (
+              <option key={sc.id} value={sc.id}>{sc.title || `Lịch #${sc.id}`}</option>
+            ))}
+          </select>
+        </div>
+        <div>
           <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Loại Tác Vụ</label>
-          <select value={form.taskType} onChange={e => setForm({ ...form, taskType: parseInt(e.target.value) })}
+          <select value={form.taskType} onChange={e => setForm({ ...form, taskType: e.target.value })}
             className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white">
             {TASK_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
           </select>
