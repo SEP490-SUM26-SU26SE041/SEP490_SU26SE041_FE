@@ -7,6 +7,8 @@ import Beds from './tabs/Beds';
 import Requests from './tabs/Requests';
 import Experiments from './tabs/Experiments';
 import Notifications from './tabs/Notifications';
+import MonitoringDashboard from '../../components/dashboard/MonitoringDashboard';
+import ManagerKPIs from './tabs/ManagerKPIs';
 
 const TAB_TITLES = {
   overview: 'Tổng Quan',
@@ -14,7 +16,9 @@ const TAB_TITLES = {
   beds: 'Khu Vực & Luống Trồng',
   requests: 'Duyệt Yêu Cầu Thí Nghiệm',
   experiments: 'Danh Sách Thí Nghiệm',
-  notifications: 'Thông Báo'
+  notifications: 'Thông Báo',
+  monitoring: 'Giám Sát Thời Gian Thực',
+  kpis: 'KPIs & Hiệu Suất'
 };
 
 const MOBILE_LABELS = {
@@ -23,7 +27,9 @@ const MOBILE_LABELS = {
   beds: 'Khu Vực & Luống',
   requests: 'Yêu Cầu TN',
   experiments: 'Thí Nghiệm',
-  notifications: 'Thông Báo'
+  notifications: 'Thông Báo',
+  monitoring: 'Giám Sát',
+  kpis: 'KPIs'
 };
 
 const Header = ({ title, unreadCount, onNotificationsClick }) => (
@@ -90,10 +96,12 @@ const FarmManagerDashboard = () => {
 
   const tabs = [
     { id: 'overview', label: 'Tổng Quan' },
+    { id: 'monitoring', label: 'Giám Sát' },
     { id: 'farms', label: 'Nông Trại' },
     { id: 'beds', label: 'Khu Vực & Luống' },
     { id: 'requests', label: 'Yêu Cầu TN' },
     { id: 'experiments', label: 'Thí Nghiệm' },
+    { id: 'kpis', label: 'KPIs' },
     { id: 'notifications', label: 'Thông Báo', badge: unreadCount }
   ];
 
@@ -112,6 +120,8 @@ const FarmManagerDashboard = () => {
       case 'requests': return <Requests />;
       case 'experiments': return <Experiments />;
       case 'notifications': return <Notifications setUnreadCount={setUnreadCount} />;
+      case 'monitoring': return <MonitoringDashboard scope="manager" />;
+      case 'kpis': return <ManagerKPIs />;
       default: return null;
     }
   };
@@ -222,6 +232,8 @@ const NavIcon = ({ id }) => {
   switch (id) {
     case 'overview':
       return <svg {...props}><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>;
+    case 'monitoring':
+      return <svg {...props}><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>;
     case 'farms':
       return <svg {...props}><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>;
     case 'beds':
@@ -230,6 +242,8 @@ const NavIcon = ({ id }) => {
       return <svg {...props}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>;
     case 'experiments':
       return <svg {...props}><path d="M10 2v7.31"/><path d="M14 9.3V2"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/></svg>;
+    case 'kpis':
+      return <svg {...props}><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>;
     case 'notifications':
       return <svg {...props}><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>;
     default:
