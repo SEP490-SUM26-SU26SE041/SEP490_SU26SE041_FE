@@ -5,13 +5,21 @@ import ResearcherExperiments from './tabs/ResearcherExperiments';
 import ResearcherRequests from './tabs/ResearcherRequests';
 import ResearcherTemplates from './tabs/ResearcherTemplates';
 import ResearcherTasks from './tabs/ResearcherTasks';
+import ResearcherKPIs from './tabs/ResearcherKPIs';
+import ResearcherComparison from './tabs/ResearcherComparison';
+import ResearcherReports from './tabs/ResearcherReports';
+import MonitoringDashboard from '../../components/dashboard/MonitoringDashboard';
 
 const TABS = [
   { id: 'overview', label: 'Tổng Quan', icon: '📊' },
+  { id: 'monitoring', label: 'Giám Sát', icon: '📡' },
   { id: 'experiments', label: 'Thí Nghiệm', icon: '🧪' },
   { id: 'requests', label: 'Yêu Cầu', icon: '📨' },
   { id: 'templates', label: 'Quy Trình', icon: '📋' },
   { id: 'tasks', label: 'Tác Vụ', icon: '📌' },
+  { id: 'kpis', label: 'KPIs & Nhân Sự', icon: '📈' },
+  { id: 'comparison', label: 'So Sánh PP', icon: '⚖️' },
+  { id: 'reports', label: 'Xuất Báo Cáo', icon: '📤' },
 ];
 
 const ResearcherDashboard = () => {
@@ -79,19 +87,27 @@ const ResearcherDashboard = () => {
             </h2>
             <p className="text-sm text-slate-500 mt-1">
               {activeTab === 'overview' && 'Tổng quan thí nghiệm của bạn'}
+              {activeTab === 'monitoring' && 'Giám sát thời gian thực các chỉ số môi trường và sức khỏe nông trại'}
               {activeTab === 'experiments' && 'Danh sách và quản lý thí nghiệm'}
               {activeTab === 'requests' && 'Gửi và theo dõi yêu cầu thí nghiệm'}
               {activeTab === 'templates' && 'Quản lý quy trình canh tác mẫu'}
               {activeTab === 'tasks' && 'Quản lý tác vụ thí nghiệm'}
+              {activeTab === 'kpis' && 'Theo dõi KPI tăng trưởng & hiệu suất nhân sự'}
+              {activeTab === 'comparison' && 'Phân tích, so sánh hiệu quả giữa các phương pháp nuôi trồng'}
+              {activeTab === 'reports' && 'Xuất báo cáo tổng kết thực nghiệm'}
             </p>
           </div>
 
           {/* Tab content */}
           {activeTab === 'overview' && <ResearcherOverview />}
+          {activeTab === 'monitoring' && <MonitoringDashboard scope="researcher" />}
           {activeTab === 'experiments' && <ResearcherExperiments prefillData={experimentPrefill} onPrefillConsumed={() => setExperimentPrefill(null)} />}
           {activeTab === 'requests' && <ResearcherRequests onConvertToExperiment={handleConvertToExperiment} />}
           {activeTab === 'templates' && <ResearcherTemplates />}
           {activeTab === 'tasks' && <ResearcherTasks />}
+          {activeTab === 'kpis' && <ResearcherKPIs />}
+          {activeTab === 'comparison' && <ResearcherComparison />}
+          {activeTab === 'reports' && <ResearcherReports />}
         </div>
       </main>
     </div>
