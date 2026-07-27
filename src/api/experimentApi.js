@@ -105,6 +105,8 @@ export const tasksApi = {
   getUpcoming: (days = 7) =>
     apiClient.request('/tasks/upcoming', { params: { days } }).then(u),
   getOverdue: () => apiClient.request('/tasks/overdue').then(u),
+  getByResearcherCreated: (params = {}) =>
+    apiClient.request('/tasks/researcher/created', { params }).then(u),
   getById: (id) => apiClient.request(`/tasks/${id}`).then(u),
   getByExperiment: (id) => apiClient.request(`/tasks/experiment/${id}`).then(u),
   getByStage: (id) => apiClient.request(`/tasks/stage/${id}`).then(u),

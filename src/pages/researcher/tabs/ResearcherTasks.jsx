@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { tasksApi } from '../../../api/experimentApi';
+import { tasksApi, taskReportsApi, experimentsApi } from '../../../api/experimentApi';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm, ConfirmDialog } from '../../../components/common/ConfirmDialog';
 
@@ -29,17 +29,28 @@ const ResearcherTasks = () => {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [experimentId, setExperimentId] = useState('');
+  const [experiments, setExperiments] = useState([]);
+  const [reportsModal, setReportsModal] = useState({ open: false, task: null, reports: [], loading: false });
+
+  // Load danh sách experiments của researcher để fill vào dropdown filter
+  useEffect(() => {
+    const loadExperiments = async () => {
+      try {
+        const data = await experimentsApi.getAll();
+        const list = Array.isArray(data) ? data : (data?.items || []);
+        setExperiments(list);
+      } catch { setExperiments([]); }
+    };
+    loadExperiments();
+  }, []);
 
   const fetchTasks = async () => {
     try {
       setLoading(true);
-      let data = [];
-      switch (activeTab) {
-        case 'today': data = await tasksApi.getToday(); break;
-        case 'upcoming': data = await tasksApi.getUpcoming(7); break;
-        case 'overdue': data = await tasksApi.getOverdue(); break;
-        default: data = await tasksApi.getMy(); break;
-      }
+      const params = { scope: activeTab, upcomingDays: 7 };
+      if (experimentId) params.experimentId = experimentId;
+      const data = await tasksApi.getByResearcherCreated(params);
       setTasks(Array.isArray(data) ? data : []);
     } catch (err) {
       showToast(err.message || 'Không thể tải tác vụ', 'error');
@@ -48,7 +59,19 @@ const ResearcherTasks = () => {
     }
   };
 
-  useEffect(() => { fetchTasks(); }, [activeTab]);
+  useEffect(() => { fetchTasks(); }, [activeTab, experimentId]);
+
+  const openReports = async (task) => {
+    setReportsModal({ open: true, task, reports: [], loading: true });
+    try {
+      const data = await taskReportsApi.getByTask(task.id);
+      setReportsModal(prev => ({ ...prev, reports: Array.isArray(data) ? data : [], loading: false }));
+    } catch (err) {
+      showToast(err.message || 'Không thể tải báo cáo', 'error');
+      setReportsModal(prev => ({ ...prev, reports: [], loading: false }));
+    }
+  };
+  const closeReports = () => setReportsModal({ open: false, task: null, reports: [], loading: false });
 
   const filtered = tasks.filter(t => {
     if (!search) return true;
@@ -96,6 +119,14 @@ const ResearcherTasks = () => {
             {tab.label}
           </button>
         ))}
+        {/* Filter theo thực nghiệm */}
+        <select value={experimentId} onChange={e => setExperimentId(e.target.value)}
+          className="px-3 py-2 border border-outline-variant rounded-xl bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 max-w-[220px]">
+          <option value="">Tất cả thực nghiệm</option>
+          {experiments.map(exp => (
+            <option key={exp.id} value={exp.id}>{exp.title || exp.name || `Exp ${exp.id.slice(0, 8)}`}</option>
+          ))}
+        </select>
         <div className="ml-auto">
           <div className="relative">
             <svg className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
@@ -116,15 +147,106 @@ const ResearcherTasks = () => {
       ) : (
         <div className="space-y-3">
           {filtered.map(task => (
-            <TaskCard key={task.id} task={task} onRefresh={fetchTasks} />
+            <TaskCard key={task.id} task={task} onRefresh={fetchTasks} onOpenReports={openReports} />
           ))}
         </div>
+      )}
+
+      {/* Task Reports Modal */}
+      {reportsModal.open && (
+        <TaskReportsModal
+          task={reportsModal.task}
+          reports={reportsModal.reports}
+          loading={reportsModal.loading}
+          onClose={closeReports}
+        />
       )}
     </div>
   );
 };
 
-const TaskCard = ({ task, onRefresh }) => {
+const TaskReportsModal = ({ task, reports, loading, onClose }) => (
+  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 animate-fade-in" onClick={onClose}>
+    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+      <div className="flex items-center justify-between p-5 border-b border-outline-variant">
+        <div className="min-w-0">
+          <h3 className="font-hanken font-bold text-base text-on-surface">Báo Cáo Tác Vụ</h3>
+          <p className="text-xs text-on-surface-variant mt-0.5 truncate">{task?.title || task?.taskTitle || '—'}</p>
+        </div>
+        <button onClick={onClose} className="p-2 rounded-xl hover:bg-surface-container/50 transition-colors shrink-0">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-5">
+        {loading ? (
+          <div className="text-center text-sm text-on-surface-variant py-8">Đang tải...</div>
+        ) : reports.length === 0 ? (
+          <div className="text-center text-sm text-on-surface-variant py-8">Chưa có báo cáo nào.</div>
+        ) : (
+          <div className="space-y-3">
+            {reports.map(r => {
+              const resultEntries = r.resultData && typeof r.resultData === 'object'
+                ? Object.entries(r.resultData)
+                : [];
+              const imageList = Array.isArray(r.images) ? r.images : [];
+              return (
+                <div key={r.id} className="p-4 border border-outline-variant rounded-xl bg-surface-container-low/30">
+                  <div className="flex items-center justify-between mb-2 gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-bold shrink-0">
+                        {(r.reporterName || 'T').charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-semibold text-sm text-on-surface truncate">{r.reporterName || 'Reporter'}</div>
+                        {r.reportedAt && (
+                          <div className="text-[10px] text-on-surface-variant">{new Date(r.reportedAt).toLocaleString('vi-VN')}</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {r.reportText && (
+                    <p className="text-sm text-on-surface whitespace-pre-line mt-1">{r.reportText}</p>
+                  )}
+
+                  {resultEntries.length > 0 && (
+                    <div className="mt-3 p-3 bg-white rounded-xl border border-outline-variant">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant mb-2">Kết Quả</div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {resultEntries.map(([key, value]) => (
+                          <div key={key} className="text-xs">
+                            <div className="text-[10px] text-on-surface-variant font-mono break-all">{key}</div>
+                            <div className="font-semibold text-on-surface break-all">{String(value)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {imageList.length > 0 && (
+                    <div className="mt-3">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant mb-2">Hình Ảnh</div>
+                      <div className="flex flex-wrap gap-2">
+                        {imageList.map((img, i) => (
+                          <a key={i} href={img.url || img} target="_blank" rel="noopener noreferrer"
+                            className="block w-16 h-16 rounded-lg overflow-hidden border border-outline-variant hover:opacity-80">
+                            <img src={img.url || img} alt={img.name || `img-${i}`} className="w-full h-full object-cover" />
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  </div>
+);
+
+const TaskCard = ({ task, onRefresh, onOpenReports }) => {
   const { showToast } = useToast();
   const { ask: askConfirm, state: confirmState, handleClose: closeConfirm } = useConfirm();
   const [expanded, setExpanded] = useState(false);
@@ -247,6 +369,12 @@ const TaskCard = ({ task, onRefresh }) => {
               <button onClick={handleCancel}
                 className="px-4 py-2 border border-rose-300 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-bold transition-all">
                 Hủy
+              </button>
+            )}
+            {task.status === 'Completed' && onOpenReports && (
+              <button onClick={() => onOpenReports(task)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/20 transition-all">
+                📄 Xem Báo Cáo
               </button>
             )}
           </div>
