@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { experimentsApi, tasksApi } from '../../../api/experimentApi';
 import { stagesApi, groupsApi, measurementsApi, batchesApi } from '../../../api/researcherApi';
 import { measurementRecordsApi } from '../../../api/measurementApi';
+import { reportExportApi } from '../../../api/dashboardApi';
 import { useToast } from '../../../context/ToastContext';
 import { BarChart } from '../../../components/dashboard/Charts';
 
@@ -437,8 +438,10 @@ const ResearcherReports = () => {
   const [batches, setBatches] = useState([]);
   const [recordsByBatch, setRecordsByBatch] = useState({});
   const [tasks, setTasks] = useState([]);
+  const [reports, setReports] = useState([]); // Real reports from API
   const [loading, setLoading] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [generating, setGenerating] = useState(false); // Report generation loading
   const previewRef = useRef(null);
 
   useEffect(() => {
@@ -462,11 +465,12 @@ const ResearcherReports = () => {
     const fetchDetail = async () => {
       setLoadingDetail(true);
       try {
-        const [grp, meas, bat, tsk] = await Promise.allSettled([
+        const [grp, meas, bat, tsk, rpt] = await Promise.allSettled([
           groupsApi.getByExperiment(selectedExpId),
           measurementsApi.getByExperiment(selectedExpId),
           batchesApi.getByExperiment(selectedExpId),
-          tasksApi.getByExperiment(selectedExpId)
+          tasksApi.getByExperiment(selectedExpId),
+          reportExportApi.getExperimentReports(selectedExpId)
         ]);
         setGroups(grp.status === 'fulfilled' ? (Array.isArray(grp.value) ? grp.value : []) : []);
         setMeasurements(meas.status === 'fulfilled' ? (Array.isArray(meas.value) ? meas.value : []) : []);
@@ -474,6 +478,7 @@ const ResearcherReports = () => {
         setBatches(batchList);
         const tskList = tsk.status === 'fulfilled' ? (Array.isArray(tsk.value) ? tsk.value : []) : [];
         setTasks(tskList);
+        setReports(rpt.status === 'fulfilled' ? (Array.isArray(rpt.value) ? rpt.value : []) : []);
 
         const recordResults = await Promise.allSettled(
           batchList.map(b => measurementRecordsApi.getByBatch(b.id))
@@ -621,6 +626,44 @@ const ResearcherReports = () => {
     printReport(innerHTML, title);
   };
 
+  // Handle report generation via API
+  const handleGenerateReport = async () => {
+    if (!selectedExpId) { showToast('Chưa chọn thí nghiệm', 'error'); return; }
+    try {
+      setGenerating(true);
+      const payload = {
+        experimentId: selectedExpId,
+        reportType: reportType === 'summary' ? 'Summary' : reportType === 'raw' ? 'RawData' : 'Statistical',
+        exportFormat: 'PDF',
+        includeMeasurements: true,
+        includeTasks: true,
+        includeGroups: true,
+        includeStatistics: true,
+        includeCharts: true
+      };
+      const result = await reportExportApi.generateReport(selectedExpId, payload);
+      showToast('Báo cáo đã được tạo thành công!', 'success');
+      // Refresh reports list
+      const updatedReports = await reportExportApi.getExperimentReports(selectedExpId);
+      setReports(Array.isArray(updatedReports) ? updatedReports : []);
+    } catch (err) {
+      showToast(err.message || 'Không thể tạo báo cáo', 'error');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  // Handle report deletion
+  const handleDeleteReport = async (reportId) => {
+    try {
+      await reportExportApi.deleteReport(reportId);
+      setReports(reports.filter(r => r.id !== reportId));
+      showToast('Đã xóa báo cáo', 'success');
+    } catch (err) {
+      showToast(err.message || 'Không thể xóa báo cáo', 'error');
+    }
+  };
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Header */}
@@ -676,6 +719,13 @@ const ResearcherReports = () => {
         {/* Export buttons */}
         <div className="flex flex-wrap items-center gap-3 mt-4 pt-4 border-t border-outline-variant">
           <button
+            onClick={handleGenerateReport}
+            disabled={!selectedExpId || loadingDetail || generating}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold hover:bg-indigo-700 transition-all disabled:opacity-40 active:scale-95 flex items-center gap-2"
+          >
+            <span>{generating ? '⏳' : '📊'}</span> {generating ? 'Đang tạo...' : 'Tạo Báo Cáo (API)'}
+          </button>
+          <button
             onClick={handleExportCSV}
             disabled={!selectedExpId || loadingDetail}
             className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-all disabled:opacity-40 active:scale-95 flex items-center gap-2"
@@ -704,6 +754,46 @@ const ResearcherReports = () => {
           </div>
         </div>
       </div>
+
+      {/* Saved reports section */}
+      {reports.length > 0 && (
+        <div className="bg-white border border-outline-variant rounded-2xl p-5 shadow-sm">
+          <h3 className="font-hanken text-base font-bold text-on-surface mb-4">Báo Cáo Đã Tạo</h3>
+          <div className="space-y-2">
+            {reports.map(r => (
+              <div key={r.id} className="flex items-center justify-between p-3 bg-surface-container-low/30 rounded-xl">
+                <div className="flex items-center gap-3">
+                  <span className="text-xl">{r.exportFormat === 'PDF' ? '📄' : '📊'}</span>
+                  <div>
+                    <p className="text-sm font-semibold text-on-surface">{r.title || `Báo cáo ${r.reportType}`}</p>
+                    <p className="text-[10px] text-on-surface-variant">
+                      {r.reportType} · {r.exportFormat} · {r.createdAt ? new Date(r.createdAt).toLocaleString('vi-VN') : ''}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {r.fileUrl && (
+                    <a 
+                      href={r.fileUrl} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-200 transition-all"
+                    >
+                      Tải về
+                    </a>
+                  )}
+                  <button
+                    onClick={() => handleDeleteReport(r.id)}
+                    className="px-3 py-1.5 bg-rose-100 text-rose-700 rounded-lg text-xs font-bold hover:bg-rose-200 transition-all"
+                  >
+                    Xóa
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Report preview */}
       {!selectedExpId ? (

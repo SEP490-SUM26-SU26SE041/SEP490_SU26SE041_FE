@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { experimentsApi, tasksApi } from '../../../api/experimentApi';
+import { kpisApi } from '../../../api/dashboardApi';
 import { useToast } from '../../../context/ToastContext';
 import { LineChart, BarChart, Gauge } from '../../../components/dashboard/Charts';
 
@@ -66,8 +67,10 @@ const computeOnTimeRate = (tasks) => {
 
 const ResearcherKPIs = () => {
   const { showToast } = useToast();
+  const [kpis, setKpis] = useState(null);
   const [experiments, setExperiments] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [personnelPerformance, setPersonnelPerformance] = useState([]);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState('30d');
 
@@ -75,12 +78,19 @@ const ResearcherKPIs = () => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [expRes, taskRes] = await Promise.allSettled([
+        const [kpiRes, expRes, taskRes, personnelRes] = await Promise.allSettled([
+          kpisApi.getKpis({ 
+            fromDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+            toDate: new Date().toISOString()
+          }),
           experimentsApi.getAll(),
-          tasksApi.getMy()
+          tasksApi.getMy(),
+          kpisApi.getPersonnelPerformance({})
         ]);
+        setKpis(kpiRes.status === 'fulfilled' ? kpiRes.value : null);
         setExperiments(expRes.status === 'fulfilled' ? (Array.isArray(expRes.value) ? expRes.value : []) : []);
         setTasks(taskRes.status === 'fulfilled' ? (Array.isArray(taskRes.value) ? taskRes.value : []) : []);
+        setPersonnelPerformance(personnelRes.status === 'fulfilled' ? (Array.isArray(personnelRes.value) ? personnelRes.value : []) : []);
       } catch (err) {
         showToast(err.message || 'Không thể tải dữ liệu KPI', 'error');
       } finally {
@@ -91,6 +101,14 @@ const ResearcherKPIs = () => {
   }, [showToast]);
 
   const days = PERIOD_RANGES.find(p => p.id === period)?.days || 0;
+
+  // Use real KPI data from API
+  const totalExp = kpis?.totalExperiments || experiments.length;
+  const activeExp = kpis?.activeExperiments || experiments.filter(e => e.status === 'Active').length;
+  const completedExp = kpis?.completedExperiments || experiments.filter(e => e.status === 'Completed').length;
+  const totalProductivity = kpis?.taskCompletionRate || computeProductivity(tasks);
+  const overallOnTime = kpis?.onTimeCompletionRate || computeOnTimeRate(tasks);
+  const totalOverdue = kpis?.overdueTasks || tasks.filter(t => t.dueDate && new Date(t.dueDate) < new Date() && t.status !== 'Completed').length;
 
   // ── Experiment growth KPI ─────────────────────────────────────────────────
   const expCreatedDates = useMemo(
@@ -107,11 +125,10 @@ const ResearcherKPIs = () => {
   const taskTrend = useMemo(() => buildDailySeries(taskCompletedDates, days), [taskCompletedDates, days]);
 
   // ── On-track evaluation (scientific route compliance) ─────────────────────
-  const onTrackExp = experiments.filter(e => e.status === 'Active' || e.status === 'Completed').length;
-  const totalExp = experiments.length;
+  const onTrackExp = activeExp + completedExp;
   const onTrackPct = totalExp ? Math.round((onTrackExp / totalExp) * 100) : 0;
 
-  // ── Staff aggregation ─────────────────────────────────────────────────────
+  // ── Staff aggregation (fallback when API data unavailable) ─────────────────────
   const staffMap = useMemo(() => {
     const map = new Map();
     tasks.forEach(t => {
@@ -145,7 +162,22 @@ const ResearcherKPIs = () => {
     return map;
   }, [tasks]);
 
+  // Use real personnel performance from API
   const staffList = useMemo(() => {
+    if (personnelPerformance.length > 0) {
+      return personnelPerformance.map(p => ({
+        id: p.userId,
+        name: p.fullName,
+        total: p.totalTasksAssigned,
+        completed: p.tasksCompleted,
+        inProgress: p.tasksInProgress,
+        pending: p.tasksPending,
+        overdue: p.tasksOverdue,
+        productivity: p.completionRate,
+        onTimeRate: p.onTimeCompletionRate
+      }));
+    }
+    // Fallback to computed data from tasks
     return Array.from(staffMap.values()).map(s => ({
       ...s,
       productivity: computeProductivity(tasks.filter(t =>
@@ -157,11 +189,7 @@ const ResearcherKPIs = () => {
         || (t.assignedToName || t.assigneeName || t.createdByName) === s.name
       ))
     })).sort((a, b) => b.productivity - a.productivity);
-  }, [staffMap, tasks]);
-
-  const totalProductivity = computeProductivity(tasks);
-  const overallOnTime = computeOnTimeRate(tasks);
-  const totalOverdue = tasks.filter(t => t.dueDate && new Date(t.dueDate) < new Date() && t.status !== 'Completed').length;
+  }, [personnelPerformance, staffMap, tasks]);
 
   // Top staff workload (bar chart)
   const workloadData = staffList.slice(0, 6).map(s => ({
@@ -200,7 +228,7 @@ const ResearcherKPIs = () => {
           <span className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">Tổng Thí Nghiệm</span>
           <div className="font-hanken text-3xl font-bold text-primary mt-2">{loading ? '…' : totalExp}</div>
           <p className="text-[10px] text-on-surface-variant mt-1">
-            {experiments.filter(e => e.status === 'Active').length} đang chạy · {experiments.filter(e => e.status === 'Completed').length} hoàn thành
+            {activeExp} đang chạy · {completedExp} hoàn thành
           </p>
         </div>
         <div className="bg-white border border-outline-variant rounded-2xl p-5 shadow-sm">
@@ -390,6 +418,30 @@ const ResearcherKPIs = () => {
             );
           })}
         </div>
+        
+        {/* Batch and measurement summary from KPIs */}
+        {kpis && (
+          <div className="mt-4 pt-4 border-t border-outline-variant">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="text-center">
+                <p className="text-[10px] text-on-surface-variant font-bold uppercase">Tổng Lô</p>
+                <p className="font-hanken text-xl font-bold text-primary">{kpis.totalBatches || 0}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] text-on-surface-variant font-bold uppercase">Lô Đang Trồng</p>
+                <p className="font-hanken text-xl font-bold text-emerald-600">{kpis.activeBatches || 0}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] text-on-surface-variant font-bold uppercase">Lô Đã Thu Hoạch</p>
+                <p className="font-hanken text-xl font-bold text-blue-600">{kpis.harvestedBatches || 0}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-[10px] text-on-surface-variant font-bold uppercase">Bản Ghi Đo</p>
+                <p className="font-hanken text-xl font-bold text-amber-600">{kpis.totalMeasurementRecords || 0}</p>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
