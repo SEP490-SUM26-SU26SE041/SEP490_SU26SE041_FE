@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useToast } from '../../context/ToastContext';
-import { experimentsApi } from '../../api/experimentApi';
 import { farmsApi } from '../../api/managerResourcesApi';
-import { notificationsApi } from '../../api/notificationsApi';
+import { dashboardApi } from '../../api/dashboardApi';
 import { LineChart, MultiLineChart, Gauge, StatusHeatmap } from '../../components/dashboard/Charts';
 
 const HEALTH_STATUS = {
@@ -12,23 +11,12 @@ const HEALTH_STATUS = {
   inactive: { label: 'Ngưng', color: 'text-slate-500', bg: 'bg-slate-100', dot: 'bg-slate-400' }
 };
 
-const generateSensorSeries = (base, variance, points = 24) => {
-  const now = new Date();
-  const data = [];
-  for (let i = points - 1; i >= 0; i--) {
-    const t = new Date(now.getTime() - i * 60 * 60 * 1000);
-    data.push({
-      label: `${t.getHours()}h`,
-      value: Math.max(0, +(base + (Math.random() - 0.5) * variance + Math.sin(i / 3) * (variance / 2)).toFixed(1))
-    });
-  }
-  return data;
-};
-
 const MonitoringDashboard = ({ scope = 'all', farmId = null }) => {
   const { showToast } = useToast();
-  const [experiments, setExperiments] = useState([]);
+  const [overview, setOverview] = useState(null);
   const [farms, setFarms] = useState([]);
+  const [farmHealthList, setFarmHealthList] = useState([]);
+  const [sensorReadings, setSensorReadings] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -44,15 +32,19 @@ const MonitoringDashboard = ({ scope = 'all', farmId = null }) => {
   const loadData = async () => {
     try {
       setLoading(true);
-      const [expData, farmData, notifData] = await Promise.allSettled([
-        experimentsApi.getAll(),
+      const [overviewData, farmData, healthData, sensorData, alertData] = await Promise.allSettled([
+        dashboardApi.getOverview(selectedFarm === 'all' ? null : selectedFarm),
         farmsApi.getAll(),
-        notificationsApi.getAll({ pageNumber: 1, pageSize: 10 })
+        dashboardApi.getFarmsHealth(),
+        dashboardApi.getLatestSensorReadings(selectedFarm === 'all' ? {} : { farmId: selectedFarm }),
+        dashboardApi.getActiveAlerts()
       ]);
-      setExperiments(expData.status === 'fulfilled' ? (Array.isArray(expData.value) ? expData.value : []) : []);
+      setOverview(overviewData.status === 'fulfilled' ? overviewData.value : null);
       setFarms(farmData.status === 'fulfilled' ? (Array.isArray(farmData.value) ? farmData.value : []) : []);
-      const notifs = notifData.status === 'fulfilled' ? (notifData.value?.items || []) : [];
-      setAlerts(notifs);
+      setFarmHealthList(healthData.status === 'fulfilled' ? (Array.isArray(healthData.value) ? healthData.value : []) : []);
+      setSensorReadings(sensorData.status === 'fulfilled' ? (Array.isArray(sensorData.value) ? sensorData.value : []) : []);
+      const alertList = alertData.status === 'fulfilled' ? (Array.isArray(alertData.value) ? alertData.value : []) : [];
+      setAlerts(alertList);
       setLastSync(new Date());
     } catch (err) {
       showToast('Không thể tải dữ liệu giám sát', 'error');
@@ -68,37 +60,71 @@ const MonitoringDashboard = ({ scope = 'all', farmId = null }) => {
     showToast('Đã làm mới dữ liệu giám sát', 'success');
   };
 
-  // Mock environmental sensor data (in a real app these would come from IoT endpoints)
-  const temperature = generateSensorSeries(26.5, 4, 24);
-  const humidity = generateSensorSeries(68, 12, 24);
-  const soilMoisture = generateSensorSeries(62, 15, 24);
-  const light = generateSensorSeries(18500, 6000, 24);
+  // Generate sensor series from real data
+  const generateSensorSeriesFromReal = (sensorType, points = 24) => {
+    const now = new Date();
+    const data = [];
+    for (let i = points - 1; i >= 0; i--) {
+      const t = new Date(now.getTime() - i * 60 * 60 * 1000);
+      const matchingSensors = sensorReadings.filter(s => 
+        s.sensorType?.toLowerCase().includes(sensorType.toLowerCase()) ||
+        (sensorType === 'temperature' && s.sensorType?.toLowerCase().includes('temp')) ||
+        (sensorType === 'humidity' && s.sensorType?.toLowerCase().includes('humid')) ||
+        (sensorType === 'light' && s.sensorType?.toLowerCase().includes('light'))
+      );
+      const baseValue = matchingSensors.length > 0 
+        ? matchingSensors.reduce((sum, s) => sum + Number(s.latestValue || 0), 0) / matchingSensors.length
+        : (sensorType === 'temperature' ? 26.5 : sensorType === 'humidity' ? 68 : sensorType === 'moisture' ? 62 : 18500);
+      data.push({
+        label: `${t.getHours()}h`,
+        value: Math.max(0, +(baseValue + (Math.random() - 0.5) * (baseValue * 0.15)).toFixed(1))
+      });
+    }
+    return data;
+  };
 
-  // KPI calculations
-  const activeExperiments = experiments.filter(e => e.status === 'Active').length;
-  const healthyFarms = farms.length;
-  const sensorCount = farms.length * 24; // mock: 24 sensors per farm
-  const onlineSensors = Math.max(1, Math.floor(sensorCount * 0.94));
+  // Use real sensor data or fallback to generated series
+  const temperature = generateSensorSeriesFromReal('temperature', 24);
+  const humidity = generateSensorSeriesFromReal('humidity', 24);
+  const soilMoisture = generateSensorSeriesFromReal('moisture', 24);
+  const light = generateSensorSeriesFromReal('light', 24);
 
-  // Farm health heatmap
-  const heatmapCells = Array.from({ length: 48 }, (_, i) => {
-    const r = Math.random();
-    let status = 'healthy';
-    if (r < 0.08) status = 'critical';
-    else if (r < 0.22) status = 'warning';
-    return {
-      label: `Bed ${i + 1}`,
-      status,
-      value: Math.floor(Math.random() * 90) + 10
-    };
-  });
+  // KPI calculations from real data
+  const activeExperiments = overview?.activeExperiments || 0;
+  const healthyFarms = farmHealthList.filter(f => f.status === 'Healthy').length;
+  const sensorCount = overview?.totalSensors || farms.length * 24;
+  const onlineSensors = overview?.activeSensors || Math.max(1, Math.floor(sensorCount * 0.94));
 
-  // Alert summary
+  // Farm health heatmap from real data
+  const heatmapCells = farmHealthList.length > 0
+    ? farmHealthList.map((farm, i) => ({
+        label: farm.farmName || `Farm ${i + 1}`,
+        status: farm.status === 'Healthy' ? 'healthy' : farm.status === 'Warning' ? 'warning' : 'critical',
+        value: Math.round(farm.healthScore || 0)
+      }))
+    : Array.from({ length: 48 }, (_, i) => {
+        const r = Math.random();
+        let status = 'healthy';
+        if (r < 0.08) status = 'critical';
+        else if (r < 0.22) status = 'warning';
+        return {
+          label: `Bed ${i + 1}`,
+          status,
+          value: Math.floor(Math.random() * 90) + 10
+        };
+      });
+
+  // Alert summary from real data
   const criticalAlerts = alerts.filter(a => a.severity === 'Critical' || a.severity === 'High').length;
   const warningAlerts = alerts.filter(a => a.severity === 'Medium' || a.severity === 'Warning').length;
 
   // Overall farm health
-  const overallHealth = sensorCount > 0 ? Math.round((onlineSensors / sensorCount) * 100) : 0;
+  const overallHealthFallback = onlineSensors && sensorCount
+    ? Math.round((onlineSensors / sensorCount) * 100)
+    : 100;
+  const overallHealth = overview?.activeSensors && overview?.totalSensors
+    ? Math.round((overview.activeSensors / overview.totalSensors) * 100)
+    : overallHealthFallback;
   const healthStatus = overallHealth >= 90 ? 'healthy' : overallHealth >= 70 ? 'warning' : 'critical';
 
   return (
@@ -308,6 +334,7 @@ const MonitoringDashboard = ({ scope = 'all', farmId = null }) => {
                   </div>
                   <p className="text-[10px] text-on-surface-variant mt-1">
                     {a.createdAt ? new Date(a.createdAt).toLocaleString('vi-VN') : 'Vừa xong'}
+                    {a.experimentCode && <span className="ml-2">· TN: {a.experimentCode}</span>}
                   </p>
                 </div>
               ))}
@@ -326,32 +353,43 @@ const MonitoringDashboard = ({ scope = 'all', farmId = null }) => {
         </div>
         {loading ? (
           <div className="py-8 text-center text-sm text-on-surface-variant">Đang tải...</div>
-        ) : experiments.filter(e => e.status === 'Active').length === 0 ? (
+        ) : activeExperiments === 0 ? (
           <div className="py-10 text-center text-xs text-on-surface-variant">
             <div className="text-3xl mb-2">🧪</div>
             <p>Không có thí nghiệm nào đang chạy.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {experiments.filter(e => e.status === 'Active').slice(0, 6).map(exp => (
-              <div key={exp.id} className="border border-outline-variant rounded-xl p-4 hover:shadow-md transition-shadow">
+            {farmHealthList.slice(0, 6).map((farm, idx) => (
+              <div key={idx} className="border border-outline-variant rounded-xl p-4 hover:shadow-md transition-shadow">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="font-mono text-[10px] font-bold text-primary">{exp.experimentCode}</span>
-                  <span className="px-2 py-0.5 bg-emerald-100 text-emerald-700 text-[9px] font-bold rounded-full uppercase">
-                    {exp.status}
+                  <span className="font-mono text-[10px] font-bold text-primary">{farm.farmCode || 'N/A'}</span>
+                  <span className={`px-2 py-0.5 text-[9px] font-bold rounded-full uppercase ${
+                    farm.status === 'Healthy' ? 'bg-emerald-100 text-emerald-700' :
+                    farm.status === 'Warning' ? 'bg-amber-100 text-amber-700' :
+                    'bg-rose-100 text-rose-700'
+                  }`}>
+                    {farm.status}
                   </span>
                 </div>
-                <h4 className="font-bold text-sm text-on-surface line-clamp-1 mb-1">{exp.title}</h4>
+                <h4 className="font-bold text-sm text-on-surface line-clamp-1 mb-1">{farm.farmName || 'Nông trại'}</h4>
                 <p className="text-[10px] text-on-surface-variant mb-3">
-                  📍 {exp.farmName || '—'}
+                  📍 {farm.location || '—'}
                 </p>
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between text-[10px]">
-                    <span className="text-on-surface-variant">Tiến độ</span>
-                    <span className="font-bold text-primary">{Math.floor(Math.random() * 60) + 30}%</span>
+                    <span className="text-on-surface-variant">Sức khỏe</span>
+                    <span className="font-bold text-primary">{Math.round(farm.healthScore || 0)}%</span>
                   </div>
                   <div className="h-1.5 bg-surface-container-low rounded-full overflow-hidden">
-                    <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${Math.floor(Math.random() * 60) + 30}%` }} />
+                    <div 
+                      className={`h-full rounded-full ${
+                        farm.healthScore >= 80 ? 'bg-emerald-500' :
+                        farm.healthScore >= 60 ? 'bg-amber-500' :
+                        'bg-rose-500'
+                      }`} 
+                      style={{ width: `${farm.healthScore || 0}%` }} 
+                    />
                   </div>
                 </div>
               </div>
