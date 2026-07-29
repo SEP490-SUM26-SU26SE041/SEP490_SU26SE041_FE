@@ -247,14 +247,6 @@ const StudentTasksTab = () => {
     } catch (err) { showToast(err.message || 'Không thể bắt đầu', 'error'); }
   };
 
-  const handleComplete = async (task) => {
-    try {
-      await tasksApi.complete(task.id);
-      showToast('Đã hoàn thành tác vụ!', 'success');
-      fetchTasks();
-    } catch (err) { showToast(err.message || 'Không thể hoàn thành', 'error'); }
-  };
-
   const openDetail = (task) => {
     setSelectedTask(task);
     setShowDetail(true);
@@ -318,7 +310,7 @@ const StudentTasksTab = () => {
                       <button onClick={() => handleStart(task)} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/20 transition-all">▶ Bắt Đầu</button>
                     )}
                     {task.status === 'InProgress' && (
-                      <button onClick={() => handleComplete(task)} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all">✅ Hoàn Thành</button>
+                      <button onClick={() => openDetail(task)} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all">✅ Hoàn Thành</button>
                     )}
                   </div>
                 </div>
@@ -340,14 +332,18 @@ const StudentTasksTab = () => {
 
 const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
   const { showToast } = useToast();
+  const [activeTab, setActiveTab] = useState('overview');
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [reportText, setReportText] = useState('');
   const [resultData, setResultData] = useState([{ key: '', value: '' }]);
   const [saving, setSaving] = useState(false);
+  const [completing, setCompleting] = useState(false);
   const [imageUrl, setImageUrl] = useState('');
   const [imageCaption, setImageCaption] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [displayedReportText, setDisplayedReportText] = useState('');
+  const [displayedResultData, setDisplayedResultData] = useState([{ key: '', value: '' }]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -376,6 +372,29 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
       if (onUpdated) onUpdated();
     } catch (err) { showToast(err.message || 'Lỗi gửi báo cáo', 'error'); }
     finally { setSaving(false); }
+  };
+
+  // Business rule: phải gửi báo cáo trước, sau đó mới được complete
+  const handleCompleteTask = async () => {
+    if (!reportText.trim()) {
+      showToast('Vui lòng nhập nội dung báo cáo trước khi hoàn thành', 'error');
+      setActiveTab('report');
+      return;
+    }
+    try {
+      setCompleting(true);
+      const dataObj = {};
+      resultData.forEach(r => { if (r.key.trim()) dataObj[r.key.trim()] = r.value; });
+      await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
+      await tasksApi.complete(task.id);
+      showToast('Đã hoàn thành tác vụ và gửi báo cáo!', 'success');
+      if (onUpdated) onUpdated();
+      onClose();
+    } catch (err) {
+      showToast(err.message || 'Không thể hoàn thành tác vụ', 'error');
+    } finally {
+      setCompleting(false);
+    }
   };
 
   const handleUploadImage = async (e) => {
@@ -410,203 +429,379 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
 
   const statusColors = STATUS_COLORS[task.status] || 'bg-slate-100 text-slate-600';
   const statusLabel = { Pending: 'Chờ', InProgress: 'Đang Làm', Completed: 'Hoàn Thành', Overdue: 'Quá Hạn' }[task.status] || task.status;
+  const isCompleted = task.status === 'Completed';
+  const isInProgress = task.status === 'InProgress';
+  const isPending = task.status === 'Pending';
+  const reportCount = reports.length;
+
+  const TABS = [
+    { id: 'overview', label: 'Tổng Quan', icon: '📋' },
+    { id: 'report', label: 'Báo Cáo', icon: '📝', badge: !isCompleted ? null : null },
+    { id: 'images', label: 'Hình Ảnh', icon: '📷' },
+    { id: 'history', label: 'Lịch Sử', icon: '📜', badge: reportCount > 0 ? reportCount : null },
+  ];
 
   return (
     <Portal>
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-        <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center sticky top-0 bg-white rounded-t-2xl z-10">
-          <div>
-            <h3 className="font-bold text-lg text-slate-900">Chi Tiết Tác Vụ</h3>
-            <p className="text-xs text-slate-400">{task.title || '—'}</p>
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 animate-fade-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="px-6 py-5 border-b border-slate-200 bg-gradient-to-r from-blue-50 via-white to-indigo-50 shrink-0">
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-2xl shrink-0 shadow-lg shadow-blue-600/20">
+                {TASK_TYPE_ICONS[task.taskType] || '📋'}
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-bold text-lg text-slate-900 truncate">{task.title || '—'}</h3>
+                <p className="text-xs text-slate-500 mt-0.5 truncate">🧪 {task.experimentTitle || '—'} {task.batchCode && `· 📦 ${task.batchCode}`}</p>
+              </div>
+            </div>
+            <button onClick={onClose} className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-white/60 transition-colors shrink-0">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold ${statusColors}`}>
+              <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70" />
+              {statusLabel}
+            </span>
+            {task.dueDate && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 text-slate-700">
+                📅 {new Date(task.dueDate).toLocaleDateString('vi-VN')}
+              </span>
+            )}
+            {task.experimentStageName && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 text-slate-700">
+                🎯 {task.experimentStageName}
+              </span>
+            )}
+          </div>
         </div>
 
-        <div className="p-6 space-y-6">
-          {/* Task Info */}
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            {[
-              { label: 'Loại', value: task.taskType || '—' },
-              { label: 'Trạng thái', value: statusLabel },
-              { label: 'Thí nghiệm', value: task.experimentTitle || '—' },
-              { label: 'Batch', value: task.batchCode || '—' },
-              { label: 'Giai đoạn', value: task.experimentStageName || '—' },
-              { label: 'Hạn chót', value: task.dueDate ? new Date(task.dueDate).toLocaleDateString('vi-VN') : '—' },
-              { label: 'Người giao', value: task.createdByName || '—' },
-            ].map(item => (
-              <div key={item.label} className="p-3 bg-slate-50 rounded-xl">
-                <p className="text-[10px] text-slate-400 font-bold uppercase">{item.label}</p>
-                <p className="font-semibold text-slate-900 text-xs mt-0.5">{item.value}</p>
-              </div>
+        {/* Tabs */}
+        <div className="border-b border-slate-200 bg-slate-50/40 px-6 shrink-0">
+          <div className="flex items-center gap-1 -mb-px">
+            {TABS.map(tab => (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                className={`relative px-4 py-3 text-sm font-bold transition-all flex items-center gap-2 border-b-2 ${
+                  activeTab === tab.id
+                    ? 'border-blue-600 text-blue-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}>
+                <span>{tab.icon}</span>
+                <span>{tab.label}</span>
+                {tab.badge && (
+                  <span className="ml-1 px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold">
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
             ))}
           </div>
+        </div>
 
-          {/* Skill Requirements */}
-          {Array.isArray(task.skillRequirements) && task.skillRequirements.length > 0 && (
-            <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-[10px] text-indigo-400 font-bold uppercase">Yêu Cầu Kỹ Năng</p>
-                <span className="text-[10px] font-bold text-indigo-600 bg-white px-2 py-0.5 rounded-full">
-                  {task.skillRequirements.length} kỹ năng
-                </span>
-              </div>
-              <div className="space-y-2">
-                {task.skillRequirements.map((sk, idx) => (
-                  <div key={sk.skillId || idx} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-indigo-100">
-                    <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-sm text-slate-900 truncate">{sk.skillName || `Skill ${sk.skillId?.slice(0, 8) || idx}`}</p>
-                      <p className="text-[10px] text-slate-500 font-mono">{sk.skillId}</p>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <span className="text-[10px] font-bold text-slate-500 uppercase">Level</span>
-                      <div className="flex gap-0.5">
-                        {[1, 2, 3, 4, 5].map(level => (
-                          <span key={level}
-                            className={`w-2 h-4 rounded-sm ${
-                              level <= (sk.requiredLevel || 0)
-                                ? 'bg-indigo-500'
-                                : 'bg-slate-200'
-                            }`}
-                          />
-                        ))}
-                      </div>
-                      <span className="ml-1 text-xs font-bold text-indigo-600 w-4 text-center">{sk.requiredLevel || 0}</span>
-                    </div>
+        {/* Body - scrollable */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {activeTab === 'overview' && (
+            <div className="space-y-5">
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { label: 'Loại', value: task.taskType || '—', icon: '🏷️' },
+                  { label: 'Hạn chót', value: task.dueDate ? new Date(task.dueDate).toLocaleDateString('vi-VN') : '—', icon: '📅' },
+                  { label: 'Thí nghiệm', value: task.experimentTitle || '—', icon: '🧪' },
+                  { label: 'Batch', value: task.batchCode || '—', icon: '📦' },
+                  { label: 'Giai đoạn', value: task.experimentStageName || '—', icon: '🎯' },
+                  { label: 'Người giao', value: task.createdByName || '—', icon: '👤' },
+                  { label: 'Lịch chăm sóc', value: task.careScheduleTitle || '—', icon: '📅' },
+                  { label: 'Yêu cầu kỹ năng', value: task.requiredSkillDescription || '—', icon: '⚙️' },
+                ].map(item => (
+                  <div key={item.label} className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
+                    <p className="text-[10px] text-slate-400 font-bold uppercase flex items-center gap-1.5">
+                      <span>{item.icon}</span>{item.label}
+                    </p>
+                    <p className="font-semibold text-slate-900 text-sm mt-1 truncate">{item.value}</p>
                   </div>
                 ))}
               </div>
-            </div>
-          )}
-          {task.description && (
-            <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
-              <p className="text-[10px] text-blue-400 font-bold uppercase mb-1">Mô tả</p>
-              <p className="text-sm text-slate-700">{task.description}</p>
+
+              {task.description && (
+                <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
+                  <p className="text-[10px] text-blue-600 font-bold uppercase mb-1.5 flex items-center gap-1.5">📝 Mô tả</p>
+                  <p className="text-sm text-slate-700 whitespace-pre-line">{task.description}</p>
+                </div>
+              )}
+
+              {/* Skill Requirements */}
+              {Array.isArray(task.skillRequirements) && task.skillRequirements.length > 0 && (
+                <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-[10px] text-indigo-600 font-bold uppercase flex items-center gap-1.5">⚙️ Yêu Cầu Kỹ Năng</p>
+                    <span className="text-[10px] font-bold text-indigo-700 bg-white px-2 py-0.5 rounded-full border border-indigo-200">
+                      {task.skillRequirements.length} kỹ năng
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {task.skillRequirements.map((sk, idx) => (
+                      <div key={sk.skillId || idx} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-indigo-100">
+                        <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-sm text-slate-900 truncate">{sk.skillName || `Skill ${sk.skillId?.slice(0, 8) || idx}`}</p>
+                          <p className="text-[10px] text-slate-500 font-mono">{sk.skillId}</p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase">Level</span>
+                          <div className="flex gap-0.5">
+                            {[1, 2, 3, 4, 5].map(level => (
+                              <span key={level}
+                                className={`w-2 h-4 rounded-sm ${level <= (sk.requiredLevel || 0) ? 'bg-indigo-500' : 'bg-slate-200'}`} />
+                            ))}
+                          </div>
+                          <span className="ml-1 text-xs font-bold text-indigo-600 w-4 text-center">{sk.requiredLevel || 0}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Report Form */}
-          <div className="border-t border-slate-200 pt-6">
-            <div className="flex items-center justify-between mb-3">
-              <h4 className="font-bold text-sm text-slate-900">📝 Gửi Báo Cáo</h4>
-              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${statusColors}`}>{statusLabel}</span>
+          {activeTab === 'report' && (
+            <div className="space-y-4">
+              {!isCompleted && (
+                <div className={`p-3 rounded-xl border text-sm font-semibold flex items-start gap-2 ${
+                  isInProgress ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-blue-50 border-blue-200 text-blue-800'
+                }`}>
+                  <span className="text-lg shrink-0">{isInProgress ? '⚠️' : 'ℹ️'}</span>
+                  <div>
+                    <p className="font-bold">{isInProgress ? 'Báo cáo là bắt buộc để hoàn thành' : 'Gửi báo cáo cho tác vụ'}</p>
+                    <p className="text-xs mt-0.5 opacity-80">
+                      {isInProgress ? 'Sau khi bấm "Hoàn Thành", tác vụ sẽ chuyển sang trạng thái Hoàn Thành.' : 'Có thể gửi báo cáo bất kỳ lúc nào, tác vụ vẫn ở trạng thái Chờ.'}
+                    </p>
+                  </div>
+                </div>
+              )}
+              <form onSubmit={handleSubmitReport} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
+                    <span>Nội dung báo cáo {isInProgress && <span className="text-rose-500">*</span>}</span>
+                    <span className="text-[10px] text-slate-400 font-normal">{reportText.length} ký tự</span>
+                  </label>
+                  <textarea value={reportText} onChange={e => setReportText(e.target.value)} rows={5}
+                    placeholder="Mô tả kết quả quan sát, các phát hiện và bài học rút ra..."
+                    disabled={isCompleted}
+                    className="w-full px-4 py-3 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 resize-none bg-white disabled:bg-slate-50 disabled:text-slate-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Dữ liệu định lượng <span className="text-slate-400 font-normal">(tùy chọn)</span></label>
+                  <div className="space-y-2">
+                    {resultData.map((r, idx) => (
+                      <div key={idx} className="flex gap-2">
+                        <input type="text" value={r.key} placeholder="Key (VD: plantsObserved)"
+                          disabled={isCompleted}
+                          onChange={e => updateResult(idx, 'key', e.target.value)}
+                          className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 bg-white font-mono disabled:bg-slate-50" />
+                        <input type="text" value={r.value} placeholder="Giá trị"
+                          disabled={isCompleted}
+                          onChange={e => updateResult(idx, 'value', e.target.value)}
+                          className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 bg-white disabled:bg-slate-50" />
+                        {resultData.length > 1 && !isCompleted && (
+                          <button type="button" onClick={() => setResultData(prev => prev.filter((_, i) => i !== idx))}
+                            className="px-2 text-rose-500 hover:bg-rose-50 rounded-lg font-bold">✕</button>
+                        )}
+                      </div>
+                    ))}
+                    {!isCompleted && (
+                      <button type="button" onClick={() => setResultData(prev => [...prev, { key: '', value: '' }])}
+                        className="text-xs text-blue-600 font-semibold hover:underline inline-flex items-center gap-1">
+                        <span>＋</span> Thêm dòng dữ liệu
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {!isCompleted && (
+                  <div className="flex gap-2 pt-2">
+                    <button type="submit" disabled={saving || !reportText.trim()}
+                      className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2">
+                      <span>✉️</span>
+                      {saving ? 'Đang gửi...' : 'Gửi Báo Cáo'}
+                    </button>
+                  </div>
+                )}
+              </form>
             </div>
-            <form onSubmit={handleSubmitReport} className="space-y-3">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Nội dung báo cáo</label>
-                <textarea value={reportText} onChange={e => setReportText(e.target.value)} rows={3}
-                  placeholder="Mô tả kết quả quan sát của bạn..."
-                  className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none bg-white" />
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Dữ liệu định lượng (tùy chọn)</label>
-                <div className="space-y-2">
-                  {resultData.map((r, idx) => (
-                    <div key={idx} className="flex gap-2">
-                      <input type="text" value={r.key} placeholder="Key (VD: plantsObserved)"
-                        onChange={e => updateResult(idx, 'key', e.target.value)}
-                        className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white" />
-                      <input type="text" value={r.value} placeholder="Giá trị"
-                        onChange={e => updateResult(idx, 'value', e.target.value)}
-                        className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white" />
-                      {resultData.length > 1 && (
-                        <button type="button" onClick={() => setResultData(prev => prev.filter((_, i) => i !== idx))}
-                          className="px-2 text-rose-500 hover:bg-rose-50 rounded-lg font-bold">✕</button>
-                      )}
-                    </div>
-                  ))}
-                  <button type="button" onClick={() => setResultData(prev => [...prev, { key: '', value: '' }])}
-                    className="text-xs text-blue-600 font-semibold hover:underline">
-                    + Thêm dòng dữ liệu
+          )}
+
+          {activeTab === 'images' && (
+            <div className="space-y-4">
+              {!isCompleted && (
+                <form onSubmit={handleUploadImage} className="space-y-3 bg-gradient-to-br from-teal-50 to-emerald-50 p-4 rounded-xl border border-teal-200">
+                  <p className="text-xs font-bold text-teal-800 uppercase flex items-center gap-1.5">📷 Upload Ảnh Minh Chứng</p>
+                  <input type="text" value={imageUrl} onChange={e => setImageUrl(e.target.value)}
+                    placeholder="URL ảnh (sau khi upload lên storage)"
+                    className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 bg-white" />
+                  <input type="text" value={imageCaption} onChange={e => setImageCaption(e.target.value)}
+                    placeholder="Mô tả ảnh (tùy chọn)"
+                    className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 bg-white" />
+                  <button type="submit" disabled={uploading || !imageUrl.trim()}
+                    className="w-full py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-teal-600/20 disabled:opacity-50 transition-all flex items-center justify-center gap-2">
+                    <span>📤</span>
+                    {uploading ? 'Đang upload...' : 'Upload Ảnh'}
                   </button>
+                </form>
+              )}
+
+              {/* Reports images gallery */}
+              <div>
+                <p className="text-xs font-bold text-slate-700 mb-3 flex items-center justify-between">
+                  <span>📷 Thư Viện Ảnh</span>
+                  <span className="text-[10px] text-slate-400 font-normal">{reports.reduce((sum, r) => sum + (Array.isArray(r.images) ? r.images.length : 0), 0)} ảnh</span>
+                </p>
+                {reports.reduce((sum, r) => sum + (Array.isArray(r.images) ? r.images.length : 0), 0) === 0 ? (
+                  <div className="text-center text-sm text-slate-400 py-12 border-2 border-dashed border-slate-200 rounded-xl">
+                    <div className="text-4xl mb-2">🖼️</div>
+                    <p>Chưa có ảnh minh chứng nào</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                    {reports.flatMap(r => (Array.isArray(r.images) ? r.images : []).map((img, i) => (
+                      <a key={`${r.id}-${i}`} href={img.url || img} target="_blank" rel="noopener noreferrer"
+                        className="aspect-square rounded-lg overflow-hidden border border-slate-200 hover:border-blue-400 hover:shadow-md transition-all group">
+                        <img src={img.url || img} alt={img.name || 'img'} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                      </a>
+                    )))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'history' && (
+            <div className="space-y-3">
+              {loading ? (
+                <div className="text-center text-sm text-slate-400 py-12">Đang tải...</div>
+              ) : reports.length === 0 ? (
+                <div className="text-center text-sm text-slate-400 py-12 border-2 border-dashed border-slate-200 rounded-xl">
+                  <div className="text-4xl mb-2">📭</div>
+                  <p>Chưa có báo cáo nào</p>
+                </div>
+              ) : (
+                <div className="relative pl-6">
+                  <div className="absolute left-2 top-2 bottom-2 w-0.5 bg-slate-200" />
+                  {reports.map((r, idx) => {
+                    const resultEntries = r.resultData && typeof r.resultData === 'object' ? Object.entries(r.resultData) : [];
+                    const imageList = Array.isArray(r.images) ? r.images : [];
+                    const dateText = r.reportedAt || r.createdAt;
+                    const reporterName = r.reporterName || r.reportedByName || 'Bạn';
+                    return (
+                      <div key={r.id} className="relative pb-5 last:pb-0">
+                        <div className="absolute -left-[14px] top-1 w-4 h-4 rounded-full bg-blue-500 border-2 border-white shadow" />
+                        <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                          <div className="flex justify-between items-start gap-2 mb-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-[11px] font-bold shrink-0">
+                                {reporterName.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="font-semibold text-xs text-slate-900 truncate">{reporterName}</p>
+                                <p className="text-[10px] text-slate-500">Báo cáo #{reports.length - idx}</p>
+                              </div>
+                            </div>
+                            <span className="text-[10px] text-slate-500 shrink-0 font-mono">
+                              {dateText ? new Date(dateText).toLocaleString('vi-VN') : '—'}
+                            </span>
+                          </div>
+                          {r.reportText && (
+                            <p className="text-xs text-slate-700 whitespace-pre-line">{r.reportText}</p>
+                          )}
+                          {resultEntries.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {resultEntries.map(([k, v]) => (
+                                <span key={k} className="px-2 py-0.5 bg-white border border-blue-200 text-blue-800 rounded-full text-[10px] font-mono font-bold">
+                                  {k}: <span className="text-slate-900">{String(v)}</span>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {imageList.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {imageList.map((img, i) => (
+                                <a key={i} href={img.url || img} target="_blank" rel="noopener noreferrer"
+                                  className="block w-12 h-12 rounded-md overflow-hidden border border-blue-200 hover:opacity-80">
+                                  <img src={img.url || img} alt={img.name || `img-${i}`} className="w-full h-full object-cover" />
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Footer - STICKY với action phù hợp theo tab và status */}
+        <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 shrink-0">
+          {isInProgress ? (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs text-slate-600 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                  <span className="text-sm">⚠️</span>
+                </div>
+                <div className="min-w-0">
+                  <p className="font-bold text-slate-800 text-sm">Quy trình nghiệp vụ</p>
+                  <p className="text-[10px] text-slate-500 truncate">Báo cáo bắt buộc trước khi hoàn thành</p>
                 </div>
               </div>
-              <button type="submit" disabled={saving}
-                className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20 disabled:opacity-50 transition-all">
-                {saving ? '⏳ Đang gửi...' : '✉️ Gửi Báo Cáo'}
-              </button>
-            </form>
-          </div>
-
-          {/* Image Upload */}
-          <div className="border-t border-slate-200 pt-6">
-            <h4 className="font-bold text-sm text-slate-900 mb-3">📷 Upload Ảnh Minh Chứng</h4>
-            <form onSubmit={handleUploadImage} className="space-y-2 bg-gradient-to-br from-teal-50 to-emerald-50 p-3 rounded-xl border border-teal-100">
-              <input type="text" value={imageUrl} onChange={e => setImageUrl(e.target.value)}
-                placeholder="URL ảnh (sau khi upload lên storage)"
-                className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white" />
-              <input type="text" value={imageCaption} onChange={e => setImageCaption(e.target.value)}
-                placeholder="Mô tả ảnh (tùy chọn)"
-                className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white" />
-              <button type="submit" disabled={uploading}
-                className="w-full py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-teal-600/20 disabled:opacity-50 transition-all">
-                {uploading ? '⏳ Đang upload...' : '📤 Upload Ảnh'}
-              </button>
-            </form>
-          </div>
-
-          {/* Reports History */}
-          {reports.length > 0 && (
-            <div className="border-t border-slate-200 pt-6">
-              <h4 className="font-bold text-sm text-slate-900 mb-3">📜 Lịch Sử Báo Cáo ({reports.length})</h4>
-              <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
-                {reports.map(r => {
-                  const resultEntries = r.resultData && typeof r.resultData === 'object'
-                    ? Object.entries(r.resultData)
-                    : [];
-                  const imageList = Array.isArray(r.images) ? r.images : [];
-                  const dateText = r.reportedAt || r.createdAt;
-                  const reporterName = r.reporterName || r.reportedByName || 'Bạn';
-                  return (
-                    <div key={r.id} className="p-3 bg-blue-50 rounded-xl border border-blue-100">
-                      <div className="flex justify-between items-start gap-2 mb-2">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <div className="w-7 h-7 rounded-full bg-blue-500 text-white flex items-center justify-center text-[11px] font-bold shrink-0">
-                            {reporterName.charAt(0).toUpperCase()}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="font-semibold text-xs text-slate-900 truncate">{reporterName}</p>
-                            <p className="text-[10px] text-slate-500">Báo cáo tác vụ</p>
-                          </div>
-                        </div>
-                        <span className="text-[10px] text-slate-500 shrink-0">
-                          {dateText ? new Date(dateText).toLocaleString('vi-VN') : '—'}
-                        </span>
-                      </div>
-
-                      {r.reportText && (
-                        <p className="text-xs text-slate-700 whitespace-pre-line line-clamp-3">{r.reportText}</p>
-                      )}
-
-                      {resultEntries.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 mt-2">
-                          {resultEntries.map(([k, v]) => (
-                            <span key={k} className="px-2 py-0.5 bg-white border border-blue-200 text-blue-800 rounded-full text-[10px] font-mono font-bold">
-                              {k}: <span className="text-slate-900">{String(v)}</span>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-
-                      {imageList.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 mt-2">
-                          {imageList.map((img, i) => (
-                            <a key={i} href={img.url || img} target="_blank" rel="noopener noreferrer"
-                              className="block w-12 h-12 rounded-md overflow-hidden border border-blue-200 hover:opacity-80">
-                              <img src={img.url || img} alt={img.name || `img-${i}`} className="w-full h-full object-cover" />
-                            </a>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+              <div className="flex gap-2 shrink-0">
+                <button onClick={onClose}
+                  className="px-4 py-2 border border-slate-300 rounded-xl text-sm font-semibold hover:bg-white transition-colors">
+                  Đóng
+                </button>
+                <button onClick={handleCompleteTask} disabled={completing || !reportText.trim()}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2">
+                  <span>✅</span>
+                  {completing ? 'Đang hoàn thành...' : 'Hoàn Thành & Gửi Báo Cáo'}
+                </button>
               </div>
+            </div>
+          ) : isCompleted ? (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs text-slate-600">
+                <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                  <span className="text-sm">✓</span>
+                </div>
+                <div>
+                  <p className="font-bold text-slate-800 text-sm">Tác vụ đã hoàn thành</p>
+                  <p className="text-[10px] text-slate-500">Báo cáo đã được lưu vào hệ thống</p>
+                </div>
+              </div>
+              <button onClick={onClose}
+                className="px-5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-sm font-bold transition-colors">
+                Đóng
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs text-slate-600">
+                <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center">
+                  <span className="text-sm">⏳</span>
+                </div>
+                <div>
+                  <p className="font-bold text-slate-800 text-sm">Tác vụ đang chờ</p>
+                  <p className="text-[10px] text-slate-500">Bấm "Bắt Đầu" ở danh sách để tiến hành</p>
+                </div>
+              </div>
+              <button onClick={onClose}
+                className="px-5 py-2 border border-slate-300 rounded-xl text-sm font-semibold hover:bg-white transition-colors">
+                Đóng
+              </button>
             </div>
           )}
         </div>

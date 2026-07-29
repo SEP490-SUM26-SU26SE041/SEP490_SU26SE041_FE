@@ -296,14 +296,17 @@ const Farms = () => {
                   }`}
                   onClick={() => setSelectedFarmId(farm.id)}
                 >
-                  {/* Cover with gradient + pattern */}
-                  <div className={`relative h-32 bg-gradient-to-br ${palette.cover} overflow-hidden`}>
-                    <div className="absolute inset-0 opacity-30" style={{ backgroundImage: palette.pattern }} />
+                  {/* Cover with gradient + scene illustration */}
+                  <div className={`relative h-40 bg-gradient-to-br ${palette.cover} overflow-hidden`}>
+                    {/* Pattern background */}
+                    <div className="absolute inset-0 opacity-25" style={{ backgroundImage: palette.pattern }} />
+                    {/* Scene SVG (sun + hills + crops) */}
+                    <FarmScene className="absolute inset-0 w-full h-full opacity-95" />
                     {/* Decorative blobs */}
                     <div className="absolute -top-6 -right-6 w-28 h-28 rounded-full bg-white/15 blur-sm" />
                     <div className="absolute -bottom-8 -left-4 w-24 h-24 rounded-full bg-white/10 blur-md" />
-                    {/* Farm emoji */}
-                    <div className="absolute top-3 left-3 w-12 h-12 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center text-2xl shadow-inner">
+                    {/* Farm emoji badge */}
+                    <div className="absolute top-3 left-3 w-12 h-12 rounded-xl bg-white/25 backdrop-blur-md flex items-center justify-center text-2xl shadow-lg border border-white/30">
                       🌾
                     </div>
                     {/* Selected badge */}
@@ -315,10 +318,20 @@ const Farms = () => {
                     )}
                     {/* Farm code pill at bottom */}
                     <div className="absolute bottom-3 left-3 right-3 flex items-end justify-between">
-                      <span className="px-2 py-0.5 rounded-md bg-black/25 backdrop-blur-md text-white text-[10px] font-mono font-bold uppercase tracking-wider">
+                      <span className="px-2 py-0.5 rounded-md bg-black/30 backdrop-blur-md text-white text-[10px] font-mono font-bold uppercase tracking-wider border border-white/20">
                         {farm.farmCode}
                       </span>
+                      <span className="px-2 py-0.5 rounded-md bg-white/20 backdrop-blur-md text-white text-[10px] font-bold uppercase tracking-wider">
+                        {farm.location ? `📍 ${farm.location}` : 'Đang hoạt động'}
+                      </span>
                     </div>
+                  </div>
+
+                  {/* Wave divider */}
+                  <div className={`relative h-2 -mt-2 bg-gradient-to-r ${palette.cover}`}>
+                    <svg className="absolute -top-px left-0 w-full h-3 text-white" viewBox="0 0 1200 30" preserveAspectRatio="none">
+                      <path d="M0,30 C300,0 900,0 1200,30 L1200,30 L0,30 Z" fill="currentColor" />
+                    </svg>
                   </div>
 
                   {/* Body */}
@@ -383,9 +396,12 @@ const Farms = () => {
             <div className={`relative overflow-hidden rounded-2xl bg-gradient-to-br ${palette.cover} text-white p-5 lg:p-6 shadow-lg`}>
               <div className="absolute inset-0 opacity-20" style={{ backgroundImage: palette.pattern }} />
               <div className="absolute -bottom-6 -right-6 w-32 h-32 rounded-full bg-white/10 blur-xl" />
+              <div className="absolute inset-0 opacity-30 pointer-events-none">
+                <FarmScene className="w-full h-full" />
+              </div>
               <div className="relative flex items-center justify-between gap-4 flex-wrap">
                 <div className="flex items-center gap-3">
-                  <span className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center text-2xl shadow-inner">
+                  <span className="w-12 h-12 rounded-xl bg-white/25 backdrop-blur-md flex items-center justify-center text-2xl shadow-inner border border-white/30">
                     🌾
                   </span>
                   <div>
@@ -403,45 +419,20 @@ const Farms = () => {
                 </PrimaryButton>
               </div>
             </div>
-            <Card className="overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left">
-                  <thead>
-                    <tr className="bg-surface-container-low/50 border-b border-outline-variant">
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">Mã</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">Tên</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">Loại</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">Diện tích (m²)</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">Trạng thái</th>
-                      <th className="px-6 py-4 text-[10px] font-bold uppercase tracking-wider text-on-surface-variant text-right">Thao tác</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-outline-variant">
-                    {areasLoading ? (
-                      <tr><td colSpan="6" className="px-6 py-8 text-center text-sm text-on-surface-variant">Đang tải...</td></tr>
-                    ) : areas.length === 0 ? (
-                      <tr><td colSpan="6" className="px-6 py-8 text-center text-sm text-on-surface-variant">Chưa có khu vực nào.</td></tr>
-                    ) : (
-                      areas.map(area => (
-                        <tr key={area.id} className="hover:bg-surface-container/30 transition-colors">
-                          <td className="px-6 py-4 font-mono text-[13px] text-primary font-bold">{area.areaCode}</td>
-                          <td className="px-6 py-4 text-sm font-semibold text-on-surface">{area.areaName}</td>
-                          <td className="px-6 py-4 text-sm text-on-surface-variant">{area.environmentType || '—'}</td>
-                          <td className="px-6 py-4 text-sm font-mono">{area.totalArea ?? '—'}</td>
-                          <td className="px-6 py-4"><StatusPill status={getStatusLabel(area.status)} /></td>
-                          <td className="px-6 py-4 text-right">
-                            <div className="flex justify-end gap-2">
-                              <button onClick={() => openEditArea(area)} className="text-primary font-bold text-[10px] uppercase hover:underline p-1">Sửa</button>
-                              <button onClick={() => deleteArea(area.id)} className="text-rose-600 font-bold text-[10px] uppercase hover:underline p-1">Xóa</button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+
+            {areasLoading ? (
+              <Card className="p-10 text-center text-sm text-on-surface-variant">Đang tải...</Card>
+            ) : areas.length === 0 ? (
+              <div className="relative overflow-hidden rounded-2xl border-2 border-dashed border-emerald-300 bg-gradient-to-br from-emerald-50/50 to-transparent p-8 lg:p-12 text-center">
+                <div className="text-4xl mb-2">🌿</div>
+                <p className="text-sm font-bold text-on-surface">Chưa có khu vực nào</p>
+                <p className="text-xs text-on-surface-variant mt-1">Bắt đầu bằng cách thêm khu vực đầu tiên cho nông trại này.</p>
               </div>
-            </Card>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 lg:gap-5">
+                {areas.map(area => <AreaCard key={area.id} area={area} onEdit={openEditArea} onDelete={deleteArea} />)}
+              </div>
+            )}
           </div>
           );
         })()}
@@ -577,6 +568,130 @@ const Farms = () => {
 const PlusIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
 );
+
+// SVG scene: sun + hills + crops (pure SVG, no asset dependency)
+const FarmScene = ({ className }) => (
+  <svg className={className} viewBox="0 0 400 160" preserveAspectRatio="xMidYMax slice" xmlns="http://www.w3.org/2000/svg">
+    {/* Sun */}
+    <circle cx="320" cy="42" r="22" fill="white" opacity="0.35" />
+    <circle cx="320" cy="42" r="14" fill="white" opacity="0.55" />
+    {/* Sun rays */}
+    {[0, 45, 90, 135].map(angle => (
+      <line key={angle} x1="320" y1="42" x2="320" y2="10" stroke="white" strokeWidth="2" strokeLinecap="round" opacity="0.4"
+        transform={`rotate(${angle} 320 42)`} />
+    ))}
+    {/* Cloud */}
+    <g opacity="0.5">
+      <ellipse cx="80" cy="36" rx="22" ry="10" fill="white" />
+      <ellipse cx="100" cy="30" rx="16" ry="9" fill="white" />
+      <ellipse cx="60" cy="32" rx="12" ry="7" fill="white" />
+    </g>
+    {/* Back hill */}
+    <path d="M0,160 L0,110 Q80,70 180,95 Q260,115 400,80 L400,160 Z" fill="white" opacity="0.18" />
+    {/* Front hill */}
+    <path d="M0,160 L0,130 Q120,100 220,120 Q320,140 400,115 L400,160 Z" fill="white" opacity="0.28" />
+    {/* Field rows */}
+    {[140, 150].map((y, i) => (
+      <line key={i} x1="0" y1={y} x2="400" y2={y - 8} stroke="white" strokeWidth="1.2" opacity="0.35" />
+    ))}
+    {/* Crops / sprouts scattered */}
+    {[
+      [40, 132], [80, 134], [120, 136], [160, 138], [200, 140],
+      [240, 138], [280, 136], [320, 134], [360, 132],
+      [60, 146], [140, 148], [220, 146], [300, 144], [380, 142]
+    ].map(([cx, cy], i) => (
+      <g key={i} opacity="0.7">
+        <path d={`M${cx},${cy} l-3,-6 M${cx},${cy} l0,-7 M${cx},${cy} l3,-6`} stroke="white" strokeWidth="1.3" strokeLinecap="round" fill="none" />
+      </g>
+    ))}
+  </svg>
+);
+
+// =====================
+// Area Card (thay thế table)
+// =====================
+
+const AREA_ENV_META = {
+  Greenhouse: { icon: '🏡', label: 'Greenhouse', color: 'emerald', bg: 'bg-emerald-100', text: 'text-emerald-700' },
+  Outdoor: { icon: '☀️', label: 'Outdoor', color: 'amber', bg: 'bg-amber-100', text: 'text-amber-700' },
+  Indoor: { icon: '🏠', label: 'Indoor', color: 'sky', bg: 'bg-sky-100', text: 'text-sky-700' },
+  Hydroponic: { icon: '💧', label: 'Hydroponic', color: 'indigo', bg: 'bg-indigo-100', text: 'text-indigo-700' }
+};
+
+const AREA_STATUS_META = {
+  Available: { label: 'Sẵn sàng', bg: 'bg-emerald-100', text: 'text-emerald-700', dot: 'bg-emerald-500', icon: '✓' },
+  InUse: { label: 'Đang sử dụng', bg: 'bg-blue-100', text: 'text-blue-700', dot: 'bg-blue-500', icon: '◉' },
+  Maintenance: { label: 'Bảo trì', bg: 'bg-amber-100', text: 'text-amber-700', dot: 'bg-amber-500', icon: '⚙' },
+  Unavailable: { label: 'Không khả dụng', bg: 'bg-rose-100', text: 'text-rose-700', dot: 'bg-rose-500', icon: '✕' }
+};
+
+const AreaCard = ({ area, onEdit, onDelete }) => {
+  const envMeta = AREA_ENV_META[area.environmentType] || { icon: '🌿', label: area.environmentType || 'Khác', bg: 'bg-slate-100', text: 'text-slate-700' };
+  const statusKey = typeof area.status === 'number'
+    ? ({ 1: 'Available', 2: 'InUse', 3: 'Maintenance', 4: 'Unavailable' }[area.status] || 'Available')
+    : (area.status || 'Available');
+  const statusMeta = AREA_STATUS_META[statusKey] || AREA_STATUS_META.Available;
+
+  return (
+    <div className="group relative bg-white border border-outline-variant rounded-2xl overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all">
+      {/* Top color stripe theo loại môi trường */}
+      <div className={`h-1.5 ${envMeta.bg}`} />
+      <div className="p-4 space-y-3">
+        {/* Header: icon + code + status */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className={`w-11 h-11 rounded-xl ${envMeta.bg} ${envMeta.text} flex items-center justify-center text-xl shrink-0 shadow-inner`}>
+              {envMeta.icon}
+            </div>
+            <div className="min-w-0">
+              <div className="text-[9px] font-mono font-bold uppercase tracking-wider text-on-surface-variant">
+                {area.areaCode}
+              </div>
+              <div className="font-bold text-sm text-on-surface truncate">{area.areaName}</div>
+            </div>
+          </div>
+          <span className={`shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-full text-[9px] font-bold uppercase tracking-wider ${statusMeta.bg} ${statusMeta.text}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${statusMeta.dot} animate-pulse`} />
+            {statusMeta.label}
+          </span>
+        </div>
+
+        {/* Quick stats */}
+        <div className="grid grid-cols-2 gap-2">
+          <div className="px-2.5 py-2 rounded-lg bg-surface-container/40">
+            <div className="text-[9px] font-bold uppercase tracking-wider text-on-surface-variant flex items-center gap-1">
+              <span>{envMeta.icon}</span> Loại
+            </div>
+            <div className="text-xs font-bold text-on-surface mt-0.5">{envMeta.label}</div>
+          </div>
+          <div className="px-2.5 py-2 rounded-lg bg-surface-container/40">
+            <div className="text-[9px] font-bold uppercase tracking-wider text-on-surface-variant">📐 Diện tích</div>
+            <div className="text-xs font-bold text-on-surface font-mono mt-0.5">
+              {area.totalArea != null && area.totalArea !== '' ? `${area.totalArea} m²` : '—'}
+            </div>
+          </div>
+        </div>
+
+        {/* Action bar */}
+        <div className="pt-3 border-t border-outline-variant flex justify-between items-center">
+          <span className="text-[9px] font-mono text-on-surface-variant uppercase tracking-wider">
+            {area.createdAt ? new Date(area.createdAt).toLocaleDateString('vi-VN') : ''}
+          </span>
+          <div className="flex gap-3">
+            <button onClick={() => onEdit(area)}
+              className="text-primary font-bold text-[10px] uppercase tracking-wider hover:underline p-1">
+              Sửa
+            </button>
+            <button onClick={() => onDelete(area.id)}
+              className="text-rose-600 font-bold text-[10px] uppercase tracking-wider hover:underline p-1">
+              Xóa
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const MapIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>

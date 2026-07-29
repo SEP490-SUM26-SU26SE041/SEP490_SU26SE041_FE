@@ -278,6 +278,9 @@ const CalIcon = () => (
 const ExperimentDetailModal = ({ open, onClose, experiment, loading, bedAssignments, schedules }) => {
   if (!open || !experiment) return null;
   const progress = computeProgress(experiment);
+  const stages = Array.isArray(experiment.stages) ? experiment.stages : [];
+  const groups = Array.isArray(experiment.groups) ? experiment.groups : [];
+  const measurements = Array.isArray(experiment.measurementDefinitions) ? experiment.measurementDefinitions : [];
 
   return (
     <Modal open={open} onClose={onClose} title={null} width="max-w-6xl">
@@ -290,7 +293,7 @@ const ExperimentDetailModal = ({ open, onClose, experiment, loading, bedAssignme
           onClick={onClose}
           className="absolute top-4 right-4 w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 backdrop-blur-md flex items-center justify-center transition-colors z-10"
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
         </button>
         <div className="relative p-8">
           <div className="flex items-start gap-4 flex-wrap">
@@ -336,96 +339,49 @@ const ExperimentDetailModal = ({ open, onClose, experiment, loading, bedAssignme
         <div className="p-6 lg:p-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left column: Objectives & Hypothesis */}
           <div className="lg:col-span-2 space-y-6">
-            <SectionCard
-              title="Mục Tiêu"
-              icon={<TargetIcon />}
-              accent="emerald"
-            >
+            <SectionCard title="Mục Tiêu" icon={<TargetIcon />} accent="emerald">
               <p className="text-sm text-on-surface leading-relaxed whitespace-pre-line">
                 {experiment.objective || <span className="text-on-surface-variant italic">Chưa có mô tả.</span>}
               </p>
             </SectionCard>
 
-            <SectionCard
-              title="Giả Thuyết"
-              icon={<BeakerIcon />}
-              accent="amber"
-            >
+            <SectionCard title="Giả Thuyết" icon={<BeakerIcon />} accent="amber">
               <p className="text-sm text-on-surface leading-relaxed whitespace-pre-line">
                 {experiment.hypothesis || <span className="text-on-surface-variant italic">Chưa có giả thuyết.</span>}
               </p>
             </SectionCard>
 
-            {experiment.stages?.length > 0 && (
+            {stages.length > 0 && (
               <SectionCard title="Giai Đoạn Thí Nghiệm" icon={<TimelineIcon />} accent="primary">
-                <ol className="space-y-3">
-                  {experiment.stages.map((stage, i) => (
-                    <li key={stage.id || i} className="flex gap-3 p-3 rounded-xl bg-surface-container/40">
-                      <span className="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center font-bold text-xs shrink-0">
-                        {i + 1}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-bold text-sm">{stage.name || stage.stageName || `Giai đoạn ${i + 1}`}</div>
-                        {stage.description && <div className="text-xs text-on-surface-variant mt-1">{stage.description}</div>}
-                      </div>
-                    </li>
-                  ))}
-                </ol>
+                <ExperimentTimeline stages={stages} />
               </SectionCard>
             )}
 
-            {experiment.groups?.length > 0 && (
+            {groups.length > 0 && (
               <SectionCard title="Nhóm Thí Nghiệm" icon={<GroupIcon />} accent="primary">
-                <div className="flex flex-wrap gap-2">
-                  {experiment.groups.map((g, i) => (
-                    <span key={g.id || i} className="px-3 py-2 rounded-xl bg-secondary-container text-on-secondary-container text-xs font-bold">
-                      {g.name || g.groupName} {g.plantCount ? `(${g.plantCount} cây)` : ''}
-                    </span>
-                  ))}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {groups.map((g, i) => <GroupCard key={g.id || i} group={g} />)}
                 </div>
               </SectionCard>
             )}
 
-            {experiment.measurementDefinitions?.length > 0 && (
+            {measurements.length > 0 && (
               <SectionCard title="Chỉ Số Đo Lường" icon={<RulerIcon />} accent="primary">
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                  {experiment.measurementDefinitions.map((m, i) => (
-                    <div key={m.id || i} className="p-3 rounded-xl bg-surface-container/40 border border-outline-variant">
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">
-                        {m.name || m.measurementName}
-                      </div>
-                      {m.unit && <div className="text-sm font-bold text-primary mt-0.5">{m.unit}</div>}
-                    </div>
-                  ))}
+                <div className="space-y-2">
+                  {measurements.map((m, i) => <MeasurementCard key={m.id || i} metric={m} />)}
                 </div>
               </SectionCard>
             )}
 
             {schedules?.length > 0 && (
               <SectionCard title="Lịch Chăm Sóc" icon={<CalIcon />} accent="primary">
-                <ul className="space-y-2">
-                  {schedules.map((s, i) => (
-                    <li key={s.id || i} className="flex items-center gap-3 p-3 rounded-xl bg-surface-container/40">
-                      <span className="w-2 h-2 rounded-full bg-primary" />
-                      <div className="flex-1">
-                        <div className="text-sm font-bold">{s.activityName || s.name || 'Hoạt động'}</div>
-                        <div className="text-[10px] text-on-surface-variant font-mono">
-                          {s.scheduledDate || s.date} {s.time ? `· ${s.time}` : ''}
-                        </div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                <ScheduleList schedules={schedules} />
               </SectionCard>
             )}
 
             {experiment.design && (
               <SectionCard title="Thiết Kế Thí Nghiệm" icon={<BeakerIcon />} accent="primary">
-                <pre className="text-xs bg-surface-container/40 p-3 rounded-xl overflow-x-auto">
-                  {typeof experiment.design === 'string'
-                    ? experiment.design
-                    : JSON.stringify(experiment.design, null, 2)}
-                </pre>
+                <DesignViewer design={experiment.design} />
               </SectionCard>
             )}
           </div>
@@ -485,6 +441,275 @@ const SectionCard = ({ title, icon, accent = 'primary', children }) => {
         <h3 className="font-hanken font-bold text-base text-on-surface">{title}</h3>
       </div>
       {children}
+    </div>
+  );
+};
+
+// =====================
+// Sub-components cho detail modal
+// =====================
+
+const STAGE_TYPE_META = {
+  Nursery: { icon: '🌱', label: 'Ươm cây', color: 'emerald' },
+  Care: { icon: '💧', label: 'Chăm sóc', color: 'sky' },
+  Growth: { icon: '🌿', label: 'Sinh trưởng', color: 'teal' },
+  Evaluation: { icon: '📊', label: 'Đánh giá', color: 'amber' },
+  Harvest: { icon: '🌾', label: 'Thu hoạch', color: 'orange' }
+};
+const STAGE_COLOR = {
+  emerald: { bg: 'bg-emerald-100', text: 'text-emerald-700', dot: 'bg-emerald-500', line: 'bg-emerald-300' },
+  sky: { bg: 'bg-sky-100', text: 'text-sky-700', dot: 'bg-sky-500', line: 'bg-sky-300' },
+  teal: { bg: 'bg-teal-100', text: 'text-teal-700', dot: 'bg-teal-500', line: 'bg-teal-300' },
+  amber: { bg: 'bg-amber-100', text: 'text-amber-700', dot: 'bg-amber-500', line: 'bg-amber-300' },
+  orange: { bg: 'bg-orange-100', text: 'text-orange-700', dot: 'bg-orange-500', line: 'bg-orange-300' }
+};
+
+const parseJSON = (raw) => {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  if (typeof raw === 'string') { try { return JSON.parse(raw); } catch { return null; } }
+  return null;
+};
+
+const formatDateRange = (s, e) => {
+  if (!s && !e) return null;
+  if (s && e) return `${s} → ${e}`;
+  return s || e;
+};
+
+const StageRow = ({ stage, isLast }) => {
+  const meta = STAGE_TYPE_META[stage.stageType] || { icon: '📍', label: stage.stageType || 'Khác', color: 'sky' };
+  const color = STAGE_COLOR[meta.color];
+  const dateRange = formatDateRange(stage.startDate, stage.endDate);
+  const resultData = parseJSON(stage.resultData);
+  const resultEntries = resultData ? Object.entries(resultData) : [];
+  return (
+    <div className="relative flex gap-3 pb-4 last:pb-0">
+      {/* vertical line */}
+      {!isLast && <div className={`absolute left-[15px] top-8 bottom-0 w-0.5 ${color.line} opacity-50`} />}
+      {/* dot icon */}
+      <div className={`relative z-10 w-8 h-8 rounded-full ${color.bg} ${color.text} flex items-center justify-center text-base shrink-0 ring-4 ring-white`}>
+        {meta.icon}
+      </div>
+      <div className="flex-1 min-w-0 pt-0.5">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="font-bold text-sm text-on-surface truncate">{stage.stageName || `Giai đoạn ${stage.stageOrder}`}</span>
+            <span className={`px-1.5 py-0.5 rounded-md ${color.bg} ${color.text} text-[9px] font-bold uppercase tracking-wider`}>
+              {meta.label}
+            </span>
+          </div>
+          {dateRange && (
+            <span className="text-[10px] font-mono text-on-surface-variant shrink-0">📅 {dateRange}</span>
+          )}
+        </div>
+        {stage.objective && <p className="text-xs text-on-surface-variant mt-1 line-clamp-2">{stage.objective}</p>}
+        {stage.resultSummary && (
+          <div className="mt-1.5 inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold">
+            <span>✓</span> {stage.resultSummary}
+          </div>
+        )}
+        {resultEntries.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {resultEntries.map(([k, v]) => (
+              <span key={k} className="px-1.5 py-0.5 rounded-md bg-surface-container border border-outline-variant text-[10px] font-mono">
+                <span className="font-bold text-on-surface">{k}:</span> <span className="text-on-surface-variant">{String(v)}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const ExperimentTimeline = ({ stages }) => {
+  const sorted = [...stages].sort((a, b) => (a.stageOrder || 0) - (b.stageOrder || 0));
+  return (
+    <div>
+      <div className="space-y-0">
+        {sorted.map((stage, i) => (
+          <StageRow key={stage.id || i} stage={stage} isLast={i === sorted.length - 1} />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const GROUP_TYPE_META = {
+  Treatment: { icon: '🧪', label: 'Treatment', color: 'indigo', bg: 'bg-indigo-100', text: 'text-indigo-700' },
+  Control: { icon: '🛡️', label: 'Control', color: 'emerald', bg: 'bg-emerald-100', text: 'text-emerald-700' }
+};
+
+const GroupCard = ({ group }) => {
+  const meta = GROUP_TYPE_META[group.groupType] || { icon: '🔬', label: group.groupType || 'Khác', color: 'slate', bg: 'bg-slate-100', text: 'text-slate-700' };
+  return (
+    <div className="p-3 rounded-xl border border-outline-variant bg-surface-container/30 hover:bg-surface-container/60 transition-colors">
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`w-7 h-7 rounded-lg ${meta.bg} ${meta.text} flex items-center justify-center text-sm shrink-0`}>{meta.icon}</span>
+          <span className="font-bold text-sm text-on-surface truncate">{group.groupName || '—'}</span>
+        </div>
+        <span className={`shrink-0 px-2 py-0.5 rounded-full ${meta.bg} ${meta.text} text-[9px] font-bold uppercase tracking-wider`}>{meta.label}</span>
+      </div>
+      {group.treatmentDescription && (
+        <p className="text-xs text-on-surface-variant line-clamp-2 leading-relaxed">{group.treatmentDescription}</p>
+      )}
+      {group.createdAt && (
+        <p className="text-[10px] text-on-surface-variant font-mono mt-1.5">
+          Tạo: {new Date(group.createdAt).toLocaleDateString('vi-VN')}
+        </p>
+      )}
+    </div>
+  );
+};
+
+const MeasurementCard = ({ metric }) => {
+  const target = metric.targetValue ?? metric.TargetValue;
+  return (
+    <div className="flex items-center gap-3 p-3 rounded-xl border border-outline-variant bg-gradient-to-r from-surface-container/40 to-white">
+      <div className="w-10 h-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+        <RulerIcon />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="font-bold text-sm text-on-surface truncate">{metric.metricName || metric.name || '—'}</div>
+        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+          {metric.unit && (
+            <span className="px-1.5 py-0.5 rounded-md bg-primary-container text-primary text-[10px] font-bold uppercase">Đơn vị: {metric.unit}</span>
+          )}
+          {target !== undefined && target !== null && (
+            <span className="text-[10px] font-mono text-on-surface-variant">Mục tiêu: <span className="font-bold text-on-surface">{target}</span></span>
+          )}
+        </div>
+        {metric.description && <p className="text-[10px] text-on-surface-variant mt-1 line-clamp-1">{metric.description}</p>}
+      </div>
+      {metric.groupName && (
+        <span className="shrink-0 px-2 py-1 rounded-md bg-indigo-50 text-indigo-700 text-[10px] font-bold">{metric.groupName}</span>
+      )}
+    </div>
+  );
+};
+
+const TASK_TYPE_META = {
+  Watering: { icon: '💧', label: 'Tưới nước', color: 'sky', bg: 'bg-sky-100', text: 'text-sky-700' },
+  Planting: { icon: '🌱', label: 'Trồng cây', color: 'emerald', bg: 'bg-emerald-100', text: 'text-emerald-700' },
+  Observation: { icon: '👁️', label: 'Quan sát', color: 'indigo', bg: 'bg-indigo-100', text: 'text-indigo-700' },
+  Fertilizing: { icon: '🧪', label: 'Bón phân', color: 'amber', bg: 'bg-amber-100', text: 'text-amber-700' },
+  Inspection: { icon: '🔍', label: 'Kiểm tra', color: 'violet', bg: 'bg-violet-100', text: 'text-violet-700' },
+  Harvest: { icon: '🌾', label: 'Thu hoạch', color: 'orange', bg: 'bg-orange-100', text: 'text-orange-700' }
+};
+
+const ScheduleList = ({ schedules }) => {
+  const sorted = [...schedules].sort((a, b) => new Date(a.startDate || 0) - new Date(b.startDate || 0));
+  return (
+    <ol className="space-y-2">
+      {sorted.map((s, i) => {
+        const meta = TASK_TYPE_META[s.taskType] || { icon: '📌', label: s.taskType || 'Khác', color: 'slate', bg: 'bg-slate-100', text: 'text-slate-700' };
+        const dateRange = formatDateRange(s.startDate, s.endDate);
+        return (
+          <li key={s.id || i} className="flex gap-3 p-3 rounded-xl border border-outline-variant bg-surface-container/30 hover:bg-surface-container/60 transition-colors">
+            <div className={`w-10 h-10 rounded-xl ${meta.bg} ${meta.text} flex items-center justify-center text-xl shrink-0`}>
+              {meta.icon}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-bold text-sm text-on-surface truncate">{s.title || 'Hoạt động'}</span>
+                <span className={`px-1.5 py-0.5 rounded-md ${meta.bg} ${meta.text} text-[9px] font-bold uppercase tracking-wider`}>
+                  {meta.label}
+                </span>
+                {s.frequencyDays && (
+                  <span className="px-1.5 py-0.5 rounded-md bg-violet-50 text-violet-700 text-[9px] font-bold">
+                    🔁 Mỗi {s.frequencyDays} ngày
+                  </span>
+                )}
+              </div>
+              {s.instruction && <p className="text-xs text-on-surface-variant mt-1 line-clamp-2">{s.instruction}</p>}
+              <div className="flex items-center gap-3 mt-1.5 flex-wrap text-[10px] text-on-surface-variant">
+                {dateRange && <span className="font-mono">📅 {dateRange}</span>}
+                {s.experimentStageName && <span>🎯 {s.experimentStageName}</span>}
+                {s.batchCode && <span className="font-mono font-bold text-primary">📦 {s.batchCode}</span>}
+              </div>
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+};
+
+const DESIGN_TYPE_LABEL = {
+  RandomizedCompleteBlock: 'RCBD - Khối ngẫu nhiên hoàn chỉnh',
+  CompletelyRandomized: 'CRD - Hoàn toàn ngẫu nhiên',
+  LatinSquare: 'Latin Square',
+  SplitPlot: 'Split-Plot',
+  Factorial: 'Factorial'
+};
+
+const DesignViewer = ({ design }) => {
+  const data = parseJSON(design) || (typeof design === 'object' ? design : null);
+  if (!data) return <div className="text-xs text-on-surface-variant italic">Không có dữ liệu</div>;
+
+  const params = parseJSON(data.designParameters) || {};
+  const layout = params.layout || '-';
+  const label = DESIGN_TYPE_LABEL[data.designType] || data.designType || '—';
+
+  // Quick stats ưu tiên hiển thị
+  const quickStats = [
+    { label: 'Lần lặp', value: data.replicationCount, icon: '🔁' },
+    { label: 'Phương pháp', value: data.randomizationMethod, icon: '🎲' },
+    { label: 'Số khối', value: params.blockCount, icon: '🧱' },
+    { label: 'Số nghiệm thức', value: params.treatments, icon: '🧪' }
+  ].filter(s => s.value !== undefined && s.value !== null && s.value !== '');
+
+  return (
+    <div className="space-y-3">
+      <div className="px-4 py-3 bg-gradient-to-r from-primary/10 to-violet-50 border border-primary/20 rounded-xl">
+        <div className="text-[10px] font-bold uppercase tracking-wider text-primary mb-0.5">Loại thiết kế</div>
+        <div className="font-hanken font-bold text-base text-on-surface">{label}</div>
+        {layout && layout !== '-' && (
+          <div className="text-[10px] text-on-surface-variant font-mono mt-1">Layout: {layout}</div>
+        )}
+      </div>
+
+      {quickStats.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {quickStats.map((s, i) => (
+            <div key={i} className="p-2.5 rounded-xl bg-surface-container/40 border border-outline-variant">
+              <div className="text-[9px] font-bold uppercase tracking-wider text-on-surface-variant flex items-center gap-1">
+                <span>{s.icon}</span>{s.label}
+              </div>
+              <div className="font-bold text-sm text-on-surface mt-0.5">{s.value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {params.plotArea && (
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+          {params.plotWidth && <div className="p-2.5 rounded-xl bg-surface-container/40"><div className="text-[9px] font-bold uppercase text-on-surface-variant">Chiều rộng ô (m)</div><div className="font-bold text-sm">{params.plotWidth}</div></div>}
+          {params.plotLength && <div className="p-2.5 rounded-xl bg-surface-container/40"><div className="text-[9px] font-bold uppercase text-on-surface-variant">Chiều dài ô (m)</div><div className="font-bold text-sm">{params.plotLength}</div></div>}
+          {params.plantsPerPlot && <div className="p-2.5 rounded-xl bg-surface-container/40"><div className="text-[9px] font-bold uppercase text-on-surface-variant">Cây/ô</div><div className="font-bold text-sm">{params.plantsPerPlot}</div></div>}
+          {params.bufferZone && <div className="p-2.5 rounded-xl bg-surface-container/40"><div className="text-[9px] font-bold uppercase text-on-surface-variant">Vùng đệm</div><div className="font-bold text-sm">{params.bufferZone}</div></div>}
+          {params.randomSeed && <div className="p-2.5 rounded-xl bg-surface-container/40"><div className="text-[9px] font-bold uppercase text-on-surface-variant">Random seed</div><div className="font-bold text-sm font-mono">{params.randomSeed}</div></div>}
+          {params.spacing && (
+            <div className="p-2.5 rounded-xl bg-surface-container/40 col-span-2 md:col-span-3">
+              <div className="text-[9px] font-bold uppercase text-on-surface-variant">Khoảng cách</div>
+              <div className="text-xs font-mono mt-0.5">
+                {typeof params.spacing === 'object'
+                  ? Object.entries(params.spacing).map(([k, v]) => `${k}: ${v}`).join(' · ')
+                  : params.spacing}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {params.notes && (
+        <div className="p-3 rounded-xl bg-amber-50 border border-amber-200">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-amber-700 mb-1">📝 Ghi chú</div>
+          <p className="text-xs text-on-surface">{params.notes}</p>
+        </div>
+      )}
     </div>
   );
 };

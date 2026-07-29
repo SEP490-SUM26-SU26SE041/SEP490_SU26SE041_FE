@@ -214,14 +214,6 @@ const TechTasksTab = () => {
     } catch (err) { showToast(err.message || 'Không thể bắt đầu', 'error'); }
   };
 
-  const handleComplete = async (task) => {
-    try {
-      await tasksApi.complete(task.id);
-      showToast('Đã hoàn thành tác vụ!', 'success');
-      fetchTasks();
-    } catch (err) { showToast(err.message || 'Không thể hoàn thành', 'error'); }
-  };
-
   const handleCancel = async (task) => {
     try {
       await tasksApi.cancel(task.id);
@@ -293,7 +285,7 @@ const TechTasksTab = () => {
                       <button onClick={() => handleStart(task)} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all">▶ Bắt Đầu</button>
                     )}
                     {task.status === 'InProgress' && (
-                      <button onClick={() => handleComplete(task)} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/20 transition-all">✅ Hoàn Thành</button>
+                      <button onClick={() => openDetail(task)} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/20 transition-all">✅ Hoàn Thành</button>
                     )}
                     {(task.status === 'Pending' || task.status === 'InProgress') && (
                       <button onClick={() => handleCancel(task)} className="px-3 py-2 border border-rose-300 text-rose-500 hover:bg-rose-50 rounded-xl text-xs font-semibold transition-all">✕ Hủy</button>
@@ -308,7 +300,7 @@ const TechTasksTab = () => {
 
       {/* Task Detail Modal */}
       {showDetail && selectedTask && (
-        <TaskDetailModal task={selectedTask} onClose={() => setShowDetail(false)} />
+        <TaskDetailModal task={selectedTask} onClose={() => setShowDetail(false)} onUpdated={fetchTasks} />
       )}
     </div>
   );
@@ -316,7 +308,7 @@ const TechTasksTab = () => {
 
 // ── Task Detail Modal ──────────────────────────────────────────────────────────
 
-const TaskDetailModal = ({ task, onClose }) => {
+const TaskDetailModal = ({ task, onClose, onUpdated }) => {
   const { showToast } = useToast();
   const [reports, setReports] = useState([]);
   const [images, setImages] = useState([]);
@@ -324,6 +316,7 @@ const TaskDetailModal = ({ task, onClose }) => {
   const [reportText, setReportText] = useState('');
   const [resultData, setResultData] = useState([{ key: '', value: '' }]);
   const [saving, setSaving] = useState(false);
+  const [completing, setCompleting] = useState(false);
   const [imageUrl, setImageUrl] = useState('');
   const [imageCaption, setImageCaption] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -361,6 +354,28 @@ const TaskDetailModal = ({ task, onClose }) => {
       setReports(Array.isArray(rep) ? rep : []);
     } catch (err) { showToast(err.message || 'Lỗi gửi báo cáo', 'error'); }
     finally { setSaving(false); }
+  };
+
+  // Business rule: phải gửi báo cáo trước, sau đó mới complete
+  const handleCompleteTask = async () => {
+    if (!reportText.trim()) {
+      showToast('Vui lòng nhập nội dung báo cáo trước khi hoàn thành', 'error');
+      return;
+    }
+    try {
+      setCompleting(true);
+      const dataObj = {};
+      resultData.forEach(r => { if (r.key.trim()) dataObj[r.key.trim()] = r.value; });
+      await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
+      await tasksApi.complete(task.id);
+      showToast('Đã hoàn thành tác vụ và gửi báo cáo!', 'success');
+      if (onUpdated) onUpdated();
+      onClose();
+    } catch (err) {
+      showToast(err.message || 'Không thể hoàn thành tác vụ', 'error');
+    } finally {
+      setCompleting(false);
+    }
   };
 
   const handleUploadImage = async (e) => {
@@ -471,34 +486,43 @@ const TaskDetailModal = ({ task, onClose }) => {
           )}
 
           {/* Report Form */}
-          <div className="border-t border-slate-200 pt-6">
-            <h4 className="font-bold text-sm text-slate-900 mb-3">📝 Gửi Báo Cáo</h4>
-            <form onSubmit={handleSubmitReport} className="space-y-3">
-              <textarea value={reportText} onChange={e => setReportText(e.target.value)} rows={3}
-                placeholder="Mô tả kết quả đã thực hiện..."
-                className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none" />
-              <div className="space-y-1">
-                {resultData.map((r, idx) => (
-                  <div key={idx} className="flex gap-2">
-                    <input type="text" value={r.key} placeholder="Key (VD: waterUsed)"
-                      onChange={e => updateResult(idx, 'key', e.target.value)}
-                      className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                    <input type="text" value={r.value} placeholder="Giá trị"
-                      onChange={e => updateResult(idx, 'value', e.target.value)}
-                      className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                    {resultData.length > 1 && (
-                      <button type="button" onClick={() => setResultData(prev => prev.filter((_, i) => i !== idx))} className="text-rose-500 font-bold">✕</button>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <button type="button" onClick={() => setResultData(prev => [...prev, { key: '', value: '' }])} className="text-xs text-emerald-600 font-semibold hover:underline">+ Thêm dữ liệu</button>
-              <button type="submit" disabled={saving}
-                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50">
-                {saving ? 'Đang gửi...' : 'Gửi Báo Cáo'}
-              </button>
-            </form>
-          </div>
+          {task.status !== 'Completed' && (
+            <div className="border-t border-slate-200 pt-6">
+              <h4 className="font-bold text-sm text-slate-900 mb-3">📝 Báo Cáo Công Việc</h4>
+              {task.status === 'InProgress' && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+                  ⚠️ Báo cáo là bắt buộc. Sau khi gửi, tác vụ sẽ được đánh dấu hoàn thành.
+                </p>
+              )}
+              <form onSubmit={handleSubmitReport} className="space-y-3">
+                <textarea value={reportText} onChange={e => setReportText(e.target.value)} rows={3}
+                  placeholder="Mô tả kết quả đã thực hiện..."
+                  className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none" />
+                <div className="space-y-1">
+                  {resultData.map((r, idx) => (
+                    <div key={idx} className="flex gap-2">
+                      <input type="text" value={r.key} placeholder="Key (VD: waterUsed)"
+                        onChange={e => updateResult(idx, 'key', e.target.value)}
+                        className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                      <input type="text" value={r.value} placeholder="Giá trị"
+                        onChange={e => updateResult(idx, 'value', e.target.value)}
+                        className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                      {resultData.length > 1 && (
+                        <button type="button" onClick={() => setResultData(prev => prev.filter((_, i) => i !== idx))} className="text-rose-500 font-bold">✕</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <button type="button" onClick={() => setResultData(prev => [...prev, { key: '', value: '' }])} className="text-xs text-emerald-600 font-semibold hover:underline">+ Thêm dữ liệu</button>
+                {task.status === 'Pending' && (
+                  <button type="submit" disabled={saving}
+                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50">
+                    {saving ? 'Đang gửi...' : 'Gửi Báo Cáo'}
+                  </button>
+                )}
+              </form>
+            </div>
+          )}
 
           {/* Upload Image */}
           <div className="border-t border-slate-200 pt-6">
@@ -597,6 +621,32 @@ const TaskDetailModal = ({ task, onClose }) => {
           )}
         </div>
       </div>
+      {/* Footer action - chỉ hiện khi đang làm (phải hoàn thành qua báo cáo) */}
+      {task.status === 'InProgress' && (
+        <div className="px-6 py-4 border-t border-slate-200 bg-slate-50/50 flex items-center justify-between gap-3 sticky bottom-0">
+          <div className="text-xs text-slate-500">
+            <span className="font-semibold text-slate-700">Quy trình:</span> Báo cáo bắt buộc trước khi hoàn thành
+          </div>
+          <div className="flex gap-2">
+            <button onClick={onClose}
+              className="px-4 py-2 border border-slate-300 rounded-xl text-sm font-medium hover:bg-white">
+              Đóng
+            </button>
+            <button onClick={handleCompleteTask} disabled={completing || !reportText.trim()}
+              className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all">
+              {completing ? '⏳ Đang hoàn thành...' : '✅ Hoàn Thành & Gửi Báo Cáo'}
+            </button>
+          </div>
+        </div>
+      )}
+      {task.status !== 'InProgress' && (
+        <div className="px-6 py-4 border-t border-slate-200 bg-slate-50/50 flex justify-end sticky bottom-0">
+          <button onClick={onClose}
+            className="px-5 py-2 border border-slate-300 rounded-xl text-sm font-medium hover:bg-white">
+            Đóng
+          </button>
+        </div>
+      )}
     </div>
     </Portal>
   );
