@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { experimentsApi } from '../../../api/experimentApi';
 import { stagesApi, groupsApi, measurementsApi, schedulesApi, batchesApi } from '../../../api/researcherApi';
 import { measurementRecordsApi } from '../../../api/measurementApi';
+import { comparisonApi } from '../../../api/dashboardApi';
 import { useToast } from '../../../context/ToastContext';
 import { BarChart, MultiLineChart, Gauge } from '../../../components/dashboard/Charts';
 
@@ -30,6 +31,7 @@ const ResearcherComparison = () => {
   const [recordsByBatch, setRecordsByBatch] = useState({});
   const [loading, setLoading] = useState(true);
   const [loadingRecords, setLoadingRecords] = useState(false);
+  const [comparisonData, setComparisonData] = useState(null); // Real comparison data from API
 
   // Initial load experiments
   useEffect(() => {
@@ -53,20 +55,41 @@ const ResearcherComparison = () => {
     if (!selectedExpId) return;
     const fetchDetails = async () => {
       try {
-        const [grp, meas, bat] = await Promise.allSettled([
+        setLoadingRecords(true);
+        const [grp, meas, bat, comp] = await Promise.allSettled([
           groupsApi.getByExperiment(selectedExpId),
           measurementsApi.getByExperiment(selectedExpId),
-          batchesApi.getByExperiment(selectedExpId)
+          batchesApi.getByExperiment(selectedExpId),
+          comparisonApi.getComparison(selectedExpId)
         ]);
-        setGroups(grp.status === 'fulfilled' ? (Array.isArray(grp.value) ? grp.value : []) : []);
-        setMeasurements(meas.status === 'fulfilled' ? (Array.isArray(meas.value) ? meas.value : []) : []);
+        
+        const groupsData = grp.status === 'fulfilled' ? (Array.isArray(grp.value) ? grp.value : []) : [];
+        const measurementsData = meas.status === 'fulfilled' ? (Array.isArray(meas.value) ? meas.value : []) : [];
         const batchList = bat.status === 'fulfilled' ? (Array.isArray(bat.value) ? bat.value : []) : [];
+        
+        console.log('Groups fetched:', groupsData);
+        console.log('Measurements fetched:', measurementsData);
+        console.log('Batches fetched:', batchList);
+        
+        setGroups(groupsData);
+        setMeasurements(measurementsData);
         setBatches(batchList);
+        
+        // Handle comparison data
+        if (comp.status === 'fulfilled') {
+          console.log('Comparison API response:', comp.value);
+          setComparisonData(comp.value);
+        } else {
+          console.log('Comparison API error:', comp.reason?.message || comp.reason);
+          setComparisonData(null);
+        }
+        
         // Default metric to first one
-        const ms = meas.status === 'fulfilled' ? (Array.isArray(meas.value) ? meas.value : []) : [];
-        if (ms.length > 0 && !metricName) setMetricName(ms[0].metricName);
+        if (measurementsData.length > 0 && !metricName) setMetricName(measurementsData[0].metricName);
       } catch (err) {
         showToast(err.message || 'Không thể tải chi tiết thí nghiệm', 'error');
+      } finally {
+        setLoadingRecords(false);
       }
     };
     fetchDetails();
@@ -96,18 +119,55 @@ const ResearcherComparison = () => {
     fetchAll();
   }, [batches, metricName, showToast]);
 
-  // ── Build comparison data ──────────────────────────────────────────────────
+  // ── Build comparison data from API ──────────────────────────────────────────────────
   const metricOptions = useMemo(() => {
+    // First check if we have API comparison data with metric comparisons
+    if (comparisonData?.groupComparisons?.length > 0) {
+      const set = new Set();
+      comparisonData.groupComparisons.forEach(g => {
+        if (g.metricComparisons) {
+          g.metricComparisons.forEach(m => {
+            if (m.metricName) set.add(m.metricName);
+          });
+        }
+      });
+      return Array.from(set);
+    }
+    // Fallback to local data
     const set = new Set();
     measurements.forEach(m => { if (m.metricName) set.add(m.metricName); });
     batches.forEach(b => {
       (recordsByBatch[b.id] || []).forEach(r => { if (r.metricName) set.add(r.metricName); });
     });
     return Array.from(set);
-  }, [measurements, batches, recordsByBatch]);
+  }, [comparisonData, measurements, batches, recordsByBatch]);
 
-  // Aggregate per group
+  // Use API comparison data or fallback to computed data
   const groupComparison = useMemo(() => {
+    // Use API comparison data if available and has data
+    if (comparisonData?.groupComparisons?.length > 0) {
+      return comparisonData.groupComparisons.map(g => ({
+        id: g.groupId,
+        groupName: g.groupName,
+        groupType: g.groupType,
+        treatmentDescription: g.treatmentDescription,
+        batchCount: g.totalBatches,
+        recordCount: g.totalMeasurements,
+        avg: g.metricComparisons?.find(m => m.metricName === metricName)?.averageValue || 
+             (g.metricComparisons?.length > 0 ? g.metricComparisons[0].averageValue : 0) || 0,
+        max: g.metricComparisons?.find(m => m.metricName === metricName)?.maxValue ||
+             (g.metricComparisons?.length > 0 ? g.metricComparisons[0].maxValue : 0) || 0,
+        min: g.metricComparisons?.find(m => m.metricName === metricName)?.minValue ||
+             (g.metricComparisons?.length > 0 ? g.metricComparisons[0].minValue : 0) || 0,
+        targetAvg: g.metricComparisons?.find(m => m.metricName === metricName)?.targetValue || 0,
+        achievementPct: g.metricComparisons?.find(m => m.metricName === metricName)?.targetAchievementRate || 0,
+        metricComparisons: g.metricComparisons || [],
+        batchMetrics: g.batchMetrics || [],
+        records: g.batchMetrics?.flatMap(b => b.metricTimeSeries || []) || []
+      }));
+    }
+
+    // Fallback to computed data from local records
     if (!groups.length || !batches.length) return [];
 
     // Map batch -> group
@@ -146,10 +206,30 @@ const ResearcherComparison = () => {
     });
 
     return result;
-  }, [groups, batches, recordsByBatch, metricName]);
+  }, [comparisonData, groups, batches, recordsByBatch, metricName]);
 
   // ── Determine "công thức vàng" (golden formula) ───────────────────────────
+  // Use real comparison data from API if available
   const goldenFormula = useMemo(() => {
+    // If we have real comparison data from API, use it
+    if (comparisonData?.groupComparisons?.length > 0) {
+      const candidates = comparisonData.groupComparisons
+        .filter(g => g.totalMeasurements > 0)
+        .map(g => ({
+          ...g,
+          avg: g.metricComparisons?.[0]?.averageValue || 0,
+          recordCount: g.totalMeasurements,
+          targetAvg: g.metricComparisons?.[0]?.targetValue || 0,
+          achievementPct: g.metricComparisons?.[0]?.targetAchievementRate || 0
+        }));
+      if (candidates.length === 0) return null;
+      const maxAvg = Math.max(...candidates.map(c => c.avg || 0));
+      return candidates
+        .map(c => ({ ...c, score: maxAvg > 0 ? (c.avg / maxAvg) * 100 : 0 }))
+        .sort((a, b) => b.score - a.score)[0];
+    }
+    
+    // Fallback to computed data from batch records
     if (!groupComparison.length) return null;
     const candidates = groupComparison.filter(g => g.recordCount > 0);
     if (candidates.length === 0) return null;
@@ -159,10 +239,36 @@ const ResearcherComparison = () => {
     return candidates
       .map(c => ({ ...c, score: maxAvg > 0 ? (c.avg / maxAvg) * 100 : 0 }))
       .sort((a, b) => b.score - a.score)[0];
-  }, [groupComparison]);
+  }, [comparisonData, groupComparison]);
 
   // ── Time-series per group for line chart ──────────────────────────────────
   const timeSeries = useMemo(() => {
+    // Use API comparison data if available
+    if (comparisonData?.groupComparisons?.length > 0) {
+      return comparisonData.groupComparisons
+        .filter(g => g.batchMetrics?.length > 0)
+        .map((g, idx) => {
+          // Flatten all time series from all batches in this group
+          const allRecords = g.batchMetrics?.flatMap(b => 
+            (b.metricTimeSeries || []).filter(r => !metricName || r.metricName === metricName)
+          ) || [];
+          
+          const sorted = allRecords
+            .filter(r => r.recordedAt && !isNaN(parseFloat(r.value)))
+            .sort((a, b) => new Date(a.recordedAt) - new Date(b.recordedAt));
+          
+          return {
+            name: g.groupName,
+            color: palette[idx % palette.length],
+            data: sorted.map(r => ({
+              label: new Date(r.recordedAt).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' }),
+              value: parseFloat(r.value)
+            }))
+          };
+        });
+    }
+    
+    // Fallback to computed data
     if (!groupComparison.length) return [];
     return groupComparison
       .filter(g => g.records.length > 0)
@@ -179,7 +285,7 @@ const ResearcherComparison = () => {
           }))
         };
       });
-  }, [groupComparison]);
+  }, [comparisonData, groupComparison, metricName]);
 
   // ── Bar chart data ─────────────────────────────────────────────────────────
   const avgBar = groupComparison.map((g, idx) => ({
