@@ -1,10 +1,18 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { experimentsApi, tasksApi } from '../../../api/experimentApi';
 import { farmsApi, bedsApi } from '../../../api/managerResourcesApi';
 import { stagesApi, groupsApi, designApi, measurementsApi, schedulesApi, batchesApi, bedAssignmentsApi, userApi, areasApi } from '../../../api/researcherApi';
 import { cropsApi } from '../../../api/cropApi';
 import { useToast } from '../../../context/ToastContext';
 import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
+
+// ── Portal helper ─────────────────────────────────────────────────────────────
+
+const Portal = ({ children }) => {
+  if (typeof document === 'undefined') return null;
+  return createPortal(children, document.body);
+};
 
 const STATUS_FILTERS = [
   { value: '', label: 'Tất Cả' },
@@ -146,6 +154,11 @@ const ResearcherExperiments = ({ prefillData, onPrefillConsumed }) => {
     if (!createForm.farmId) errs.farmId = 'Vui lòng chọn nông trại';
     if (!createForm.title.trim()) errs.title = 'Tiêu đề không được trống';
     if (!createForm.objective.trim()) errs.objective = 'Mục tiêu không được trống';
+    if (createForm.startDate) {
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const start = new Date(createForm.startDate); start.setHours(0, 0, 0, 0);
+      if (start < today) errs.startDate = 'Ngày bắt đầu phải là hôm nay hoặc trong tương lai';
+    }
     if (createForm.startDate && createForm.endDate && createForm.endDate <= createForm.startDate)
       errs.endDate = 'Ngày kết thúc phải sau ngày bắt đầu';
     if (Object.keys(errs).length > 0) { setCreateErrors(errs); return; }
@@ -535,6 +548,14 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   // Schedule CRUD
   const handleCreateSchedule = async () => {
     if (!scheduleForm.title.trim()) { showToast('Tiêu đề lịch không được trống', 'error'); return; }
+    if (scheduleForm.startDate) {
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const start = new Date(scheduleForm.startDate); start.setHours(0, 0, 0, 0);
+      if (start < today) { showToast('Ngày bắt đầu lịch phải là hôm nay hoặc trong tương lai', 'error'); return; }
+    }
+    if (scheduleForm.endDate && scheduleForm.startDate && scheduleForm.endDate < scheduleForm.startDate) {
+      showToast('Ngày kết thúc phải sau ngày bắt đầu', 'error'); return;
+    }
     try {
       await schedulesApi.create(experiment.id, { ...scheduleForm, frequencyDays: parseInt(scheduleForm.frequencyDays) });
       showToast('Đã tạo lịch chăm sóc', 'success');
@@ -604,6 +625,17 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   // Task CRUD
   const handleCreateTask = async () => {
     if (!taskForm.title.trim()) { showToast('Tiêu đề tác vụ không được trống', 'error'); return; }
+    // Validate dueDate: phải là hôm nay hoặc tương lai (>= 00:00 hôm nay)
+    if (taskForm.dueDate) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const due = new Date(taskForm.dueDate);
+      due.setHours(0, 0, 0, 0);
+      if (due < today) {
+        showToast('Hạn chót phải là hôm nay hoặc trong tương lai. Không thể tạo tác vụ cho ngày đã qua.', 'error');
+        return;
+      }
+    }
     try {
       const payload = { experimentId: experiment.id, ...taskForm };
       if (!payload.experimentStageId) delete payload.experimentStageId;
@@ -654,6 +686,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   };
 
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-4 animate-fade-in">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl overflow-hidden max-h-[90vh] flex flex-col">
         {/* Header */}
@@ -750,6 +783,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
         onCancel={() => setConfirmDialog({ ...confirmDialog, isOpen: false })}
       />
     </div>
+    </Portal>
   );
 };
 
@@ -1257,12 +1291,16 @@ const SchedulesTab = ({ schedules, stages, batches, form, setForm, onCreate, onD
         </div>
         <div>
           <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Ngày Bắt Đầu</label>
-          <input type="date" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })}
+          <input type="date" value={form.startDate}
+            min={new Date().toISOString().split('T')[0]}
+            onChange={e => setForm({ ...form, startDate: e.target.value })}
             className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white" />
         </div>
         <div>
           <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Ngày Kết Thúc</label>
-          <input type="date" value={form.endDate} onChange={e => setForm({ ...form, endDate: e.target.value })}
+          <input type="date" value={form.endDate}
+            min={form.startDate || new Date().toISOString().split('T')[0]}
+            onChange={e => setForm({ ...form, endDate: e.target.value })}
             className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white" />
         </div>
       </div>
@@ -1437,175 +1475,391 @@ const BedsTab = ({ bedAssignments, availableBeds, areas, form, setForm, onAssign
   </div>
 );
 
-// ── Tasks Tab ────────────────────────────────────────────────────────────────
+// ── Tasks Tab (Visual: grouped by dueDate, date filter, modal assign) ─────────
 
 const TasksTab = ({
   tasks, stages, batches, schedules, form, setForm,
   users, assignForm, setAssignForm, skillMatches, selectedTaskForAssign,
   onCreate, onDelete, onGenerate, onSkillMatch, onAssign, onReassign, loading
-}) => (
-  <div className="space-y-4">
-    {/* Generate + Create */}
-    <div className="bg-indigo-50 rounded-xl p-4 border border-indigo-100">
-      <h4 className="text-xs font-bold text-indigo-700 mb-3">Tạo Tác Vụ</h4>
-      <div className="flex gap-2 mb-3 flex-wrap">
-        <button onClick={() => onGenerate('experiment')}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-lg">
-          ⚡ Tạo Tự Động Tất Cả
-        </button>
-        <button onClick={() => onGenerate('stage')}
-          className="px-4 py-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded-xl text-xs font-bold border border-indigo-200">
-          🔄 Tạo Theo Giai Đoạn
-        </button>
-      </div>
-      <div className="grid grid-cols-2 gap-3 mb-3">
-        <div>
-          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Giai Đoạn</label>
-          <select value={form.experimentStageId} onChange={e => setForm({ ...form, experimentStageId: e.target.value })}
-            className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white">
-            <option value="">— Chọn giai đoạn —</option>
-            {stages.map(s => <option key={s.id} value={s.id}>{s.stageName}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Lô</label>
-          <select value={form.batchId} onChange={e => setForm({ ...form, batchId: e.target.value })}
-            className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white">
-            <option value="">— Chọn lô —</option>
-            {batches.map(b => <option key={b.id} value={b.id}>{b.batchCode}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Lịch Chăm Sóc</label>
-          <select value={form.careScheduleId} onChange={e => setForm({ ...form, careScheduleId: e.target.value })}
-            className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white">
-            <option value="">— Chọn lịch (tùy chọn) —</option>
-            {schedules.map(sc => (
-              <option key={sc.id} value={sc.id}>{sc.title || `Lịch #${sc.id}`}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Loại Tác Vụ</label>
-          <select value={form.taskType} onChange={e => setForm({ ...form, taskType: e.target.value })}
-            className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white">
-            {TASK_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Hạn Chót</label>
-          <input type="date" value={form.dueDate} onChange={e => setForm({ ...form, dueDate: e.target.value })}
-            className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white" />
-        </div>
-        <div className="col-span-2">
-          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Tiêu Đề Tác Vụ *</label>
-          <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })}
-            placeholder="VD: Tưới nước ngày 01/07"
-            className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white" />
-        </div>
-        <div className="col-span-2">
-          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Mô Tả</label>
-          <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
-            placeholder="Mô tả chi tiết tác vụ"
-            className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white" />
-        </div>
-        <div className="col-span-2">
-          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Yêu Cầu Kỹ Năng</label>
-          <input value={form.requiredSkillDescription} onChange={e => setForm({ ...form, requiredSkillDescription: e.target.value })}
-            placeholder="VD: Vận hành hệ thống tưới tự động"
-            className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white" />
-        </div>
-      </div>
-      <button onClick={onCreate} disabled={loading}
-        className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold disabled:opacity-50">
-        + Tạo Tác Vụ Thủ Công
-      </button>
-    </div>
+}) => {
+  const [filterDate, setFilterDate] = useState('all');
+  const [assignModalTask, setAssignModalTask] = useState(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
 
-    {/* Skill match panel */}
-    {selectedTaskForAssign && (
-      <div className="bg-yellow-50 rounded-xl p-4 border border-yellow-200">
-        <h4 className="text-xs font-bold text-yellow-700 mb-3">🔍 Người Phù Hợp với Tác Vụ</h4>
-        {skillMatches.length === 0 ? (
-          <p className="text-xs text-on-surface-variant">Đang tìm...</p>
-        ) : (
-          <div className="space-y-2 mb-3">
-            {skillMatches.map(m => (
-              <div key={m.userId} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-yellow-100">
-                <div className="w-8 h-8 rounded-full bg-yellow-100 flex items-center justify-center text-xs font-bold text-yellow-700">{(m.fullName || '?')[0]}</div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold truncate">{m.fullName || m.userId}</p>
-                  <p className="text-[10px] text-on-surface-variant">{m.roleName} · Match: {m.matchScore || 'N/A'}%</p>
-                </div>
-                <button onClick={() => onAssign(selectedTaskForAssign)}
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shrink-0">
-                  Gán
-                </button>
-              </div>
+  // Group tasks by dueDate (YYYY-MM-DD)
+  const tasksByDate = useMemo(() => {
+    const groups = {};
+    tasks.forEach(t => {
+      const raw = t.dueDate ? new Date(t.dueDate) : null;
+      const key = raw ? raw.toISOString().split('T')[0] : 'no-date';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(t);
+    });
+    const ordered = Object.entries(groups)
+      .sort(([a], [b]) => (a === 'no-date' ? 1 : b === 'no-date' ? -1 : a.localeCompare(b)));
+    return ordered;
+  }, [tasks]);
+
+  const dateKeys = tasksByDate.map(([k]) => k);
+  const effectiveFilter = filterDate === 'all' ? dateKeys : (dateKeys.includes(filterDate) ? [filterDate] : []);
+
+  const visibleGroups = effectiveFilter.length > 0
+    ? tasksByDate.filter(([k]) => effectiveFilter.includes(k))
+    : [];
+
+  const formatDateLabel = (key) => {
+    if (key === 'no-date') return { label: 'Chưa có hạn', sub: 'Tác vụ chưa đặt deadline' };
+    const d = new Date(key + 'T00:00:00');
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const diff = Math.round((d - today) / 86400000);
+    const viDate = d.toLocaleDateString('vi-VN', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+    let sub = '';
+    if (diff === 0) sub = 'Hôm nay';
+    else if (diff === 1) sub = 'Ngày mai';
+    else if (diff === -1) sub = 'Hôm qua';
+    else if (diff > 0) sub = `Còn ${diff} ngày`;
+    else sub = `Trễ ${-diff} ngày`;
+    return { label: viDate, sub };
+  };
+
+  const handleOpenAssign = async (task) => {
+    setAssignModalTask(task);
+    setAssignForm({ assigneeId: '', reason: '' });
+    if (onSkillMatch) await onSkillMatch(task.id);
+  };
+
+  const handleConfirmAssign = async () => {
+    if (!assignModalTask) return;
+    await onAssign(assignModalTask.id);
+    setAssignModalTask(null);
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-indigo-50 rounded-xl p-3 border border-indigo-100">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[10px] font-bold uppercase text-indigo-700">Xem theo ngày:</span>
+          <select value={filterDate} onChange={e => setFilterDate(e.target.value)}
+            className="px-3 py-1.5 border border-indigo-200 rounded-lg text-xs bg-white font-semibold">
+            <option value="all">Tất cả ({tasks.length})</option>
+            {dateKeys.map(k => (
+              <option key={k} value={k}>
+                {k === 'no-date' ? 'Chưa có hạn' : new Date(k + 'T00:00:00').toLocaleDateString('vi-VN')} ({tasksByDate.find(([key]) => key === k)[1].length})
+              </option>
             ))}
+          </select>
+          <input type="date" value={filterDate === 'all' ? '' : filterDate}
+            onChange={e => setFilterDate(e.target.value || 'all')}
+            className="px-3 py-1.5 border border-indigo-200 rounded-lg text-xs bg-white" />
+          {filterDate !== 'all' && (
+            <button onClick={() => setFilterDate('all')}
+              className="text-xs text-indigo-600 font-bold hover:underline">↺ Reset</button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <button onClick={() => onGenerate('experiment')}
+            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow">
+            ⚡ Tự Động
+          </button>
+          <button onClick={() => onGenerate('stage')}
+            className="px-3 py-1.5 bg-white hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold border border-indigo-200">
+            🔄 Theo Giai Đoạn
+          </button>
+          <button onClick={() => setShowCreateForm(s => !s)}
+            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow">
+            {showCreateForm ? '✕ Đóng' : '+ Tạo Thủ Công'}
+          </button>
+        </div>
+      </div>
+
+      {/* Manual create form */}
+      {showCreateForm && (
+        <div className="bg-white rounded-xl p-4 border border-indigo-200 space-y-3 animate-fade-in">
+          <h4 className="text-xs font-bold text-indigo-700">Tạo Tác Vụ Thủ Công</h4>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Giai Đoạn</label>
+              <select value={form.experimentStageId} onChange={e => setForm({ ...form, experimentStageId: e.target.value })}
+                className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white">
+                <option value="">— Chọn giai đoạn —</option>
+                {stages.map(s => <option key={s.id} value={s.id}>{s.stageName}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Lô</label>
+              <select value={form.batchId} onChange={e => setForm({ ...form, batchId: e.target.value })}
+                className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white">
+                <option value="">— Chọn lô —</option>
+                {batches.map(b => <option key={b.id} value={b.id}>{b.batchCode}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Lịch Chăm Sóc</label>
+              <select value={form.careScheduleId} onChange={e => setForm({ ...form, careScheduleId: e.target.value })}
+                className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white">
+                <option value="">— Tùy chọn —</option>
+                {schedules.map(sc => (
+                  <option key={sc.id} value={sc.id}>{sc.title || `Lịch #${sc.id}`}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Loại Tác Vụ</label>
+              <select value={form.taskType} onChange={e => setForm({ ...form, taskType: e.target.value })}
+                className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white">
+                {TASK_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Hạn Chót <span className="text-on-surface-variant/60 normal-case font-normal">* (hôm nay trở đi)</span></label>
+              <input type="date" value={form.dueDate}
+                min={new Date().toISOString().split('T')[0]}
+                onChange={e => setForm({ ...form, dueDate: e.target.value })}
+                className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white" />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Tiêu Đề *</label>
+              <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })}
+                placeholder="VD: Tưới nước ngày 01/07"
+                className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white" />
+            </div>
+            <div className="col-span-2">
+              <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Mô Tả</label>
+              <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
+                placeholder="Mô tả chi tiết tác vụ"
+                className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white" />
+            </div>
+            <div className="col-span-2">
+              <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Yêu Cầu Kỹ Năng</label>
+              <input value={form.requiredSkillDescription} onChange={e => setForm({ ...form, requiredSkillDescription: e.target.value })}
+                placeholder="VD: Vận hành hệ thống tưới tự động"
+                className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white" />
+            </div>
           </div>
-        )}
-        <div className="mt-3 pt-3 border-t border-yellow-200">
-          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Hoặc chọn người dùng</label>
-          <div className="flex gap-2">
-            <select value={assignForm.assigneeId} onChange={e => setAssignForm({ ...assignForm, assigneeId: e.target.value })}
-              className="flex-1 px-3 py-2 border border-yellow-200 rounded-lg text-sm bg-white">
-              <option value="">— Chọn người dùng —</option>
-              {users.map(u => <option key={u.id} value={u.id}>{u.fullName || u.email}</option>)}
-            </select>
-            <button onClick={() => onAssign(selectedTaskForAssign)} disabled={!assignForm.assigneeId}
-              className="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 text-white rounded-xl text-xs font-bold disabled:opacity-50">
-              Gán Tác Vụ
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setShowCreateForm(false)}
+              className="px-4 py-2 border border-outline-variant rounded-xl text-xs font-bold hover:bg-surface-container/40">
+              Hủy
+            </button>
+            <button onClick={async () => { await onCreate(); setShowCreateForm(false); }} disabled={loading}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold disabled:opacity-50">
+              + Tạo Tác Vụ
             </button>
           </div>
         </div>
-        <button onClick={() => { setSelectedTaskForAssign(null); setSkillMatches([]); }}
-          className="mt-2 text-xs text-slate-500 hover:underline">Đóng</button>
-      </div>
-    )}
+      )}
 
-    {/* Task list */}
-    {loading ? <p className="text-center text-sm text-on-surface-variant py-4">Đang tải...</p> :
-      tasks.length === 0 ? <p className="text-center text-sm text-on-surface-variant py-4">Chưa có tác vụ nào.</p> :
-      <div className="space-y-2">
-        {tasks.map(t => (
-          <div key={t.id} className="flex items-center gap-3 p-3 bg-white border border-outline-variant rounded-xl">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap mb-1">
-                <p className="text-sm font-semibold text-on-surface truncate">{t.title || '—'}</p>
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${STATUS_COLORS[t.status] || 'bg-slate-100 text-slate-600'}`}>
-                  {t.status || '—'}
-                </span>
-                {t.taskType && <span className="px-2 py-0.5 bg-slate-100 rounded-full text-[10px] font-bold text-slate-600">{t.taskType}</span>}
+      {/* Grouped task list by date */}
+      {loading ? (
+        <p className="text-center text-sm text-on-surface-variant py-4">Đang tải...</p>
+      ) : visibleGroups.length === 0 ? (
+        <p className="text-center text-sm text-on-surface-variant py-8">Chưa có tác vụ nào trong khoảng đã chọn.</p>
+      ) : (
+        <div className="space-y-5">
+          {visibleGroups.map(([dateKey, items]) => {
+            const { label, sub } = formatDateLabel(dateKey);
+            const completedCount = items.filter(t => t.status === 'Completed').length;
+            const progress = items.length > 0 ? Math.round((completedCount / items.length) * 100) : 0;
+            return (
+              <div key={dateKey} className="space-y-2">
+                {/* Date header */}
+                <div className="flex items-center justify-between gap-3 px-1">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-base shadow-sm ${
+                      dateKey === 'no-date' ? 'bg-slate-100 text-slate-500'
+                        : sub === 'Hôm nay' ? 'bg-amber-100 text-amber-700'
+                        : sub.startsWith('Trễ') ? 'bg-rose-100 text-rose-700'
+                        : sub === 'Ngày mai' ? 'bg-blue-100 text-blue-700'
+                        : 'bg-indigo-100 text-indigo-700'
+                    }`}>
+                      📅
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-on-surface">{label}</p>
+                      <p className="text-[10px] text-on-surface-variant">{sub} · {items.length} tác vụ · {completedCount} xong</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <div className="w-24 h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div className={`h-full ${progress === 100 ? 'bg-emerald-500' : 'bg-indigo-500'}`} style={{ width: `${progress}%` }} />
+                    </div>
+                    <span className="text-xs font-bold text-on-surface-variant">{progress}%</span>
+                  </div>
+                </div>
+
+                {/* Tasks of this date */}
+                <div className="space-y-2 pl-2 border-l-2 border-indigo-100 ml-4">
+                  {items.map(t => (
+                    <div key={t.id}
+                      className="flex items-center gap-3 p-3 bg-white border border-outline-variant rounded-xl hover:border-indigo-300 hover:shadow-sm transition-all">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 ${
+                        t.taskType === 'Watering' ? 'bg-blue-50 text-blue-600'
+                        : t.taskType === 'Fertilizing' ? 'bg-amber-50 text-amber-600'
+                        : t.taskType === 'Observation' ? 'bg-purple-50 text-purple-600'
+                        : t.taskType === 'Inspection' ? 'bg-indigo-50 text-indigo-600'
+                        : t.taskType === 'Planting' ? 'bg-emerald-50 text-emerald-600'
+                        : t.taskType === 'Harvest' ? 'bg-orange-50 text-orange-600'
+                        : 'bg-slate-50 text-slate-600'
+                      }`}>
+                        {{
+                          Planting: '🌱', Watering: '💧', Fertilizing: '🧪',
+                          Observation: '👁️', Inspection: '🔍', Harvest: '🌾', Other: '📋'
+                        }[t.taskType] || '📌'}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <p className={`text-sm font-semibold truncate ${t.status === 'Completed' ? 'line-through text-slate-400' : 'text-on-surface'}`}>
+                            {t.title || '—'}
+                          </p>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${STATUS_COLORS[t.status] || 'bg-slate-100 text-slate-600'}`}>
+                            {t.status || '—'}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-on-surface-variant truncate">
+                          {[t.experimentStageName, t.batchCode].filter(Boolean).join(' · ') || 'Tác vụ thí nghiệm'}
+                          {t.requiredSkillDescription ? ` · 🎯 ${t.requiredSkillDescription}` : ''}
+                        </p>
+                        {t.assignedToName && (
+                          <p className="text-[10px] text-emerald-600 font-semibold mt-0.5">👤 {t.assignedToName}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {!t.assignedToName && t.status !== 'Completed' && (
+                          <button onClick={() => handleOpenAssign(t)}
+                            className="px-3 py-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-700 rounded-lg text-[11px] font-bold">
+                            🎯 Gán
+                          </button>
+                        )}
+                        <button onClick={() => onReassign(t.id)}
+                          className="px-2 py-1.5 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-[10px] font-bold">
+                          🔄
+                        </button>
+                        <button onClick={() => onDelete(t.id)}
+                          className="px-2 py-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg text-[10px] font-bold">
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <p className="text-[10px] text-on-surface-variant">
-                {t.experimentStageName || t.batchCode || t.experimentTitle ? `${t.experimentStageName || ''} ${t.batchCode || ''} ${t.experimentTitle || ''}` : ''} · {t.dueDate ? new Date(t.dueDate).toLocaleDateString('vi-VN') : '—'}
-              </p>
-              {t.assignedToName && <p className="text-[10px] text-emerald-600 font-semibold">👤 {t.assignedToName}</p>}
-            </div>
-            <div className="flex items-center gap-1 shrink-0 flex-wrap">
-              <button onClick={() => onSkillMatch(t.id)}
-                className="px-2 py-1 bg-yellow-100 hover:bg-yellow-200 text-yellow-700 rounded-lg text-[10px] font-bold">
-                🎯 Match
-              </button>
-              <button onClick={() => onReassign(t.id)}
-                className="px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-[10px] font-bold">
-                🔄 Reassign
-              </button>
-              <button onClick={() => onDelete(t.id)} className="px-2 py-1 text-rose-400 hover:text-rose-600 text-[10px] font-bold">✕</button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Modal Gán tác vụ */}
+      {assignModalTask && (
+        <Portal>
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[4000] flex items-center justify-center p-4 animate-fade-in">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-scale-in">
+              <div className="px-6 py-4 border-b border-outline-variant bg-gradient-to-r from-emerald-50 to-teal-50">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="font-hanken font-bold text-lg text-emerald-900">🎯 Gán Tác Vụ</h3>
+                    <p className="text-xs text-emerald-700 mt-0.5 truncate">{assignModalTask.title || '—'}</p>
+                  </div>
+                  <button onClick={() => setAssignModalTask(null)} className="text-gray-400 hover:text-gray-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
+                {/* Task info */}
+                <div className="bg-slate-50 rounded-xl p-3 space-y-1.5 border border-slate-200">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-slate-400">Loại:</span>
+                    <span className="font-semibold">{assignModalTask.taskType || '—'}</span>
+                  </div>
+                  {assignModalTask.dueDate && (
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-slate-400">Hạn:</span>
+                      <span className="font-semibold">{new Date(assignModalTask.dueDate).toLocaleDateString('vi-VN')}</span>
+                    </div>
+                  )}
+                  {assignModalTask.requiredSkillDescription && (
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-slate-400">Kỹ năng:</span>
+                      <span className="font-semibold">{assignModalTask.requiredSkillDescription}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Skill matches */}
+                <div>
+                  <p className="text-[10px] font-bold uppercase text-on-surface-variant mb-2">Người phù hợp (skill match)</p>
+                  {skillMatches.length === 0 ? (
+                    <p className="text-xs text-on-surface-variant italic py-2">Đang tìm người phù hợp...</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {skillMatches.map(m => (
+                        <button key={m.userId} type="button"
+                          onClick={() => setAssignForm({ ...assignForm, assigneeId: m.userId })}
+                          className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-all text-left ${
+                            assignForm.assigneeId === m.userId
+                              ? 'border-emerald-500 bg-emerald-50 shadow-md'
+                              : 'border-outline-variant bg-white hover:border-emerald-200'
+                          }`}>
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white flex items-center justify-center text-sm font-bold shrink-0">
+                            {(m.fullName || m.userId || '?')[0]?.toUpperCase()}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-on-surface truncate">{m.fullName || m.userId}</p>
+                            <p className="text-[10px] text-on-surface-variant">{m.roleName || '—'}</p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <div className="text-xs font-bold text-emerald-700">{m.matchScore || 0}%</div>
+                            <div className="text-[10px] text-on-surface-variant">match</div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Manual select */}
+                <div>
+                  <p className="text-[10px] font-bold uppercase text-on-surface-variant mb-2">Hoặc chọn thủ công</p>
+                  <select value={assignForm.assigneeId} onChange={e => setAssignForm({ ...assignForm, assigneeId: e.target.value })}
+                    className="w-full px-3 py-2.5 border border-outline-variant rounded-xl text-sm bg-white">
+                    <option value="">— Chọn người dùng —</option>
+                    {users.map(u => <option key={u.id} value={u.id}>{u.fullName || u.email}</option>)}
+                  </select>
+                </div>
+
+                {/* Reason */}
+                <div>
+                  <p className="text-[10px] font-bold uppercase text-on-surface-variant mb-2">Lý do gán (tùy chọn)</p>
+                  <input value={assignForm.reason} onChange={e => setAssignForm({ ...assignForm, reason: e.target.value })}
+                    placeholder="VD: Người phụ trách khu vực này"
+                    className="w-full px-3 py-2 border border-outline-variant rounded-xl text-sm bg-white" />
+                </div>
+              </div>
+              <div className="px-6 py-4 border-t border-outline-variant flex justify-end gap-2 bg-slate-50">
+                <button onClick={() => setAssignModalTask(null)}
+                  className="px-5 py-2 border border-outline-variant rounded-xl text-sm font-bold hover:bg-white">
+                  Hủy
+                </button>
+                <button onClick={handleConfirmAssign} disabled={!assignForm.assigneeId}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50">
+                  ✅ Xác Nhận Gán
+                </button>
+              </div>
             </div>
           </div>
-        ))}
-      </div>
-    }
-  </div>
-);
+        </Portal>
+      )}
+    </div>
+  );
+};
 
 // ── Create Experiment Modal ─────────────────────────────────────────────────────────
 
 const CreateExpModal = ({ open, onClose, farms, cropVarieties, form, setForm, errors, onSubmit, loading }) => {
   if (!open) return null;
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4 animate-fade-in">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden max-h-[90vh] flex flex-col">
         <div className="px-6 py-4 border-b border-outline-variant flex justify-between items-center shrink-0 bg-indigo-50">
@@ -1668,13 +1922,18 @@ const CreateExpModal = ({ open, onClose, farms, cropVarieties, form, setForm, er
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-bold text-on-surface-variant mb-1">Ngày Bắt Đầu</label>
-                <input type="date" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })}
-                  className="w-full px-3 py-2.5 border border-outline-variant rounded-xl bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+                <label className="block text-xs font-bold text-on-surface-variant mb-1">Ngày Bắt Đầu <span className="text-rose-500">*</span></label>
+                <input type="date"
+                  min={new Date().toISOString().split('T')[0]}
+                  value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })}
+                  className={`w-full px-3 py-2.5 border rounded-xl bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 ${errors.startDate ? 'border-rose-400 bg-rose-50' : 'border-outline-variant'}`} />
+                {errors.startDate && <p className="text-xs text-rose-600 mt-1">{errors.startDate}</p>}
               </div>
               <div>
                 <label className="block text-xs font-bold text-on-surface-variant mb-1">Ngày Kết Thúc</label>
-                <input type="date" value={form.endDate} onChange={e => setForm({ ...form, endDate: e.target.value })}
+                <input type="date"
+                  min={form.startDate || new Date().toISOString().split('T')[0]}
+                  value={form.endDate} onChange={e => setForm({ ...form, endDate: e.target.value })}
                   className={`w-full px-3 py-2.5 border rounded-xl bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 ${errors.endDate ? 'border-rose-400 bg-rose-50' : 'border-outline-variant'}`} />
                 {errors.endDate && <p className="text-xs text-rose-600 mt-1">{errors.endDate}</p>}
               </div>
@@ -1693,6 +1952,7 @@ const CreateExpModal = ({ open, onClose, farms, cropVarieties, form, setForm, er
         </div>
       </div>
     </div>
+    </Portal>
   );
 };
 

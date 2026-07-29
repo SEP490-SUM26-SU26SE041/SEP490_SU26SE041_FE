@@ -1,14 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useToast } from '../../context/ToastContext';
-import { tasksApi, taskReportsApi } from '../../api/sharedTaskApi';
-import { farmsApi, cropsApi, experimentsApi } from '../../api/studentTechApi';
+import { tasksApi, taskReportsApi, measurementRecordsApi } from '../../api/sharedTaskApi';
+import { experimentsApi } from '../../api/studentTechApi';
+import { batchesApi } from '../../api/experimentApi';
 
 const STU_TABS = [
   { id: 'overview', label: 'Tổng Quan', icon: '🏠' },
   { id: 'tasks', label: 'Công Việc', icon: '📋' },
   { id: 'reports', label: 'Báo Cáo', icon: '📝' },
   { id: 'morphology', label: 'Ghi Nhận', icon: '📊' },
-  { id: 'farms', label: 'Nông Trại', icon: '🌾' },
 ];
 
 const TASK_TABS = [
@@ -29,6 +30,15 @@ const STATUS_COLORS = {
 const TASK_TYPE_ICONS = {
   Planting: '🌱', Watering: '💧', Fertilizing: '🧪',
   Observation: '👁️', Inspection: '🔍', Harvest: '🌾', Other: '📋'
+};
+
+// ── Portal helper ─────────────────────────────────────────────────────────────
+// Render modals at document root so they escape the dashboard's stacking
+// context (which has z-[1000]) and always sit above the SharedSidebar (z-50).
+
+const Portal = ({ children }) => {
+  if (typeof document === 'undefined') return null;
+  return createPortal(children, document.body);
 };
 
 // ── Student Dashboard ──────────────────────────────────────────────────────────
@@ -76,7 +86,6 @@ const StudentDashboard = () => {
               {activeTab === 'tasks' && 'Danh sách công việc được giao'}
               {activeTab === 'reports' && 'Báo cáo tác vụ đã gửi'}
               {activeTab === 'morphology' && 'Ghi nhận dữ liệu hình thái học'}
-              {activeTab === 'farms' && 'Thông tin nông trại'}
             </p>
           </div>
 
@@ -84,7 +93,6 @@ const StudentDashboard = () => {
           {activeTab === 'tasks' && <StudentTasksTab />}
           {activeTab === 'reports' && <StudentReportsTab />}
           {activeTab === 'morphology' && <StudentMorphologySection setActiveTab={setActiveTab} />}
-          {activeTab === 'farms' && <StudentFarmsTab />}
         </div>
       </main>
     </div>
@@ -239,14 +247,6 @@ const StudentTasksTab = () => {
     } catch (err) { showToast(err.message || 'Không thể bắt đầu', 'error'); }
   };
 
-  const handleComplete = async (task) => {
-    try {
-      await tasksApi.complete(task.id);
-      showToast('Đã hoàn thành tác vụ!', 'success');
-      fetchTasks();
-    } catch (err) { showToast(err.message || 'Không thể hoàn thành', 'error'); }
-  };
-
   const openDetail = (task) => {
     setSelectedTask(task);
     setShowDetail(true);
@@ -310,7 +310,7 @@ const StudentTasksTab = () => {
                       <button onClick={() => handleStart(task)} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/20 transition-all">▶ Bắt Đầu</button>
                     )}
                     {task.status === 'InProgress' && (
-                      <button onClick={() => handleComplete(task)} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all">✅ Hoàn Thành</button>
+                      <button onClick={() => openDetail(task)} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all">✅ Hoàn Thành</button>
                     )}
                   </div>
                 </div>
@@ -332,21 +332,28 @@ const StudentTasksTab = () => {
 
 const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
   const { showToast } = useToast();
+  const [activeTab, setActiveTab] = useState('overview');
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [reportText, setReportText] = useState('');
   const [resultData, setResultData] = useState([{ key: '', value: '' }]);
   const [saving, setSaving] = useState(false);
+  const [completing, setCompleting] = useState(false);
+  const [imageUrl, setImageUrl] = useState('');
+  const [imageCaption, setImageCaption] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [displayedReportText, setDisplayedReportText] = useState('');
+  const [displayedResultData, setDisplayedResultData] = useState([{ key: '', value: '' }]);
 
   useEffect(() => {
-    const fetchReports = async () => {
+    const fetchData = async () => {
       try {
         setLoading(true);
         const data = await taskReportsApi.getByTask(task.id);
         setReports(Array.isArray(data) ? data : []);
       } catch { setReports([]); } finally { setLoading(false); }
     };
-    fetchReports();
+    fetchData();
   }, [task.id]);
 
   const handleSubmitReport = async (e) => {
@@ -362,8 +369,58 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
       setResultData([{ key: '', value: '' }]);
       const data = await taskReportsApi.getByTask(task.id);
       setReports(Array.isArray(data) ? data : []);
+      if (onUpdated) onUpdated();
     } catch (err) { showToast(err.message || 'Lỗi gửi báo cáo', 'error'); }
     finally { setSaving(false); }
+  };
+
+  // Business rule: phải gửi báo cáo trước, sau đó mới được complete
+  const handleCompleteTask = async () => {
+    if (!reportText.trim()) {
+      showToast('Vui lòng nhập nội dung báo cáo trước khi hoàn thành', 'error');
+      setActiveTab('report');
+      return;
+    }
+    try {
+      setCompleting(true);
+      const dataObj = {};
+      resultData.forEach(r => { if (r.key.trim()) dataObj[r.key.trim()] = r.value; });
+      await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
+      await tasksApi.complete(task.id);
+      showToast('Đã hoàn thành tác vụ và gửi báo cáo!', 'success');
+      if (onUpdated) onUpdated();
+      onClose();
+    } catch (err) {
+      showToast(err.message || 'Không thể hoàn thành tác vụ', 'error');
+    } finally {
+      setCompleting(false);
+    }
+  };
+
+  const handleUploadImage = async (e) => {
+    e.preventDefault();
+    if (!imageUrl.trim()) { showToast('Vui lòng nhập URL ảnh', 'error'); return; }
+    try {
+      setUploading(true);
+      const token = localStorage.getItem('token');
+      await fetch('/api/task-images/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          taskId: task.id,
+          taskReportId: null,
+          experimentId: task.experimentId || '00000000-0000-0000-0000-000000000000',
+          batchId: task.batchId || '00000000-0000-0000-0000-000000000000',
+          imageUrl: imageUrl.trim(),
+          caption: imageCaption.trim(),
+          capturedAt: new Date().toISOString()
+        })
+      });
+      showToast('Đã upload ảnh!', 'success');
+      setImageUrl('');
+      setImageCaption('');
+    } catch (err) { showToast(err.message || 'Lỗi upload ảnh', 'error'); }
+    finally { setUploading(false); }
   };
 
   const updateResult = (idx, field, value) => {
@@ -372,309 +429,1039 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
 
   const statusColors = STATUS_COLORS[task.status] || 'bg-slate-100 text-slate-600';
   const statusLabel = { Pending: 'Chờ', InProgress: 'Đang Làm', Completed: 'Hoàn Thành', Overdue: 'Quá Hạn' }[task.status] || task.status;
+  const isCompleted = task.status === 'Completed';
+  const isInProgress = task.status === 'InProgress';
+  const isPending = task.status === 'Pending';
+  const reportCount = reports.length;
+
+  const TABS = [
+    { id: 'overview', label: 'Tổng Quan', icon: '📋' },
+    { id: 'report', label: 'Báo Cáo', icon: '📝', badge: !isCompleted ? null : null },
+    { id: 'images', label: 'Hình Ảnh', icon: '📷' },
+    { id: 'history', label: 'Lịch Sử', icon: '📜', badge: reportCount > 0 ? reportCount : null },
+  ];
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-        <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center sticky top-0 bg-white rounded-t-2xl z-10">
-          <div>
-            <h3 className="font-bold text-lg text-slate-900">Chi Tiết Tác Vụ</h3>
-            <p className="text-xs text-slate-400">{task.title || '—'}</p>
+    <Portal>
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[9999] flex items-center justify-center p-4 animate-fade-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="px-6 py-5 border-b border-slate-200 bg-gradient-to-r from-blue-50 via-white to-indigo-50 shrink-0">
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-2xl shrink-0 shadow-lg shadow-blue-600/20">
+                {TASK_TYPE_ICONS[task.taskType] || '📋'}
+              </div>
+              <div className="min-w-0">
+                <h3 className="font-bold text-lg text-slate-900 truncate">{task.title || '—'}</h3>
+                <p className="text-xs text-slate-500 mt-0.5 truncate">🧪 {task.experimentTitle || '—'} {task.batchCode && `· 📦 ${task.batchCode}`}</p>
+              </div>
+            </div>
+            <button onClick={onClose} className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-white/60 transition-colors shrink-0">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold ${statusColors}`}>
+              <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70" />
+              {statusLabel}
+            </span>
+            {task.dueDate && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 text-slate-700">
+                📅 {new Date(task.dueDate).toLocaleDateString('vi-VN')}
+              </span>
+            )}
+            {task.experimentStageName && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-white border border-slate-200 text-slate-700">
+                🎯 {task.experimentStageName}
+              </span>
+            )}
+          </div>
         </div>
 
-        <div className="p-6 space-y-6">
-          {/* Task Info */}
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            {[
-              { label: 'Loại', value: task.taskType || '—' },
-              { label: 'Trạng thái', value: statusLabel },
-              { label: 'Thí nghiệm', value: task.experimentTitle || '—' },
-              { label: 'Batch', value: task.batchCode || '—' },
-              { label: 'Giai đoạn', value: task.experimentStageName || '—' },
-              { label: 'Hạn chót', value: task.dueDate ? new Date(task.dueDate).toLocaleDateString('vi-VN') : '—' },
-              { label: 'Người giao', value: task.createdByName || '—' },
-              { label: 'Yêu cầu kỹ năng', value: task.requiredSkillDescription || '—' },
-            ].map(item => (
-              <div key={item.label} className="p-3 bg-slate-50 rounded-xl">
-                <p className="text-[10px] text-slate-400 font-bold uppercase">{item.label}</p>
-                <p className="font-semibold text-slate-900 text-xs mt-0.5">{item.value}</p>
-              </div>
+        {/* Tabs */}
+        <div className="border-b border-slate-200 bg-slate-50/40 px-6 shrink-0">
+          <div className="flex items-center gap-1 -mb-px">
+            {TABS.map(tab => (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                className={`relative px-4 py-3 text-sm font-bold transition-all flex items-center gap-2 border-b-2 ${
+                  activeTab === tab.id
+                    ? 'border-blue-600 text-blue-700'
+                    : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}>
+                <span>{tab.icon}</span>
+                <span>{tab.label}</span>
+                {tab.badge && (
+                  <span className="ml-1 px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold">
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
             ))}
           </div>
-          {task.description && (
-            <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
-              <p className="text-[10px] text-blue-400 font-bold uppercase mb-1">Mô tả</p>
-              <p className="text-sm text-slate-700">{task.description}</p>
+        </div>
+
+        {/* Body - scrollable */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {activeTab === 'overview' && (
+            <div className="space-y-5">
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { label: 'Loại', value: task.taskType || '—', icon: '🏷️' },
+                  { label: 'Hạn chót', value: task.dueDate ? new Date(task.dueDate).toLocaleDateString('vi-VN') : '—', icon: '📅' },
+                  { label: 'Thí nghiệm', value: task.experimentTitle || '—', icon: '🧪' },
+                  { label: 'Batch', value: task.batchCode || '—', icon: '📦' },
+                  { label: 'Giai đoạn', value: task.experimentStageName || '—', icon: '🎯' },
+                  { label: 'Người giao', value: task.createdByName || '—', icon: '👤' },
+                  { label: 'Lịch chăm sóc', value: task.careScheduleTitle || '—', icon: '📅' },
+                  { label: 'Yêu cầu kỹ năng', value: task.requiredSkillDescription || '—', icon: '⚙️' },
+                ].map(item => (
+                  <div key={item.label} className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
+                    <p className="text-[10px] text-slate-400 font-bold uppercase flex items-center gap-1.5">
+                      <span>{item.icon}</span>{item.label}
+                    </p>
+                    <p className="font-semibold text-slate-900 text-sm mt-1 truncate">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {task.description && (
+                <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
+                  <p className="text-[10px] text-blue-600 font-bold uppercase mb-1.5 flex items-center gap-1.5">📝 Mô tả</p>
+                  <p className="text-sm text-slate-700 whitespace-pre-line">{task.description}</p>
+                </div>
+              )}
+
+              {/* Skill Requirements */}
+              {Array.isArray(task.skillRequirements) && task.skillRequirements.length > 0 && (
+                <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-[10px] text-indigo-600 font-bold uppercase flex items-center gap-1.5">⚙️ Yêu Cầu Kỹ Năng</p>
+                    <span className="text-[10px] font-bold text-indigo-700 bg-white px-2 py-0.5 rounded-full border border-indigo-200">
+                      {task.skillRequirements.length} kỹ năng
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {task.skillRequirements.map((sk, idx) => (
+                      <div key={sk.skillId || idx} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-indigo-100">
+                        <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-sm text-slate-900 truncate">{sk.skillName || `Skill ${sk.skillId?.slice(0, 8) || idx}`}</p>
+                          <p className="text-[10px] text-slate-500 font-mono">{sk.skillId}</p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase">Level</span>
+                          <div className="flex gap-0.5">
+                            {[1, 2, 3, 4, 5].map(level => (
+                              <span key={level}
+                                className={`w-2 h-4 rounded-sm ${level <= (sk.requiredLevel || 0) ? 'bg-indigo-500' : 'bg-slate-200'}`} />
+                            ))}
+                          </div>
+                          <span className="ml-1 text-xs font-bold text-indigo-600 w-4 text-center">{sk.requiredLevel || 0}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Report Form */}
-          <div className="border-t border-slate-200 pt-6">
-            <h4 className="font-bold text-sm text-slate-900 mb-3">📝 Gửi Báo Cáo Học Tập</h4>
-            <form onSubmit={handleSubmitReport} className="space-y-3">
-              <textarea value={reportText} onChange={e => setReportText(e.target.value)} rows={3}
-                placeholder="Mô tả kết quả quan sát và học tập của bạn..."
-                className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
-              <div className="space-y-1">
-                {resultData.map((r, idx) => (
-                  <div key={idx} className="flex gap-2">
-                    <input type="text" value={r.key} placeholder="Key (VD: plantsObserved)"
-                      onChange={e => updateResult(idx, 'key', e.target.value)}
-                      className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                    <input type="text" value={r.value} placeholder="Giá trị"
-                      onChange={e => updateResult(idx, 'value', e.target.value)}
-                      className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                    {resultData.length > 1 && (
-                      <button type="button" onClick={() => setResultData(prev => prev.filter((_, i) => i !== idx))} className="text-rose-500 font-bold">✕</button>
-                    )}
+          {activeTab === 'report' && (
+            <div className="space-y-4">
+              {!isCompleted && (
+                <div className={`p-3 rounded-xl border text-sm font-semibold flex items-start gap-2 ${
+                  isInProgress ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-blue-50 border-blue-200 text-blue-800'
+                }`}>
+                  <span className="text-lg shrink-0">{isInProgress ? '⚠️' : 'ℹ️'}</span>
+                  <div>
+                    <p className="font-bold">{isInProgress ? 'Báo cáo là bắt buộc để hoàn thành' : 'Gửi báo cáo cho tác vụ'}</p>
+                    <p className="text-xs mt-0.5 opacity-80">
+                      {isInProgress ? 'Sau khi bấm "Hoàn Thành", tác vụ sẽ chuyển sang trạng thái Hoàn Thành.' : 'Có thể gửi báo cáo bất kỳ lúc nào, tác vụ vẫn ở trạng thái Chờ.'}
+                    </p>
                   </div>
-                ))}
-              </div>
-              <button type="button" onClick={() => setResultData(prev => [...prev, { key: '', value: '' }])} className="text-xs text-blue-600 font-semibold hover:underline">+ Thêm dữ liệu</button>
-              <button type="submit" disabled={saving}
-                className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20 disabled:opacity-50">
-                {saving ? 'Đang gửi...' : 'Gửi Báo Cáo'}
-              </button>
-            </form>
-          </div>
-
-          {/* Reports */}
-          {reports.length > 0 && (
-            <div className="border-t border-slate-200 pt-6">
-              <h4 className="font-bold text-sm text-slate-900 mb-3">Báo Cáo Đã Gửi ({reports.length})</h4>
-              <div className="space-y-3 max-h-60 overflow-y-auto">
-                {reports.map(r => (
-                  <div key={r.id} className="p-3 bg-green-50 rounded-xl border border-green-100">
-                    <div className="flex justify-between mb-1">
-                      <p className="text-[10px] text-green-600 font-mono font-bold">{r.id}</p>
-                      <p className="text-[10px] text-slate-400">{r.createdAt ? new Date(r.createdAt).toLocaleString('vi-VN') : '—'}</p>
-                    </div>
-                    <p className="text-xs text-slate-700">{r.reportText}</p>
-                    {r.resultData && Object.keys(r.resultData).length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        {Object.entries(r.resultData).map(([k, v]) => (
-                          <span key={k} className="px-2 py-0.5 bg-green-200 text-green-800 rounded-full text-[10px] font-mono font-bold">
-                            {k}: {String(v)}
-                          </span>
-                        ))}
+                </div>
+              )}
+              <form onSubmit={handleSubmitReport} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
+                    <span>Nội dung báo cáo {isInProgress && <span className="text-rose-500">*</span>}</span>
+                    <span className="text-[10px] text-slate-400 font-normal">{reportText.length} ký tự</span>
+                  </label>
+                  <textarea value={reportText} onChange={e => setReportText(e.target.value)} rows={5}
+                    placeholder="Mô tả kết quả quan sát, các phát hiện và bài học rút ra..."
+                    disabled={isCompleted}
+                    className="w-full px-4 py-3 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 resize-none bg-white disabled:bg-slate-50 disabled:text-slate-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Dữ liệu định lượng <span className="text-slate-400 font-normal">(tùy chọn)</span></label>
+                  <div className="space-y-2">
+                    {resultData.map((r, idx) => (
+                      <div key={idx} className="flex gap-2">
+                        <input type="text" value={r.key} placeholder="Key (VD: plantsObserved)"
+                          disabled={isCompleted}
+                          onChange={e => updateResult(idx, 'key', e.target.value)}
+                          className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 bg-white font-mono disabled:bg-slate-50" />
+                        <input type="text" value={r.value} placeholder="Giá trị"
+                          disabled={isCompleted}
+                          onChange={e => updateResult(idx, 'value', e.target.value)}
+                          className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 bg-white disabled:bg-slate-50" />
+                        {resultData.length > 1 && !isCompleted && (
+                          <button type="button" onClick={() => setResultData(prev => prev.filter((_, i) => i !== idx))}
+                            className="px-2 text-rose-500 hover:bg-rose-50 rounded-lg font-bold">✕</button>
+                        )}
                       </div>
+                    ))}
+                    {!isCompleted && (
+                      <button type="button" onClick={() => setResultData(prev => [...prev, { key: '', value: '' }])}
+                        className="text-xs text-blue-600 font-semibold hover:underline inline-flex items-center gap-1">
+                        <span>＋</span> Thêm dòng dữ liệu
+                      </button>
                     )}
                   </div>
-                ))}
+                </div>
+                {!isCompleted && (
+                  <div className="flex gap-2 pt-2">
+                    <button type="submit" disabled={saving || !reportText.trim()}
+                      className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2">
+                      <span>✉️</span>
+                      {saving ? 'Đang gửi...' : 'Gửi Báo Cáo'}
+                    </button>
+                  </div>
+                )}
+              </form>
+            </div>
+          )}
+
+          {activeTab === 'images' && (
+            <div className="space-y-4">
+              {!isCompleted && (
+                <form onSubmit={handleUploadImage} className="space-y-3 bg-gradient-to-br from-teal-50 to-emerald-50 p-4 rounded-xl border border-teal-200">
+                  <p className="text-xs font-bold text-teal-800 uppercase flex items-center gap-1.5">📷 Upload Ảnh Minh Chứng</p>
+                  <input type="text" value={imageUrl} onChange={e => setImageUrl(e.target.value)}
+                    placeholder="URL ảnh (sau khi upload lên storage)"
+                    className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 bg-white" />
+                  <input type="text" value={imageCaption} onChange={e => setImageCaption(e.target.value)}
+                    placeholder="Mô tả ảnh (tùy chọn)"
+                    className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 bg-white" />
+                  <button type="submit" disabled={uploading || !imageUrl.trim()}
+                    className="w-full py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-teal-600/20 disabled:opacity-50 transition-all flex items-center justify-center gap-2">
+                    <span>📤</span>
+                    {uploading ? 'Đang upload...' : 'Upload Ảnh'}
+                  </button>
+                </form>
+              )}
+
+              {/* Reports images gallery */}
+              <div>
+                <p className="text-xs font-bold text-slate-700 mb-3 flex items-center justify-between">
+                  <span>📷 Thư Viện Ảnh</span>
+                  <span className="text-[10px] text-slate-400 font-normal">{reports.reduce((sum, r) => sum + (Array.isArray(r.images) ? r.images.length : 0), 0)} ảnh</span>
+                </p>
+                {reports.reduce((sum, r) => sum + (Array.isArray(r.images) ? r.images.length : 0), 0) === 0 ? (
+                  <div className="text-center text-sm text-slate-400 py-12 border-2 border-dashed border-slate-200 rounded-xl">
+                    <div className="text-4xl mb-2">🖼️</div>
+                    <p>Chưa có ảnh minh chứng nào</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                    {reports.flatMap(r => (Array.isArray(r.images) ? r.images : []).map((img, i) => (
+                      <a key={`${r.id}-${i}`} href={img.url || img} target="_blank" rel="noopener noreferrer"
+                        className="aspect-square rounded-lg overflow-hidden border border-slate-200 hover:border-blue-400 hover:shadow-md transition-all group">
+                        <img src={img.url || img} alt={img.name || 'img'} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                      </a>
+                    )))}
+                  </div>
+                )}
               </div>
+            </div>
+          )}
+
+          {activeTab === 'history' && (
+            <div className="space-y-3">
+              {loading ? (
+                <div className="text-center text-sm text-slate-400 py-12">Đang tải...</div>
+              ) : reports.length === 0 ? (
+                <div className="text-center text-sm text-slate-400 py-12 border-2 border-dashed border-slate-200 rounded-xl">
+                  <div className="text-4xl mb-2">📭</div>
+                  <p>Chưa có báo cáo nào</p>
+                </div>
+              ) : (
+                <div className="relative pl-6">
+                  <div className="absolute left-2 top-2 bottom-2 w-0.5 bg-slate-200" />
+                  {reports.map((r, idx) => {
+                    const resultEntries = r.resultData && typeof r.resultData === 'object' ? Object.entries(r.resultData) : [];
+                    const imageList = Array.isArray(r.images) ? r.images : [];
+                    const dateText = r.reportedAt || r.createdAt;
+                    const reporterName = r.reporterName || r.reportedByName || 'Bạn';
+                    return (
+                      <div key={r.id} className="relative pb-5 last:pb-0">
+                        <div className="absolute -left-[14px] top-1 w-4 h-4 rounded-full bg-blue-500 border-2 border-white shadow" />
+                        <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                          <div className="flex justify-between items-start gap-2 mb-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <div className="w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-[11px] font-bold shrink-0">
+                                {reporterName.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="font-semibold text-xs text-slate-900 truncate">{reporterName}</p>
+                                <p className="text-[10px] text-slate-500">Báo cáo #{reports.length - idx}</p>
+                              </div>
+                            </div>
+                            <span className="text-[10px] text-slate-500 shrink-0 font-mono">
+                              {dateText ? new Date(dateText).toLocaleString('vi-VN') : '—'}
+                            </span>
+                          </div>
+                          {r.reportText && (
+                            <p className="text-xs text-slate-700 whitespace-pre-line">{r.reportText}</p>
+                          )}
+                          {resultEntries.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {resultEntries.map(([k, v]) => (
+                                <span key={k} className="px-2 py-0.5 bg-white border border-blue-200 text-blue-800 rounded-full text-[10px] font-mono font-bold">
+                                  {k}: <span className="text-slate-900">{String(v)}</span>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {imageList.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 mt-2">
+                              {imageList.map((img, i) => (
+                                <a key={i} href={img.url || img} target="_blank" rel="noopener noreferrer"
+                                  className="block w-12 h-12 rounded-md overflow-hidden border border-blue-200 hover:opacity-80">
+                                  <img src={img.url || img} alt={img.name || `img-${i}`} className="w-full h-full object-cover" />
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Footer - STICKY với action phù hợp theo tab và status */}
+        <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 shrink-0">
+          {isInProgress ? (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs text-slate-600 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                  <span className="text-sm">⚠️</span>
+                </div>
+                <div className="min-w-0">
+                  <p className="font-bold text-slate-800 text-sm">Quy trình nghiệp vụ</p>
+                  <p className="text-[10px] text-slate-500 truncate">Báo cáo bắt buộc trước khi hoàn thành</p>
+                </div>
+              </div>
+              <div className="flex gap-2 shrink-0">
+                <button onClick={onClose}
+                  className="px-4 py-2 border border-slate-300 rounded-xl text-sm font-semibold hover:bg-white transition-colors">
+                  Đóng
+                </button>
+                <button onClick={handleCompleteTask} disabled={completing || !reportText.trim()}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2">
+                  <span>✅</span>
+                  {completing ? 'Đang hoàn thành...' : 'Hoàn Thành & Gửi Báo Cáo'}
+                </button>
+              </div>
+            </div>
+          ) : isCompleted ? (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs text-slate-600">
+                <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                  <span className="text-sm">✓</span>
+                </div>
+                <div>
+                  <p className="font-bold text-slate-800 text-sm">Tác vụ đã hoàn thành</p>
+                  <p className="text-[10px] text-slate-500">Báo cáo đã được lưu vào hệ thống</p>
+                </div>
+              </div>
+              <button onClick={onClose}
+                className="px-5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-sm font-bold transition-colors">
+                Đóng
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs text-slate-600">
+                <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center">
+                  <span className="text-sm">⏳</span>
+                </div>
+                <div>
+                  <p className="font-bold text-slate-800 text-sm">Tác vụ đang chờ</p>
+                  <p className="text-[10px] text-slate-500">Bấm "Bắt Đầu" ở danh sách để tiến hành</p>
+                </div>
+              </div>
+              <button onClick={onClose}
+                className="px-5 py-2 border border-slate-300 rounded-xl text-sm font-semibold hover:bg-white transition-colors">
+                Đóng
+              </button>
             </div>
           )}
         </div>
       </div>
     </div>
+    </Portal>
   );
 };
 
-// ── Student Morphology Section ─────────────────────────────────────────────────
+// ── Student Morphology / Growth Records Section ────────────────────────────────
 
-const StudentMorphologySection = ({ setActiveTab }) => (
-  <div className="animate-fade-in space-y-6">
-    <div className="bg-gradient-to-r from-indigo-500 to-purple-500 rounded-2xl p-6 text-white shadow-lg">
-      <h3 className="font-hanken text-xl font-bold mb-2">Ghi Nhận Dữ Liệu Hình Thái</h3>
-      <p className="text-indigo-100 text-sm">Thu thập các chỉ số sinh học định tính của cây trồng mà cảm biến IoT không thể đo được.</p>
+const StudentMorphologySection = ({ setActiveTab }) => {
+  const { showToast } = useToast();
+  const [records, setRecords] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [selectedBatch, setSelectedBatch] = useState('');
+  const [filterBatchId, setFilterBatchId] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [showEntryModal, setShowEntryModal] = useState(false);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        setLoading(true);
+        const myTasks = await tasksApi.getMy().catch(() => []);
+        const taskList = Array.isArray(myTasks) ? myTasks : [];
+        setTasks(taskList);
+
+        const seen = new Set();
+        const batchIds = [];
+        for (const t of taskList) {
+          if (t.batchId && !seen.has(t.batchId)) {
+            seen.add(t.batchId);
+            batchIds.push({ id: t.batchId, code: t.batchCode || t.batchId.slice(0, 8) });
+          }
+        }
+
+        if (batchIds.length === 0) { setRecords([]); return; }
+
+        const perBatch = await Promise.all(
+          batchIds.map(b =>
+            measurementRecordsApi.getByBatch(b.id)
+              .then(list => Array.isArray(list) ? list : [])
+              .catch(() => [])
+              .then(list => list.map(r => ({ ...r, batchCode: r.batchCode || b.code })))
+          )
+        );
+
+        const merged = perBatch
+          .flat()
+          .sort((a, b) => new Date(b.measuredAt || 0) - new Date(a.measuredAt || 0));
+        setRecords(merged);
+        if (batchIds.length > 0 && !selectedBatch) setSelectedBatch(batchIds[0].id);
+      } catch {
+        showToast('Không thể tải dữ liệu tăng trưởng', 'error');
+        setRecords([]);
+      } finally { setLoading(false); }
+    };
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const batchOptions = useMemo(() => {
+    const seen = new Set();
+    const opts = [];
+    for (const t of tasks) {
+      if (t.batchId && !seen.has(t.batchId)) {
+        seen.add(t.batchId);
+        opts.push({ id: t.batchId, label: t.batchCode || t.batchId.slice(0, 8) });
+      }
+    }
+    return opts;
+  }, [tasks]);
+
+  const fetchRecords = async (bId) => {
+    if (!bId) return;
+    try {
+      setLoading(true);
+      const data = await measurementRecordsApi.getByBatch(bId);
+      const list = Array.isArray(data) ? data : [];
+      setRecords(prev => {
+        const others = prev.filter(r => r.batchId !== bId);
+        return [...others, ...list];
+      });
+    } catch { showToast('Không thể tải dữ liệu', 'error'); }
+    finally { setLoading(false); }
+  };
+
+  const handleFilter = () => {
+    if (filterBatchId.trim()) fetchRecords(filterBatchId.trim());
+  };
+
+  const handleOpenFullEntry = () => {
+    setShowEntryModal(true);
+  };
+
+  const handleEntrySaved = async () => {
+    setShowEntryModal(false);
+    try {
+      setLoading(true);
+      const myTasks = await tasksApi.getMy().catch(() => []);
+      const taskList = Array.isArray(myTasks) ? myTasks : [];
+      setTasks(taskList);
+      const seen = new Set();
+      const batchIds = [];
+      for (const t of taskList) {
+        if (t.batchId && !seen.has(t.batchId)) {
+          seen.add(t.batchId);
+          batchIds.push({ id: t.batchId, code: t.batchCode || t.batchId.slice(0, 8) });
+        }
+      }
+      const perBatch = await Promise.all(
+        batchIds.map(b =>
+          measurementRecordsApi.getByBatch(b.id)
+            .then(list => Array.isArray(list) ? list : [])
+            .catch(() => [])
+            .then(list => list.map(r => ({ ...r, batchCode: r.batchCode || b.code })))
+        )
+      );
+      const merged = perBatch
+        .flat()
+        .sort((a, b) => new Date(b.measuredAt || 0) - new Date(a.measuredAt || 0));
+      setRecords(merged);
+    } catch { /* silent */ } finally { setLoading(false); }
+  };
+
+  const visibleRecords = useMemo(
+    () => selectedBatch
+      ? records.filter(r => r.batchId === selectedBatch || r.batchCode === selectedBatch)
+      : records,
+    [records, selectedBatch]
+  );
+
+  const stats = useMemo(() => {
+    const total = visibleRecords.length;
+    const today = visibleRecords.filter(r => {
+      const d = r.measuredAt ? new Date(r.measuredAt) : null;
+      if (!d) return false;
+      const now = new Date();
+      return d.toDateString() === now.toDateString();
+    }).length;
+    const batches = new Set(visibleRecords.map(r => r.batchId || r.batchCode)).size;
+    return { total, today, batches };
+  }, [visibleRecords]);
+
+  return (
+    <div className="animate-fade-in space-y-5">
+      {/* Hero */}
+      <div className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-2xl p-6 text-white shadow-lg">
+        <div className="flex justify-between items-start gap-3">
+          <div>
+            <h3 className="text-xl font-bold mb-2">Ghi Nhận Tăng Trưởng</h3>
+            <p className="text-indigo-100 text-sm">Thu thập các chỉ số sinh học định tính của cây trồng mà cảm biến IoT không thể đo được.</p>
+          </div>
+          <div className="text-4xl">📊</div>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Tổng bản ghi</p>
+          <p className="text-2xl font-bold text-indigo-600 mt-1">{stats.total}</p>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Hôm nay</p>
+          <p className="text-2xl font-bold text-emerald-600 mt-1">{stats.today}</p>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Số batch</p>
+          <p className="text-2xl font-bold text-purple-600 mt-1">{stats.batches}</p>
+        </div>
+      </div>
+
+      {/* Filter bar */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Lọc theo tác vụ (Batch)</label>
+            <select
+              value={selectedBatch}
+              onChange={e => setSelectedBatch(e.target.value)}
+              className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+            >
+              <option value="">— Tất cả batch —</option>
+              {batchOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Tìm bằng Batch ID</label>
+            <div className="flex gap-2">
+              <input type="text" value={filterBatchId} onChange={e => setFilterBatchId(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleFilter()}
+                placeholder="Nhập Batch ID..."
+                className="flex-1 px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white" />
+              <button onClick={handleFilter}
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-600/20">
+                Tìm
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-100">
+          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
+            {visibleRecords.length} bản ghi {selectedBatch ? '(đã lọc)' : '(tất cả batch của bạn)'}
+          </p>
+          <button onClick={handleOpenFullEntry}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-indigo-600/20 transition-all">
+            ➕ Ghi Nhận Mới
+          </button>
+        </div>
+      </div>
+
+      {/* Modal Ghi Nhận */}
+      {showEntryModal && (
+        <MorphologyEntryModal
+          onClose={() => setShowEntryModal(false)}
+          onSaved={handleEntrySaved}
+        />
+      )}
+
+      {/* Records table */}
+      {loading ? (
+        <div className="bg-white rounded-2xl p-12 text-center text-slate-400">Đang tải...</div>
+      ) : visibleRecords.length === 0 ? (
+        <div className="bg-white rounded-2xl p-12 text-center text-slate-400">
+          {selectedBatch || filterBatchId
+            ? 'Không có dữ liệu cho Batch này.'
+            : 'Chưa có bản ghi tăng trưởng nào.'}
+        </div>
+      ) : (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-indigo-50 border-b border-indigo-200">
+                <tr>
+                  {['Ngày đo', 'Batch', 'Chỉ số', 'Giá trị', 'Đơn vị', 'Giá trị mục tiêu', 'Người đo', 'Ghi chú'].map(h => (
+                    <th key={h} className="px-4 py-3 text-left text-xs font-bold text-indigo-700 uppercase tracking-wider">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRecords.map(r => (
+                  <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50 transition">
+                    <td className="px-4 py-3 text-xs text-slate-600 whitespace-nowrap">
+                      {r.measuredAt ? new Date(r.measuredAt).toLocaleString('vi-VN') : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-xs font-mono text-slate-500">{r.batchCode || '—'}</td>
+                    <td className="px-4 py-3 font-semibold text-slate-900 text-xs">{r.metricName || '—'}</td>
+                    <td className="px-4 py-3 font-bold text-indigo-700 text-xs">
+                      {r.value !== null && r.value !== undefined ? r.value : (r.textValue || '—')}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{r.unit || '—'}</td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{r.targetValue || '—'}</td>
+                    <td className="px-4 py-3 text-xs text-slate-500">{r.measuredByName || '—'}</td>
+                    <td className="px-4 py-3 text-xs text-slate-400 max-w-[150px] truncate">
+                      {r.extraData ? JSON.stringify(r.extraData) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
-    <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center">
-      <p className="text-slate-500 mb-4">Mở trang T19 để ghi nhận dữ liệu hình thái học.</p>
-      <button onClick={() => window.history.pushState(null, '', '/student/morphology-entry')}
-        className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold shadow-lg shadow-indigo-600/20 hover:bg-indigo-700 transition-all">
-        📊 Mở Ghi Nhận Hình Thái (T19)
-      </button>
+  );
+};
+
+// ── Morphology Entry Modal (in-dashboard, no route change) ────────────────────
+
+const MorphologyEntryModal = ({ onClose, onSaved }) => {
+  const { showToast } = useToast();
+  const [form, setForm] = useState({
+    experimentId: '',
+    experimentStageId: '',
+    batchId: '',
+    measurementDefinitionId: '',
+    value: '',
+    textValue: '',
+    measuredAt: new Date().toISOString().split('T')[0]
+  });
+  const [extraData, setExtraData] = useState([
+    { key: 'plantNumber', value: '' },
+    { key: 'location', value: '' },
+    { key: 'leafColor', value: 'Medium green' },
+    { key: 'stemCondition', value: 'Healthy' },
+    { key: 'pestSymptoms', value: 'None' },
+    { key: 'diseaseSymptoms', value: 'None' }
+  ]);
+  const [experiments, setExperiments] = useState([]);
+  const [stages, setStages] = useState([]);
+  const [batches, setBatches] = useState([]);
+  const [definitions, setDefinitions] = useState([]);
+  const [loadingInit, setLoadingInit] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        setLoadingInit(true);
+        const data = await experimentsApi.getAll().catch(() => []);
+        setExperiments(Array.isArray(data) ? data : []);
+      } catch { setExperiments([]); } finally { setLoadingInit(false); }
+    };
+    load();
+  }, []);
+
+  useEffect(() => {
+    const loadStages = async () => {
+      if (!form.experimentId) { setStages([]); return; }
+      try {
+        const data = await experimentsApi.getStages(form.experimentId).catch(() => []);
+        setStages(Array.isArray(data) ? data : []);
+      } catch { setStages([]); }
+    };
+    loadStages();
+  }, [form.experimentId]);
+
+  useEffect(() => {
+    const loadBatches = async () => {
+      if (!form.experimentId) { setBatches([]); return; }
+      try {
+        const data = batchesApi.getByExperiment ? await batchesApi.getByExperiment(form.experimentId) : [];
+        setBatches(Array.isArray(data) ? data : []);
+      } catch { setBatches([]); }
+    };
+    loadBatches();
+  }, [form.experimentId]);
+
+  useEffect(() => {
+    const loadDefs = async () => {
+      if (!form.experimentId) { setDefinitions([]); return; }
+      try {
+        const data = await experimentsApi.getMeasurements(form.experimentId).catch(() => []);
+        setDefinitions(Array.isArray(data) ? data : []);
+      } catch { setDefinitions([]); }
+    };
+    loadDefs();
+  }, [form.experimentId]);
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setForm(prev => ({ ...prev, [name]: value }));
+  };
+  const updateExtra = (idx, field, val) => {
+    setExtraData(prev => prev.map((r, i) => i === idx ? { ...r, [field]: val } : r));
+  };
+  const addExtra = () => setExtraData(prev => [...prev, { key: '', value: '' }]);
+  const removeExtra = (idx) => setExtraData(prev => prev.filter((_, i) => i !== idx));
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!form.experimentId) return showToast('Vui lòng chọn thí nghiệm', 'error');
+    if (!form.batchId) return showToast('Vui lòng chọn batch', 'error');
+    if (!form.value && !form.textValue) return showToast('Vui lòng nhập giá trị đo', 'error');
+
+    try {
+      setSaving(true);
+      const extraObj = {};
+      extraData.forEach(r => { if (r.key.trim()) extraObj[r.key.trim()] = r.value; });
+      await measurementRecordsApi.create({
+        experimentId: form.experimentId,
+        experimentStageId: form.experimentStageId || undefined,
+        batchId: form.batchId,
+        measurementDefinitionId: form.measurementDefinitionId || undefined,
+        value: form.value ? parseFloat(form.value) : undefined,
+        textValue: form.textValue || undefined,
+        extraData: Object.keys(extraObj).length > 0 ? extraObj : undefined,
+        measuredAt: form.measuredAt ? new Date(form.measuredAt).toISOString() : new Date().toISOString()
+      });
+      showToast('Đã ghi nhận đo lường!', 'success');
+      onSaved();
+    } catch (err) {
+      showToast(err.message || 'Không thể ghi nhận', 'error');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Portal>
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+        <div className="sticky top-0 bg-white px-6 py-4 border-b border-slate-200 flex justify-between items-center z-10 rounded-t-2xl">
+          <div>
+            <h3 className="font-bold text-lg text-slate-900">📊 Ghi Nhận Tăng Trưởng</h3>
+            <p className="text-xs text-slate-400">Form đầy đủ cho T19</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+
+        {loadingInit ? (
+          <div className="p-12 text-center text-slate-400">Đang tải...</div>
+        ) : (
+          <form onSubmit={handleSubmit} className="p-6 space-y-5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Thí nghiệm *</label>
+                <select name="experimentId" value={form.experimentId} onChange={handleChange}
+                  className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                  <option value="">— Chọn thí nghiệm —</option>
+                  {experiments.map(e => (
+                    <option key={e.id} value={e.id}>{e.title || e.name || e.id.slice(0, 8)}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Giai đoạn</label>
+                <select name="experimentStageId" value={form.experimentStageId} onChange={handleChange} disabled={!form.experimentId}
+                  className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white disabled:bg-slate-50">
+                  <option value="">— Chọn giai đoạn —</option>
+                  {stages.map(s => (
+                    <option key={s.id} value={s.id}>{s.name || s.stageName || s.id.slice(0, 8)}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Batch *</label>
+                <select name="batchId" value={form.batchId} onChange={handleChange} disabled={!form.experimentId}
+                  className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white disabled:bg-slate-50">
+                  <option value="">— Chọn batch —</option>
+                  {batches.map(b => (
+                    <option key={b.id} value={b.id}>{b.code || b.batchCode || b.id.slice(0, 8)}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Chỉ số đo</label>
+                <select name="measurementDefinitionId" value={form.measurementDefinitionId} onChange={handleChange} disabled={!form.experimentId}
+                  className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white disabled:bg-slate-50">
+                  <option value="">— Tùy chỉnh —</option>
+                  {definitions.map(d => (
+                    <option key={d.id} value={d.id}>{d.name || d.metricName || d.id.slice(0, 8)}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-indigo-50 p-4 rounded-xl border border-indigo-100">
+              <div>
+                <label className="block text-xs font-bold text-indigo-700 mb-1">Giá trị số</label>
+                <input type="number" step="0.01" name="value" value={form.value} onChange={handleChange}
+                  placeholder="VD: 12.5"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white" />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-xs font-bold text-indigo-700 mb-1">Giá trị chữ</label>
+                <input type="text" name="textValue" value={form.textValue} onChange={handleChange}
+                  placeholder="Hoặc nhập mô tả..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white" />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Ngày đo</label>
+              <input type="date" name="measuredAt" value={form.measuredAt} onChange={handleChange}
+                className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white" />
+            </div>
+
+            <div className="border-t border-slate-200 pt-4">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-bold text-slate-700 uppercase">Dữ liệu bổ sung (hình thái)</p>
+                <button type="button" onClick={addExtra}
+                  className="text-xs text-indigo-600 font-bold hover:underline">+ Thêm</button>
+              </div>
+              <div className="space-y-2">
+                {extraData.map((r, idx) => (
+                  <div key={idx} className="flex gap-2">
+                    <input type="text" value={r.key} placeholder="Key (VD: leafColor)"
+                      onChange={e => updateExtra(idx, 'key', e.target.value)}
+                      className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white" />
+                    <input type="text" value={r.value} placeholder="Giá trị"
+                      onChange={e => updateExtra(idx, 'value', e.target.value)}
+                      className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white" />
+                    <button type="button" onClick={() => removeExtra(idx)}
+                      className="px-2 text-rose-500 hover:bg-rose-50 rounded-lg font-bold">✕</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <button type="button" onClick={onClose}
+                className="px-5 py-2.5 border border-slate-300 text-slate-700 rounded-xl text-sm font-bold hover:bg-slate-50">
+                Hủy
+              </button>
+              <button type="submit" disabled={saving}
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-600/20 disabled:opacity-50 transition-all">
+                {saving ? '⏳ Đang lưu...' : '💾 Lưu Ghi Nhận'}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
     </div>
-  </div>
-);
+    </Portal>
+  );
+};
 
 // ── Student Reports Tab ────────────────────────────────────────────────────────
 
 const StudentReportsTab = () => {
   const { showToast } = useToast();
   const [reports, setReports] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [selectedTask, setSelectedTask] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchReports = async () => {
+    const load = async () => {
       try {
         setLoading(true);
-        const token = localStorage.getItem('token');
-        const data = await fetch('/api/task-reports', {
-          headers: { Authorization: `Bearer ${token}` }
-        }).then(r => r.json()).then(d => d.data || []);
-        setReports(Array.isArray(data) ? data : []);
-      } catch { setReports([]); } finally { setLoading(false); }
+        const myTasks = await tasksApi.getMy().catch(() => []);
+        const taskList = Array.isArray(myTasks) ? myTasks : [];
+        setTasks(taskList);
+
+        const perTask = await Promise.all(
+          taskList.map(t =>
+            taskReportsApi.getByTask(t.id)
+              .then(rep => Array.isArray(rep) ? rep : [])
+              .catch(() => [])
+              .then(list => list.map(r => ({
+                ...r,
+                taskId: t.id,
+                taskTitle: t.title,
+                experimentTitle: t.experimentTitle,
+                batchCode: t.batchCode,
+                stageName: t.experimentStageName,
+                taskType: t.taskType
+              })))
+          )
+        );
+
+        const merged = perTask
+          .flat()
+          .sort((a, b) => new Date(b.reportedAt || b.createdAt || 0) - new Date(a.reportedAt || a.createdAt || 0));
+        setReports(merged);
+      } catch {
+        showToast('Không thể tải báo cáo', 'error');
+        setReports([]);
+      } finally { setLoading(false); }
     };
-    fetchReports();
+    load();
   }, []);
+
+  const taskOptions = useMemo(() => {
+    const seen = new Set();
+    const opts = [];
+    for (const t of tasks) {
+      if (!t?.id || seen.has(t.id)) continue;
+      seen.add(t.id);
+      opts.push({ id: t.id, label: t.title || t.experimentTitle || t.id.slice(0, 8) });
+    }
+    return opts;
+  }, [tasks]);
+
+  const visibleReports = useMemo(
+    () => selectedTask ? reports.filter(r => r.taskId === selectedTask) : reports,
+    [reports, selectedTask]
+  );
 
   return (
     <div className="space-y-4 animate-fade-in">
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-        <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">{reports.length} báo cáo đã gửi</p>
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-col sm:flex-row gap-3 sm:items-end">
+        <div className="flex-1">
+          <p className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-2">
+            {visibleReports.length} báo cáo {selectedTask ? 'đã lọc' : 'đã gửi'}
+          </p>
+          <select
+            value={selectedTask}
+            onChange={e => setSelectedTask(e.target.value)}
+            className="w-full px-4 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+          >
+            <option value="">— Tất cả tác vụ —</option>
+            {taskOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+          </select>
+        </div>
       </div>
       {loading ? (
         <div className="bg-white rounded-2xl p-12 text-center text-slate-400">Đang tải...</div>
-      ) : reports.length === 0 ? (
+      ) : visibleReports.length === 0 ? (
         <div className="bg-white rounded-2xl p-12 text-center text-slate-400 border border-slate-200">Chưa có báo cáo nào.</div>
       ) : (
-        reports.map(r => (
-          <div key={r.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-            <div className="flex justify-between items-start mb-3">
-              <div>
-                <p className="text-xs font-mono text-blue-700 font-bold">Task: {r.taskId || '—'}</p>
-                {r.taskTitle && <p className="text-xs text-slate-500 mt-0.5">{r.taskTitle}</p>}
+        visibleReports.map(r => {
+          const resultEntries = r.resultData && typeof r.resultData === 'object'
+            ? Object.entries(r.resultData)
+            : [];
+          const imageList = Array.isArray(r.images) ? r.images : [];
+          const dateText = r.reportedAt || r.createdAt;
+          const reporterName = r.reporterName || r.reportedByName || 'Bạn';
+          return (
+            <div key={r.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition">
+              <div className="flex justify-between items-start mb-3 gap-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {r.taskTitle && <p className="text-sm font-bold text-slate-900">{r.taskTitle}</p>}
+                    {r.taskType && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-700 uppercase">
+                        {r.taskType}
+                      </span>
+                    )}
+                  </div>
+                  {(r.experimentTitle || r.batchCode || r.stageName) && (
+                    <p className="text-xs text-slate-500 mt-1">
+                      {[r.experimentTitle, r.batchCode && `Batch ${r.batchCode}`, r.stageName].filter(Boolean).join(' · ')}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-2 mt-2">
+                    <div className="w-5 h-5 rounded-full bg-blue-500 text-white flex items-center justify-center text-[10px] font-bold">
+                      {reporterName.charAt(0).toUpperCase()}
+                    </div>
+                    <span className="text-[10px] text-slate-500">{reporterName}</span>
+                  </div>
+                </div>
+                <span className="text-[10px] text-slate-400 font-mono shrink-0">
+                  {dateText ? new Date(dateText).toLocaleString('vi-VN') : '—'}
+                </span>
               </div>
-              <p className="text-[10px] text-slate-400 font-mono">{r.createdAt ? new Date(r.createdAt).toLocaleString('vi-VN') : '—'}</p>
+
+              {r.reportText && <p className="text-sm text-slate-700 whitespace-pre-line">{r.reportText}</p>}
+
+              {resultEntries.length > 0 && (
+                <div className="mt-3 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                  <p className="text-[10px] text-slate-400 font-bold uppercase mb-2">Dữ Liệu</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {resultEntries.map(([k, v]) => (
+                      <div key={k} className="text-xs">
+                        <p className="text-[10px] text-slate-400 font-mono break-all">{k}</p>
+                        <p className="font-semibold text-slate-900 break-all">{String(v)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {imageList.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {imageList.map((img, i) => (
+                    <a key={i} href={img.url || img} target="_blank" rel="noopener noreferrer"
+                      className="block w-16 h-16 rounded-lg overflow-hidden border border-slate-200 hover:opacity-80">
+                      <img src={img.url || img} alt={img.name || `img-${i}`} className="w-full h-full object-cover" />
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
-            <p className="text-sm text-slate-700 mb-3">{r.reportText}</p>
-            {r.resultData && Object.keys(r.resultData).length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {Object.entries(r.resultData).map(([k, v]) => (
-                  <span key={k} className="px-3 py-1 bg-slate-100 rounded-lg text-xs font-mono">
-                    <span className="text-slate-500">{k}:</span> <span className="font-bold text-slate-900">{String(v)}</span>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-        ))
+          );
+        })
       )}
     </div>
   );
 };
 
 // ── Student Farms Tab ─────────────────────────────────────────────────────────
-
-const StudentFarmsTab = () => {
-  const { showToast } = useToast();
-  const [farms, setFarms] = useState([]);
-  const [selectedFarm, setSelectedFarm] = useState(null);
-  const [areas, setAreas] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchFarms = async () => {
-      try {
-        setLoading(true);
-        const data = await farmsApi.getAll();
-        setFarms(Array.isArray(data) ? data : []);
-        if (Array.isArray(data) && data.length > 0) setSelectedFarm(data[0]);
-      } catch { setFarms([]); } finally { setLoading(false); }
-    };
-    fetchFarms();
-  }, []);
-
-  useEffect(() => {
-    const fetchAreas = async () => {
-      if (!selectedFarm?.id) { setAreas([]); return; }
-      try {
-        const data = await farmsApi.getAreas(selectedFarm.id);
-        setAreas(Array.isArray(data) ? data : []);
-      } catch { setAreas([]); }
-    };
-    fetchAreas();
-  }, [selectedFarm]);
-
-  return (
-    <div className="space-y-4 animate-fade-in">
-      {/* Farm selector */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-        <label className="block text-xs font-bold text-slate-700 mb-2">Chọn Nông Trại</label>
-        <div className="flex gap-3 flex-wrap">
-          {farms.map(f => (
-            <button key={f.id} onClick={() => setSelectedFarm(f)}
-              className={`px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-                selectedFarm?.id === f.id
-                  ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}>
-              🌾 {f.farmName || f.farmCode || 'Nông trại'}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {selectedFarm && (
-        <>
-          {/* Farm info */}
-          <div className="bg-gradient-to-r from-emerald-500 to-teal-500 rounded-2xl p-6 text-white shadow-lg">
-            <h3 className="font-hanken text-xl font-bold mb-2">{selectedFarm.farmName || 'Nông Trại'}</h3>
-            <div className="flex gap-4 text-sm text-emerald-100 flex-wrap">
-              {selectedFarm.farmCode && <span>Mã: {selectedFarm.farmCode}</span>}
-              {selectedFarm.location && <span>📍 {selectedFarm.location}</span>}
-              {selectedFarm.description && <span>{selectedFarm.description}</span>}
-            </div>
-          </div>
-
-          {/* Areas */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {areas.map(area => (
-              <StudentAreaCard key={area.id} area={area} />
-            ))}
-            {areas.length === 0 && (
-              <div className="col-span-full bg-white rounded-2xl p-12 text-center text-slate-400 border border-slate-200">Chưa có khu vực nào.</div>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-};
-
-const StudentAreaCard = ({ area }) => {
-  const [beds, setBeds] = useState([]);
-  const [expanded, setExpanded] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const toggle = async () => {
-    if (!expanded) {
-      try {
-        setLoading(true);
-        const data = await farmsApi.getBeds(area.id);
-        setBeds(Array.isArray(data) ? data : []);
-      } catch { setBeds([]); } finally { setLoading(false); }
-    }
-    setExpanded(!expanded);
-  };
-
-  return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-      <button onClick={toggle} className="w-full flex items-center gap-3 px-5 py-4 hover:bg-slate-50 transition-colors">
-        <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-lg">🗺️</div>
-        <div className="flex-1 text-left">
-          <h4 className="font-hanken font-bold text-sm text-slate-900">{area.areaName || area.name || 'Khu vực'}</h4>
-          <p className="text-[10px] text-slate-400 font-mono">{area.areaCode || area.id}</p>
-        </div>
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-          className={`text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`}>
-          <polyline points="6 9 12 15 18 9"/>
-        </svg>
-      </button>
-      {expanded && (
-        <div className="px-5 pb-4 space-y-2">
-          {loading ? (
-            <p className="text-xs text-slate-400 text-center py-2">Đang tải luống...</p>
-          ) : beds.length === 0 ? (
-            <p className="text-xs text-slate-400 text-center py-2">Chưa có luống.</p>
-          ) : (
-            beds.map(bed => (
-              <div key={bed.id} className="flex items-center gap-2 p-2 bg-slate-50 rounded-xl text-xs">
-                <span className="text-emerald-500">🌱</span>
-                <span className="font-semibold text-slate-700">{bed.bedName || bed.bedCode || bed.name || 'Luống'}</span>
-                <span className="ml-auto text-slate-400 font-mono">{bed.bedCode || ''}</span>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
+// (Removed per user request - no longer used in dashboard)
 
 export default StudentDashboard;

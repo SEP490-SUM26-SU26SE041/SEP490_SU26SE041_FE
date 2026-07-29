@@ -1,14 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useToast } from '../../context/ToastContext';
 import { tasksApi, taskReportsApi, measurementRecordsApi } from '../../api/sharedTaskApi';
-import { farmsApi, cropsApi } from '../../api/studentTechApi';
+
+// ── Portal helper ─────────────────────────────────────────────────────────────
+
+const Portal = ({ children }) => {
+  if (typeof document === 'undefined') return null;
+  return createPortal(children, document.body);
+};
 
 const TECH_TABS = [
   { id: 'overview', label: 'Tổng Quan', icon: '🏠' },
   { id: 'tasks', label: 'Công Việc', icon: '📋' },
   { id: 'reports', label: 'Báo Cáo', icon: '📝' },
   { id: 'measurements', label: 'Đo Lường', icon: '📊' },
-  { id: 'farms', label: 'Nông Trại', icon: '🌾' },
 ];
 
 const TASK_TABS = [
@@ -75,14 +81,12 @@ const TechnicianDashboard = () => {
               {activeTab === 'tasks' && 'Danh sách công việc được giao'}
               {activeTab === 'reports' && 'Báo cáo tác vụ đã gửi'}
               {activeTab === 'measurements' && 'Lịch sử ghi nhận đo lường'}
-              {activeTab === 'farms' && 'Thông tin nông trại và khu vực'}
             </p>
           </div>
           {activeTab === 'overview' && <TechOverview />}
           {activeTab === 'tasks' && <TechTasksTab />}
           {activeTab === 'reports' && <TechReportsTab />}
           {activeTab === 'measurements' && <TechMeasurementsTab />}
-          {activeTab === 'farms' && <TechFarmsTab />}
         </div>
       </main>
     </div>
@@ -210,14 +214,6 @@ const TechTasksTab = () => {
     } catch (err) { showToast(err.message || 'Không thể bắt đầu', 'error'); }
   };
 
-  const handleComplete = async (task) => {
-    try {
-      await tasksApi.complete(task.id);
-      showToast('Đã hoàn thành tác vụ!', 'success');
-      fetchTasks();
-    } catch (err) { showToast(err.message || 'Không thể hoàn thành', 'error'); }
-  };
-
   const handleCancel = async (task) => {
     try {
       await tasksApi.cancel(task.id);
@@ -289,7 +285,7 @@ const TechTasksTab = () => {
                       <button onClick={() => handleStart(task)} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all">▶ Bắt Đầu</button>
                     )}
                     {task.status === 'InProgress' && (
-                      <button onClick={() => handleComplete(task)} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/20 transition-all">✅ Hoàn Thành</button>
+                      <button onClick={() => openDetail(task)} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/20 transition-all">✅ Hoàn Thành</button>
                     )}
                     {(task.status === 'Pending' || task.status === 'InProgress') && (
                       <button onClick={() => handleCancel(task)} className="px-3 py-2 border border-rose-300 text-rose-500 hover:bg-rose-50 rounded-xl text-xs font-semibold transition-all">✕ Hủy</button>
@@ -304,7 +300,7 @@ const TechTasksTab = () => {
 
       {/* Task Detail Modal */}
       {showDetail && selectedTask && (
-        <TaskDetailModal task={selectedTask} onClose={() => setShowDetail(false)} />
+        <TaskDetailModal task={selectedTask} onClose={() => setShowDetail(false)} onUpdated={fetchTasks} />
       )}
     </div>
   );
@@ -312,7 +308,7 @@ const TechTasksTab = () => {
 
 // ── Task Detail Modal ──────────────────────────────────────────────────────────
 
-const TaskDetailModal = ({ task, onClose }) => {
+const TaskDetailModal = ({ task, onClose, onUpdated }) => {
   const { showToast } = useToast();
   const [reports, setReports] = useState([]);
   const [images, setImages] = useState([]);
@@ -320,6 +316,7 @@ const TaskDetailModal = ({ task, onClose }) => {
   const [reportText, setReportText] = useState('');
   const [resultData, setResultData] = useState([{ key: '', value: '' }]);
   const [saving, setSaving] = useState(false);
+  const [completing, setCompleting] = useState(false);
   const [imageUrl, setImageUrl] = useState('');
   const [imageCaption, setImageCaption] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -359,6 +356,28 @@ const TaskDetailModal = ({ task, onClose }) => {
     finally { setSaving(false); }
   };
 
+  // Business rule: phải gửi báo cáo trước, sau đó mới complete
+  const handleCompleteTask = async () => {
+    if (!reportText.trim()) {
+      showToast('Vui lòng nhập nội dung báo cáo trước khi hoàn thành', 'error');
+      return;
+    }
+    try {
+      setCompleting(true);
+      const dataObj = {};
+      resultData.forEach(r => { if (r.key.trim()) dataObj[r.key.trim()] = r.value; });
+      await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
+      await tasksApi.complete(task.id);
+      showToast('Đã hoàn thành tác vụ và gửi báo cáo!', 'success');
+      if (onUpdated) onUpdated();
+      onClose();
+    } catch (err) {
+      showToast(err.message || 'Không thể hoàn thành tác vụ', 'error');
+    } finally {
+      setCompleting(false);
+    }
+  };
+
   const handleUploadImage = async (e) => {
     e.preventDefault();
     if (!imageUrl.trim()) { showToast('Vui lòng nhập URL ảnh', 'error'); return; }
@@ -388,7 +407,8 @@ const TaskDetailModal = ({ task, onClose }) => {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4">
+    <Portal>
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center sticky top-0 bg-white rounded-t-2xl z-10">
           <div>
@@ -411,7 +431,6 @@ const TaskDetailModal = ({ task, onClose }) => {
               { label: 'Giai đoạn', value: task.experimentStageName || '—' },
               { label: 'Hạn chót', value: task.dueDate ? new Date(task.dueDate).toLocaleDateString('vi-VN') : '—' },
               { label: 'Người giao', value: task.createdByName || '—' },
-              { label: 'Yêu cầu kỹ năng', value: task.requiredSkillDescription || '—' },
             ].map(item => (
               <div key={item.label} className="p-3 bg-slate-50 rounded-xl">
                 <p className="text-[10px] text-slate-400 font-bold uppercase">{item.label}</p>
@@ -419,6 +438,46 @@ const TaskDetailModal = ({ task, onClose }) => {
               </div>
             ))}
           </div>
+
+          {/* Skill Requirements */}
+          {Array.isArray(task.skillRequirements) && task.skillRequirements.length > 0 && (
+            <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[10px] text-indigo-400 font-bold uppercase">Yêu Cầu Kỹ Năng</p>
+                <span className="text-[10px] font-bold text-indigo-600 bg-white px-2 py-0.5 rounded-full">
+                  {task.skillRequirements.length} kỹ năng
+                </span>
+              </div>
+              <div className="space-y-2">
+                {task.skillRequirements.map((sk, idx) => (
+                  <div key={sk.skillId || idx} className="flex items-center gap-3 p-3 bg-white rounded-xl border border-indigo-100">
+                    <div className="w-9 h-9 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></svg>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-sm text-slate-900 truncate">{sk.skillName || `Skill ${sk.skillId?.slice(0, 8) || idx}`}</p>
+                      <p className="text-[10px] text-slate-500 font-mono">{sk.skillId}</p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase">Level</span>
+                      <div className="flex gap-0.5">
+                        {[1, 2, 3, 4, 5].map(level => (
+                          <span key={level}
+                            className={`w-2 h-4 rounded-sm ${
+                              level <= (sk.requiredLevel || 0)
+                                ? 'bg-indigo-500'
+                                : 'bg-slate-200'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                      <span className="ml-1 text-xs font-bold text-indigo-600 w-4 text-center">{sk.requiredLevel || 0}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {task.description && (
             <div className="p-4 bg-blue-50 rounded-xl border border-blue-100">
               <p className="text-[10px] text-blue-400 font-bold uppercase mb-1">Mô tả</p>
@@ -427,34 +486,43 @@ const TaskDetailModal = ({ task, onClose }) => {
           )}
 
           {/* Report Form */}
-          <div className="border-t border-slate-200 pt-6">
-            <h4 className="font-bold text-sm text-slate-900 mb-3">📝 Gửi Báo Cáo</h4>
-            <form onSubmit={handleSubmitReport} className="space-y-3">
-              <textarea value={reportText} onChange={e => setReportText(e.target.value)} rows={3}
-                placeholder="Mô tả kết quả đã thực hiện..."
-                className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none" />
-              <div className="space-y-1">
-                {resultData.map((r, idx) => (
-                  <div key={idx} className="flex gap-2">
-                    <input type="text" value={r.key} placeholder="Key (VD: waterUsed)"
-                      onChange={e => updateResult(idx, 'key', e.target.value)}
-                      className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                    <input type="text" value={r.value} placeholder="Giá trị"
-                      onChange={e => updateResult(idx, 'value', e.target.value)}
-                      className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                    {resultData.length > 1 && (
-                      <button type="button" onClick={() => setResultData(prev => prev.filter((_, i) => i !== idx))} className="text-rose-500 font-bold">✕</button>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <button type="button" onClick={() => setResultData(prev => [...prev, { key: '', value: '' }])} className="text-xs text-emerald-600 font-semibold hover:underline">+ Thêm dữ liệu</button>
-              <button type="submit" disabled={saving}
-                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50">
-                {saving ? 'Đang gửi...' : 'Gửi Báo Cáo'}
-              </button>
-            </form>
-          </div>
+          {task.status !== 'Completed' && (
+            <div className="border-t border-slate-200 pt-6">
+              <h4 className="font-bold text-sm text-slate-900 mb-3">📝 Báo Cáo Công Việc</h4>
+              {task.status === 'InProgress' && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">
+                  ⚠️ Báo cáo là bắt buộc. Sau khi gửi, tác vụ sẽ được đánh dấu hoàn thành.
+                </p>
+              )}
+              <form onSubmit={handleSubmitReport} className="space-y-3">
+                <textarea value={reportText} onChange={e => setReportText(e.target.value)} rows={3}
+                  placeholder="Mô tả kết quả đã thực hiện..."
+                  className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none" />
+                <div className="space-y-1">
+                  {resultData.map((r, idx) => (
+                    <div key={idx} className="flex gap-2">
+                      <input type="text" value={r.key} placeholder="Key (VD: waterUsed)"
+                        onChange={e => updateResult(idx, 'key', e.target.value)}
+                        className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                      <input type="text" value={r.value} placeholder="Giá trị"
+                        onChange={e => updateResult(idx, 'value', e.target.value)}
+                        className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                      {resultData.length > 1 && (
+                        <button type="button" onClick={() => setResultData(prev => prev.filter((_, i) => i !== idx))} className="text-rose-500 font-bold">✕</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <button type="button" onClick={() => setResultData(prev => [...prev, { key: '', value: '' }])} className="text-xs text-emerald-600 font-semibold hover:underline">+ Thêm dữ liệu</button>
+                {task.status === 'Pending' && (
+                  <button type="submit" disabled={saving}
+                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50">
+                    {saving ? 'Đang gửi...' : 'Gửi Báo Cáo'}
+                  </button>
+                )}
+              </form>
+            </div>
+          )}
 
           {/* Upload Image */}
           <div className="border-t border-slate-200 pt-6">
@@ -476,26 +544,59 @@ const TaskDetailModal = ({ task, onClose }) => {
           {/* Reports History */}
           {reports.length > 0 && (
             <div className="border-t border-slate-200 pt-6">
-              <h4 className="font-bold text-sm text-slate-900 mb-3">Lịch Sử Báo Cáo ({reports.length})</h4>
-              <div className="space-y-3 max-h-60 overflow-y-auto">
-                {reports.map(r => (
-                  <div key={r.id} className="p-3 bg-green-50 rounded-xl border border-green-100">
-                    <div className="flex justify-between mb-1">
-                      <p className="text-[10px] text-green-600 font-mono font-bold">{r.id}</p>
-                      <p className="text-[10px] text-slate-400">{r.createdAt ? new Date(r.createdAt).toLocaleString('vi-VN') : '—'}</p>
-                    </div>
-                    <p className="text-xs text-slate-700">{r.reportText}</p>
-                    {r.resultData && Object.keys(r.resultData).length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        {Object.entries(r.resultData).map(([k, v]) => (
-                          <span key={k} className="px-2 py-0.5 bg-green-200 text-green-800 rounded-full text-[10px] font-mono font-bold">
-                            {k}: {String(v)}
-                          </span>
-                        ))}
+              <h4 className="font-bold text-sm text-slate-900 mb-3">📜 Lịch Sử Báo Cáo ({reports.length})</h4>
+              <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+                {reports.map(r => {
+                  const resultEntries = r.resultData && typeof r.resultData === 'object'
+                    ? Object.entries(r.resultData)
+                    : [];
+                  const imageList = Array.isArray(r.images) ? r.images : [];
+                  const dateText = r.reportedAt || r.createdAt;
+                  const reporterName = r.reporterName || r.reportedByName || 'Technician';
+                  return (
+                    <div key={r.id} className="p-3 bg-green-50 rounded-xl border border-green-100">
+                      <div className="flex justify-between items-start gap-2 mb-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="w-7 h-7 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[11px] font-bold shrink-0">
+                            {reporterName.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-xs text-slate-900 truncate">{reporterName}</p>
+                            <p className="text-[10px] text-slate-500">{r.taskTitleSnapshot || r.taskTitle || 'Báo cáo tác vụ'}</p>
+                          </div>
+                        </div>
+                        <span className="text-[10px] text-slate-500 shrink-0">
+                          {dateText ? new Date(dateText).toLocaleString('vi-VN') : '—'}
+                        </span>
                       </div>
-                    )}
-                  </div>
-                ))}
+
+                      {r.reportText && (
+                        <p className="text-xs text-slate-700 whitespace-pre-line line-clamp-3">{r.reportText}</p>
+                      )}
+
+                      {resultEntries.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mt-2">
+                          {resultEntries.map(([k, v]) => (
+                            <span key={k} className="px-2 py-0.5 bg-white border border-green-200 text-emerald-800 rounded-full text-[10px] font-mono font-bold">
+                              {k}: <span className="text-slate-900">{String(v)}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {imageList.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mt-2">
+                          {imageList.map((img, i) => (
+                            <a key={i} href={img.url || img} target="_blank" rel="noopener noreferrer"
+                              className="block w-12 h-12 rounded-md overflow-hidden border border-green-200 hover:opacity-80">
+                              <img src={img.url || img} alt={img.name || `img-${i}`} className="w-full h-full object-cover" />
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -520,7 +621,34 @@ const TaskDetailModal = ({ task, onClose }) => {
           )}
         </div>
       </div>
+      {/* Footer action - chỉ hiện khi đang làm (phải hoàn thành qua báo cáo) */}
+      {task.status === 'InProgress' && (
+        <div className="px-6 py-4 border-t border-slate-200 bg-slate-50/50 flex items-center justify-between gap-3 sticky bottom-0">
+          <div className="text-xs text-slate-500">
+            <span className="font-semibold text-slate-700">Quy trình:</span> Báo cáo bắt buộc trước khi hoàn thành
+          </div>
+          <div className="flex gap-2">
+            <button onClick={onClose}
+              className="px-4 py-2 border border-slate-300 rounded-xl text-sm font-medium hover:bg-white">
+              Đóng
+            </button>
+            <button onClick={handleCompleteTask} disabled={completing || !reportText.trim()}
+              className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all">
+              {completing ? '⏳ Đang hoàn thành...' : '✅ Hoàn Thành & Gửi Báo Cáo'}
+            </button>
+          </div>
+        </div>
+      )}
+      {task.status !== 'InProgress' && (
+        <div className="px-6 py-4 border-t border-slate-200 bg-slate-50/50 flex justify-end sticky bottom-0">
+          <button onClick={onClose}
+            className="px-5 py-2 border border-slate-300 rounded-xl text-sm font-medium hover:bg-white">
+            Đóng
+          </button>
+        </div>
+      )}
     </div>
+    </Portal>
   );
 };
 
@@ -529,41 +657,108 @@ const TaskDetailModal = ({ task, onClose }) => {
 const TechReportsTab = () => {
   const { showToast } = useToast();
   const [reports, setReports] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [selectedTask, setSelectedTask] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchReports = async () => {
+    const load = async () => {
       try {
         setLoading(true);
-        const token = localStorage.getItem('token');
-        const data = await fetch('/api/task-reports', {
-          headers: { Authorization: `Bearer ${token}` }
-        }).then(r => r.json()).then(d => d.data || []);
-        setReports(Array.isArray(data) ? data : []);
-      } catch { setReports([]); } finally { setLoading(false); }
+        const myTasks = await tasksApi.getMy().catch(() => []);
+        const taskList = Array.isArray(myTasks) ? myTasks : [];
+        setTasks(taskList);
+
+        const perTask = await Promise.all(
+          taskList.map(t =>
+            taskReportsApi.getByTask(t.id)
+              .then(rep => Array.isArray(rep) ? rep : [])
+              .catch(() => [])
+              .then(list => list.map(r => ({
+                ...r,
+                taskId: t.id,
+                taskTitle: t.title,
+                experimentTitle: t.experimentTitle,
+                batchCode: t.batchCode,
+                stageName: t.experimentStageName,
+                taskType: t.taskType
+              })))
+          )
+        );
+
+        const merged = perTask
+          .flat()
+          .sort((a, b) => new Date(b.reportedAt || b.createdAt || 0) - new Date(a.reportedAt || a.createdAt || 0));
+        setReports(merged);
+      } catch {
+        showToast('Không thể tải báo cáo', 'error');
+        setReports([]);
+      } finally { setLoading(false); }
     };
-    fetchReports();
+    load();
   }, []);
+
+  const taskOptions = useMemo(() => {
+    const seen = new Set();
+    const opts = [];
+    for (const t of tasks) {
+      if (!t?.id || seen.has(t.id)) continue;
+      seen.add(t.id);
+      opts.push({ id: t.id, label: t.title || t.experimentTitle || t.id.slice(0, 8) });
+    }
+    return opts;
+  }, [tasks]);
+
+  const visibleReports = useMemo(
+    () => selectedTask ? reports.filter(r => r.taskId === selectedTask) : reports,
+    [reports, selectedTask]
+  );
 
   return (
     <div className="space-y-4 animate-fade-in">
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-        <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">{reports.length} báo cáo đã gửi</p>
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-col sm:flex-row gap-3 sm:items-end">
+        <div className="flex-1">
+          <p className="text-xs text-slate-500 font-bold uppercase tracking-wider mb-2">
+            {visibleReports.length} báo cáo {selectedTask ? 'đã lọc' : 'đã gửi'}
+          </p>
+          <select
+            value={selectedTask}
+            onChange={e => setSelectedTask(e.target.value)}
+            className="w-full px-4 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+          >
+            <option value="">— Tất cả tác vụ —</option>
+            {taskOptions.map(o => (
+              <option key={o.id} value={o.id}>{o.label}</option>
+            ))}
+          </select>
+        </div>
       </div>
       {loading ? (
         <div className="bg-white rounded-2xl p-12 text-center text-slate-400">Đang tải...</div>
       ) : reports.length === 0 ? (
         <div className="bg-white rounded-2xl p-12 text-center text-slate-400">Chưa có báo cáo nào.</div>
       ) : (
-        reports.map(r => (
+        visibleReports.map(r => (
           <div key={r.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
             <div className="flex justify-between items-start mb-3">
-              <div>
-                <p className="text-xs font-mono text-teal-700 font-bold">Task: {r.taskId || '—'}</p>
-                {r.taskTitle && <p className="text-xs text-slate-500 mt-0.5">{r.taskTitle}</p>}
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {r.taskTitle && <p className="text-sm font-bold text-slate-900">{r.taskTitle}</p>}
+                  {r.taskType && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700 uppercase">
+                      {r.taskType}
+                    </span>
+                  )}
+                </div>
+                {(r.experimentTitle || r.batchCode || r.stageName) && (
+                  <p className="text-xs text-slate-500 mt-1">
+                    {[r.experimentTitle, r.batchCode && `Batch ${r.batchCode}`, r.stageName].filter(Boolean).join(' · ')}
+                  </p>
+                )}
+                <p className="text-[10px] text-slate-400 font-mono mt-0.5">Task: {r.taskId || '—'}</p>
               </div>
-              <div className="text-right">
-                <p className="text-[10px] text-slate-400 font-mono">{r.createdAt ? new Date(r.createdAt).toLocaleString('vi-VN') : '—'}</p>
+              <div className="text-right shrink-0">
+                <p className="text-[10px] text-slate-400 font-mono">{r.reportedAt ? new Date(r.reportedAt).toLocaleString('vi-VN') : (r.createdAt ? new Date(r.createdAt).toLocaleString('vi-VN') : '—')}</p>
                 {r.measurements && r.measurements.length > 0 && (
                   <span className="inline-block mt-1 px-2 py-0.5 bg-teal-100 text-teal-700 rounded-full text-[10px] font-bold">{r.measurements.length} đo lường</span>
                 )}
@@ -591,9 +786,10 @@ const TechReportsTab = () => {
 const TechMeasurementsTab = () => {
   const { showToast } = useToast();
   const [records, setRecords] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [batchId, setBatchId] = useState('');
+  const [tasks, setTasks] = useState([]);
+  const [selectedBatch, setSelectedBatch] = useState('');
   const [filterBatchId, setFilterBatchId] = useState('');
+  const [loading, setLoading] = useState(true);
 
   const fetchRecords = async (bId) => {
     if (!bId) { setRecords([]); setLoading(false); return; }
@@ -601,32 +797,118 @@ const TechMeasurementsTab = () => {
       setLoading(true);
       const data = await measurementRecordsApi.getByBatch(bId);
       setRecords(Array.isArray(data) ? data : []);
-    } catch { setRecords([]); } finally { setLoading(false); }
+    } catch {
+      showToast('Không thể tải dữ liệu đo lường', 'error');
+      setRecords([]);
+    } finally { setLoading(false); }
   };
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        setLoading(true);
+        const myTasks = await tasksApi.getMy().catch(() => []);
+        const taskList = Array.isArray(myTasks) ? myTasks : [];
+        setTasks(taskList);
+
+        const seen = new Set();
+        const batchIds = [];
+        for (const t of taskList) {
+          if (t.batchId && !seen.has(t.batchId)) {
+            seen.add(t.batchId);
+            batchIds.push({ id: t.batchId, code: t.batchCode || t.batchId.slice(0, 8) });
+          }
+        }
+
+        if (batchIds.length === 0) {
+          setRecords([]);
+          return;
+        }
+
+        const perBatch = await Promise.all(
+          batchIds.map(b =>
+            measurementRecordsApi.getByBatch(b.id)
+              .then(list => Array.isArray(list) ? list : [])
+              .catch(() => [])
+              .then(list => list.map(r => ({
+                ...r,
+                batchCode: r.batchCode || b.code
+              })))
+          )
+        );
+
+        const merged = perBatch
+          .flat()
+          .sort((a, b) => new Date(b.measuredAt || 0) - new Date(a.measuredAt || 0));
+        setRecords(merged);
+        if (batchIds.length > 0 && !selectedBatch) setSelectedBatch(batchIds[0].id);
+      } catch {
+        setRecords([]);
+      } finally { setLoading(false); }
+    };
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleFilter = () => {
     if (filterBatchId.trim()) fetchRecords(filterBatchId.trim());
   };
 
+  const batchOptions = useMemo(() => {
+    const seen = new Set();
+    const opts = [];
+    for (const t of tasks) {
+      if (t.batchId && !seen.has(t.batchId)) {
+        seen.add(t.batchId);
+        opts.push({ id: t.batchId, label: t.batchCode || t.batchId.slice(0, 8) });
+      }
+    }
+    return opts;
+  }, [tasks]);
+
+  const visibleRecords = useMemo(
+    () => selectedBatch ? records.filter(r => r.batchId === selectedBatch || r.batchCode === selectedBatch) : records,
+    [records, selectedBatch]
+  );
+
   return (
     <div className="space-y-4 animate-fade-in">
       {/* Batch filter */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex gap-3 items-end">
-        <div className="flex-1">
-          <label className="block text-xs font-bold text-slate-700 mb-1">Lọc theo Batch ID</label>
-          <input type="text" value={filterBatchId} onChange={e => setFilterBatchId(e.target.value)}
-            placeholder="Nhập Batch ID..."
-            className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white" />
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Lọc theo tác vụ (Batch)</label>
+            <select
+              value={selectedBatch}
+              onChange={e => setSelectedBatch(e.target.value)}
+              className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+            >
+              <option value="">— Tất cả batch —</option>
+              {batchOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1">Tìm bằng Batch ID</label>
+            <div className="flex gap-2">
+              <input type="text" value={filterBatchId} onChange={e => setFilterBatchId(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleFilter()}
+                placeholder="Nhập Batch ID..."
+                className="flex-1 px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white" />
+              <button onClick={handleFilter} className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20">Tìm</button>
+            </div>
+          </div>
         </div>
-        <button onClick={handleFilter} className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20">Tìm kiếm</button>
+        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-3">
+          {visibleRecords.length} bản ghi đo lường {selectedBatch ? '(đã lọc)' : '(tất cả batch của bạn)'}
+        </p>
       </div>
 
       {/* Records */}
       {loading ? (
         <div className="bg-white rounded-2xl p-12 text-center text-slate-400">Đang tải...</div>
-      ) : records.length === 0 ? (
+      ) : visibleRecords.length === 0 ? (
         <div className="bg-white rounded-2xl p-12 text-center text-slate-400">
-          {filterBatchId ? 'Không có dữ liệu cho Batch này.' : 'Nhập Batch ID để xem lịch sử đo lường.'}
+          {selectedBatch || filterBatchId ? 'Không có dữ liệu cho Batch này.' : 'Chưa có dữ liệu đo lường.'}
         </div>
       ) : (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
@@ -634,15 +916,16 @@ const TechMeasurementsTab = () => {
             <table className="w-full text-sm">
               <thead className="bg-emerald-50 border-b border-emerald-200">
                 <tr>
-                  {['Ngày đo', 'Chỉ số', 'Giá trị', 'Đơn vị', 'Giá trị mục tiêu', 'Người đo', 'Ghi chú'].map(h => (
+                  {['Ngày đo', 'Batch', 'Chỉ số', 'Giá trị', 'Đơn vị', 'Giá trị mục tiêu', 'Người đo', 'Ghi chú'].map(h => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-bold text-emerald-700 uppercase tracking-wider">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {records.map(r => (
+                {visibleRecords.map(r => (
                   <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50">
-                    <td className="px-4 py-3 text-xs text-slate-600">{r.measuredAt ? new Date(r.measuredAt).toLocaleString('vi-VN') : '—'}</td>
+                    <td className="px-4 py-3 text-xs text-slate-600 whitespace-nowrap">{r.measuredAt ? new Date(r.measuredAt).toLocaleString('vi-VN') : '—'}</td>
+                    <td className="px-4 py-3 text-xs font-mono text-slate-500">{r.batchCode || '—'}</td>
                     <td className="px-4 py-3 font-semibold text-slate-900 text-xs">{r.metricName || '—'}</td>
                     <td className="px-4 py-3 font-bold text-emerald-700 text-xs">{r.value !== null && r.value !== undefined ? r.value : (r.textValue || '—')}</td>
                     <td className="px-4 py-3 text-xs text-slate-500">{r.unit || '—'}</td>
@@ -661,134 +944,6 @@ const TechMeasurementsTab = () => {
 };
 
 // ── Tech Farms Tab ─────────────────────────────────────────────────────────────
-
-const TechFarmsTab = () => {
-  const { showToast } = useToast();
-  const [farms, setFarms] = useState([]);
-  const [selectedFarm, setSelectedFarm] = useState(null);
-  const [areas, setAreas] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchFarms = async () => {
-      try {
-        setLoading(true);
-        const data = await farmsApi.getAll();
-        setFarms(Array.isArray(data) ? data : []);
-        if (Array.isArray(data) && data.length > 0) {
-          setSelectedFarm(data[0]);
-        }
-      } catch { setFarms([]); } finally { setLoading(false); }
-    };
-    fetchFarms();
-  }, []);
-
-  useEffect(() => {
-    const fetchAreas = async () => {
-      if (!selectedFarm?.id) { setAreas([]); return; }
-      try {
-        const data = await farmsApi.getAreas(selectedFarm.id);
-        setAreas(Array.isArray(data) ? data : []);
-      } catch { setAreas([]); }
-    };
-    fetchAreas();
-  }, [selectedFarm]);
-
-  return (
-    <div className="space-y-4 animate-fade-in">
-      {/* Farm selector */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-        <label className="block text-xs font-bold text-slate-700 mb-2">Chọn Nông Trại</label>
-        <div className="flex gap-3 flex-wrap">
-          {farms.map(f => (
-            <button key={f.id} onClick={() => setSelectedFarm(f)}
-              className={`px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-                selectedFarm?.id === f.id
-                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/20'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}>
-              🌾 {f.farmName || f.farmCode || 'Nông trại'}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {selectedFarm && (
-        <>
-          {/* Farm info */}
-          <div className="bg-gradient-to-r from-emerald-500 to-teal-500 rounded-2xl p-6 text-white shadow-lg">
-            <h3 className="font-hanken text-xl font-bold mb-2">{selectedFarm.farmName || 'Nông Trại'}</h3>
-            <div className="flex gap-4 text-sm text-emerald-100">
-              {selectedFarm.farmCode && <span>Mã: {selectedFarm.farmCode}</span>}
-              {selectedFarm.location && <span>📍 {selectedFarm.location}</span>}
-              {selectedFarm.description && <span>{selectedFarm.description}</span>}
-            </div>
-          </div>
-
-          {/* Areas */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {areas.map(area => (
-              <AreaCard key={area.id} area={area} />
-            ))}
-            {areas.length === 0 && (
-              <div className="col-span-full bg-white rounded-2xl p-12 text-center text-slate-400 border border-slate-200">Chưa có khu vực nào.</div>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-};
-
-const AreaCard = ({ area }) => {
-  const { showToast } = useToast();
-  const [beds, setBeds] = useState([]);
-  const [expanded, setExpanded] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const toggle = async () => {
-    if (!expanded) {
-      try {
-        setLoading(true);
-        const data = await farmsApi.getBeds(area.id);
-        setBeds(Array.isArray(data) ? data : []);
-      } catch { setBeds([]); } finally { setLoading(false); }
-    }
-    setExpanded(!expanded);
-  };
-
-  return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-      <button onClick={toggle} className="w-full flex items-center gap-3 px-5 py-4 hover:bg-slate-50 transition-colors">
-        <div className="w-10 h-10 rounded-xl bg-amber-50 flex items-center justify-center text-lg">🗺️</div>
-        <div className="flex-1 text-left">
-          <h4 className="font-hanken font-bold text-sm text-slate-900">{area.areaName || area.name || 'Khu vực'}</h4>
-          <p className="text-[10px] text-slate-400 font-mono">{area.areaCode || area.id}</p>
-        </div>
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-          className={`text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`}>
-          <polyline points="6 9 12 15 18 9"/>
-        </svg>
-      </button>
-      {expanded && (
-        <div className="px-5 pb-4 space-y-2">
-          {loading ? (
-            <p className="text-xs text-slate-400 text-center py-2">Đang tải luống...</p>
-          ) : beds.length === 0 ? (
-            <p className="text-xs text-slate-400 text-center py-2">Chưa có luống.</p>
-          ) : (
-            beds.map(bed => (
-              <div key={bed.id} className="flex items-center gap-2 p-2 bg-slate-50 rounded-xl text-xs">
-                <span className="text-emerald-500">🌱</span>
-                <span className="font-semibold text-slate-700">{bed.bedName || bed.bedCode || bed.name || 'Luống'}</span>
-                <span className="ml-auto text-slate-400 font-mono">{bed.bedCode || ''}</span>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
+// (Removed per user request - no longer used in dashboard)
 
 export default TechnicianDashboard;

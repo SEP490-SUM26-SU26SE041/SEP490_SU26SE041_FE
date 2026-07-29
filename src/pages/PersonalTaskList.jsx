@@ -1,6 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useToast } from '../context/ToastContext';
 import { tasksApi, taskReportsApi } from '../api/sharedTaskApi';
+
+const Portal = ({ children }) => {
+  if (typeof document === 'undefined') return null;
+  return createPortal(children, document.body);
+};
 
 const TASK_TABS = [
   { id: 'all', label: 'Tất Cả' },
@@ -75,12 +81,22 @@ const PersonalTaskList = () => {
     } catch (err) { showToast(err.message || 'Không thể bắt đầu tác vụ', 'error'); }
   };
 
-  const handleComplete = async (task) => {
+  // Complete task = submit report (modal handles both API calls)
+  const handleSubmitComplete = async ({ reportText, resultData, images }) => {
     try {
-      await tasksApi.complete(task.id);
-      showToast('Đã hoàn thành tác vụ!', 'success');
+      // 1. Submit report first (business rule: report required before completion)
+      const dataObj = {};
+      resultData.forEach(r => { if (r.key && r.key.trim()) dataObj[r.key.trim()] = r.value; });
+      await taskReportsApi.create({ taskId: selectedTask.id, reportText, resultData: dataObj, images });
+      // 2. Then mark complete
+      await tasksApi.complete(selectedTask.id);
+      showToast('Đã hoàn thành tác vụ và gửi báo cáo!', 'success');
+      setShowReportModal(false);
+      setSelectedTask(null);
       fetchTasks();
-    } catch (err) { showToast(err.message || 'Không thể hoàn thành tác vụ', 'error'); }
+    } catch (err) {
+      showToast(err.message || 'Không thể hoàn thành tác vụ', 'error');
+    }
   };
 
   const handleCancel = async (task) => {
@@ -166,7 +182,6 @@ const PersonalTaskList = () => {
                   task={task}
                   userRole={userRole}
                   onStart={() => handleStart(task)}
-                  onComplete={() => handleComplete(task)}
                   onCancel={() => handleCancel(task)}
                   onReport={() => openReportModal(task)}
                   onDetail={() => openDetail(task)}
@@ -180,8 +195,9 @@ const PersonalTaskList = () => {
       {showReportModal && selectedTask && (
         <TaskReportModal
           task={selectedTask}
-          onClose={() => setShowReportModal(false)}
-          onSuccess={() => { setShowReportModal(false); fetchTasks(); }}
+          mode="complete"
+          onClose={() => { setShowReportModal(false); setSelectedTask(null); }}
+          onSubmit={handleSubmitComplete}
         />
       )}
 
@@ -190,7 +206,7 @@ const PersonalTaskList = () => {
           task={selectedTask}
           onClose={() => setShowDetail(false)}
           onStart={() => { handleStart(selectedTask); setShowDetail(false); }}
-          onComplete={() => { handleComplete(selectedTask); setShowDetail(false); }}
+          onCompleteRequest={() => { setShowDetail(false); openReportModal(selectedTask); }}
         />
       )}
     </div>
@@ -199,7 +215,7 @@ const PersonalTaskList = () => {
 
 // ── Task Item ──────────────────────────────────────────────────────────────────
 
-const TaskItem = ({ task, userRole, onStart, onComplete, onCancel, onReport, onDetail }) => {
+const TaskItem = ({ task, userRole, onStart, onCancel, onReport, onDetail }) => {
   const icon = TASK_TYPE_ICONS[task.taskType] || '📋';
   const statusColor = STATUS_COLORS[task.status] || 'bg-slate-100 text-slate-600';
   const statusBg = task.status === 'InProgress' ? 'bg-amber-50 border-l-4 border-l-amber-500' : task.status === 'Completed' ? 'bg-emerald-50 border-l-4 border-l-emerald-500' : 'bg-white border-l-4 border-l-slate-200';
@@ -229,16 +245,10 @@ const TaskItem = ({ task, userRole, onStart, onComplete, onCancel, onReport, onD
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
           <button onClick={onDetail} className="px-3 py-2 border border-slate-300 text-slate-600 hover:bg-slate-50 rounded-xl text-xs font-semibold transition-all">👁️ Chi tiết</button>
           {task.status === 'Pending' && (
-            <>
-              <button onClick={onStart} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/20 transition-all">▶ Bắt Đầu</button>
-              <button onClick={onReport} className="px-3 py-2 border border-blue-300 text-blue-600 hover:bg-blue-50 rounded-xl text-xs font-bold transition-all">📝 Báo Cáo</button>
-            </>
+            <button onClick={onStart} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/20 transition-all">▶ Bắt Đầu</button>
           )}
           {task.status === 'InProgress' && (
-            <>
-              <button onClick={onComplete} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all">✅ Hoàn Thành</button>
-              <button onClick={onReport} className="px-3 py-2 border border-emerald-300 text-emerald-600 hover:bg-emerald-50 rounded-xl text-xs font-bold transition-all">📝 Báo Cáo</button>
-            </>
+            <button onClick={onReport} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all">✅ Hoàn Thành</button>
           )}
           {(task.status === 'Pending' || task.status === 'InProgress') && (
             <button onClick={onCancel} className="px-3 py-2 border border-rose-300 text-rose-500 hover:bg-rose-50 rounded-xl text-xs font-semibold transition-all">✕ Hủy</button>
@@ -251,22 +261,19 @@ const TaskItem = ({ task, userRole, onStart, onComplete, onCancel, onReport, onD
 
 // ── Task Report Modal ──────────────────────────────────────────────────────────
 
-const TaskReportModal = ({ task, onClose, onSuccess }) => {
+const TaskReportModal = ({ task, mode = 'report', onClose, onSubmit }) => {
   const { showToast } = useToast();
   const [reportText, setReportText] = useState('');
   const [saving, setSaving] = useState(false);
   const [resultData, setResultData] = useState([{ key: '', value: '' }]);
+  const [images, setImages] = useState([]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!reportText.trim()) { showToast('Vui lòng nhập nội dung báo cáo', 'error'); return; }
     try {
       setSaving(true);
-      const dataObj = {};
-      resultData.forEach(r => { if (r.key.trim()) dataObj[r.key.trim()] = r.value; });
-      await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
-      showToast('Đã gửi báo cáo tác vụ!', 'success');
-      onSuccess();
+      await onSubmit({ reportText, resultData, images });
     } catch (err) {
       showToast(err.message || 'Không thể gửi báo cáo', 'error');
     } finally { setSaving(false); }
@@ -274,17 +281,26 @@ const TaskReportModal = ({ task, onClose, onSuccess }) => {
 
   const updateResult = (idx, field, value) => setResultData(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r));
 
+  const isComplete = mode === 'complete';
+  const titleText = isComplete ? 'Hoàn Thành & Báo Cáo' : 'Báo Cáo Tác Vụ';
+  const submitText = isComplete ? (saving ? '⏳ Đang hoàn thành...' : '✅ Hoàn Thành & Gửi Báo Cáo') : (saving ? 'Đang gửi...' : 'Gửi Báo Cáo');
+  const headerBg = isComplete ? 'bg-gradient-to-r from-emerald-50 to-teal-50' : 'bg-white';
+
   return (
+    <Portal>
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4 animate-fade-in">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center">
-          <h3 className="font-hanken font-bold text-lg text-slate-900">Báo Cáo Tác Vụ</h3>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
+        <div className={`px-6 py-4 border-b border-slate-200 flex justify-between items-center ${headerBg}`}>
+          <div>
+            <h3 className="font-hanken font-bold text-lg text-slate-900">{titleText}</h3>
+            {isComplete && <p className="text-xs text-emerald-700 mt-0.5">Báo cáo là bắt buộc trước khi hoàn thành</p>}
+          </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <div className="p-3 bg-slate-50 rounded-xl">
+        <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto flex-1">
+          <div className={`p-3 rounded-xl border ${isComplete ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
             <p className="text-xs text-slate-500 font-semibold">Tác vụ</p>
             <p className="font-bold text-sm text-slate-900">{task.title || '—'}</p>
             {task.description && <p className="text-xs text-slate-500 mt-1">{task.description}</p>}
@@ -314,28 +330,33 @@ const TaskReportModal = ({ task, onClose, onSuccess }) => {
             </div>
             <button type="button" onClick={() => setResultData(prev => [...prev, { key: '', value: '' }])} className="mt-2 text-xs text-blue-600 font-semibold hover:underline">+ Thêm dữ liệu</button>
           </div>
-          <div className="flex justify-end gap-3 pt-2">
+          <div className="flex justify-end gap-3 pt-2 border-t border-slate-200">
             <button type="button" onClick={onClose} className="px-5 py-2.5 border border-slate-300 rounded-xl text-sm font-medium hover:bg-slate-50">Hủy</button>
             <button type="submit" disabled={saving}
-              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20 disabled:opacity-50">
-              {saving ? 'Đang gửi...' : 'Gửi Báo Cáo'}
+              className={`px-5 py-2.5 text-white rounded-xl text-sm font-bold shadow-lg disabled:opacity-50 ${
+                isComplete ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20'
+              }`}>
+              {submitText}
             </button>
           </div>
         </form>
       </div>
     </div>
+    </Portal>
   );
 };
 
 // ── Task Detail Modal ──────────────────────────────────────────────────────────
 
-const TaskDetailModal = ({ task, onClose, onStart, onComplete }) => {
+const TaskDetailModal = ({ task, onClose, onStart, onCompleteRequest }) => {
   const statusColor = STATUS_COLORS[task.status] || 'bg-slate-100 text-slate-600';
   const statusLabel = { Pending: 'Chờ', InProgress: 'Đang Làm', Completed: 'Hoàn Thành', Overdue: 'Quá Hạn' }[task.status] || task.status;
+  const tm = TASK_TYPE_ICONS[task.taskType] || '📋';
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+    <Portal>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4 animate-fade-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden max-h-[90vh] flex flex-col">
         <div className="px-6 py-4 border-b border-slate-200 flex justify-between items-center">
           <div>
             <h3 className="font-bold text-lg text-slate-900">Chi Tiết Tác Vụ</h3>
@@ -345,11 +366,11 @@ const TaskDetailModal = ({ task, onClose, onStart, onComplete }) => {
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-6 space-y-4 overflow-y-auto flex-1">
           <div className="grid grid-cols-2 gap-3 text-sm">
             {[
-              { label: 'Loại', value: task.taskType || '—' },
-              { label: 'Trạng thái', value: statusLabel },
+              { label: 'Loại', value: <span className="flex items-center gap-1.5">{tm} {task.taskType || '—'}</span> },
+              { label: 'Trạng thái', value: <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${statusColor}`}>{statusLabel}</span> },
               { label: 'Thí nghiệm', value: task.experimentTitle || '—' },
               { label: 'Batch', value: task.batchCode || '—' },
               { label: 'Giai đoạn', value: task.experimentStageName || '—' },
@@ -369,18 +390,19 @@ const TaskDetailModal = ({ task, onClose, onStart, onComplete }) => {
               <p className="text-sm text-slate-700">{task.description}</p>
             </div>
           )}
-          <div className="flex justify-end gap-3 pt-2 border-t border-slate-200">
-            <button onClick={onClose} className="px-5 py-2.5 border border-slate-300 rounded-xl text-sm font-medium hover:bg-slate-50">Đóng</button>
-            {task.status === 'Pending' && (
-              <button onClick={onStart} className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20">▶ Bắt Đầu</button>
-            )}
-            {task.status === 'InProgress' && (
-              <button onClick={onComplete} className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20">✅ Hoàn Thành</button>
-            )}
-          </div>
+        </div>
+        <div className="flex justify-end gap-3 pt-4 px-6 pb-6 border-t border-slate-200">
+          <button onClick={onClose} className="px-5 py-2.5 border border-slate-300 rounded-xl text-sm font-medium hover:bg-slate-50">Đóng</button>
+          {task.status === 'Pending' && (
+            <button onClick={onStart} className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20">▶ Bắt Đầu</button>
+          )}
+          {task.status === 'InProgress' && (
+            <button onClick={onCompleteRequest} className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20">✅ Hoàn Thành</button>
+          )}
         </div>
       </div>
     </div>
+    </Portal>
   );
 };
 

@@ -267,9 +267,7 @@ const Requests = () => {
               <div className="col-span-1 md:col-span-2">
                 <DetailItem label="Mục Tiêu" value={activeRequest.objective} />
               </div>
-              <div className="col-span-1 md:col-span-2">
-                <DetailItem label="Kế Hoạch Giám Sát" value={activeRequest.monitoringPlan || '—'} />
-              </div>
+              <ExecutionPlanViewer plan={activeRequest.monitoringPlan} />
               <div className="col-span-1 md:col-span-2 flex items-center gap-3">
                 <span className="text-xs font-bold text-on-surface-variant">Trạng Thái:</span>
                 <StatusPill status={activeRequest.status} />
@@ -380,6 +378,172 @@ const Requests = () => {
           </div>
         )}
       </Modal>
+    </div>
+  );
+};
+
+const parsePlan = (raw) => {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw); } catch { return null; }
+  }
+  return null;
+};
+
+const PlanMetricCard = ({ icon, label, value, sub, color }) => {
+  const colorMap = {
+    indigo: 'bg-indigo-50 border-indigo-200 text-indigo-700',
+    emerald: 'bg-emerald-50 border-emerald-200 text-emerald-700',
+    amber: 'bg-amber-50 border-amber-200 text-amber-700',
+    sky: 'bg-sky-50 border-sky-200 text-sky-700',
+    rose: 'bg-rose-50 border-rose-200 text-rose-700',
+    slate: 'bg-slate-50 border-slate-200 text-slate-700'
+  };
+  return (
+    <div className={`rounded-xl border p-3 ${colorMap[color] || colorMap.slate}`}>
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[10px] font-bold uppercase tracking-wider opacity-80">{label}</span>
+        <span className="text-lg">{icon}</span>
+      </div>
+      <div className="font-hanken font-bold text-lg leading-tight">{value}</div>
+      {sub && <div className="text-[10px] opacity-70 mt-0.5 font-mono">{sub}</div>}
+    </div>
+  );
+};
+
+const ThresholdRow = ({ icon, label, value, color }) => {
+  const colorMap = {
+    rose: { dot: 'bg-rose-500', text: 'text-rose-700' },
+    sky: { dot: 'bg-sky-500', text: 'text-sky-700' },
+    amber: { dot: 'bg-amber-500', text: 'text-amber-700' }
+  };
+  const c = colorMap[color] || colorMap.slate || { dot: 'bg-slate-400', text: 'text-slate-700' };
+  const minVal = value?.min ?? value?.Min;
+  const maxVal = value?.max ?? value?.Max;
+  const hasRange = minVal !== undefined && maxVal !== undefined && (minVal !== '' && maxVal !== '');
+  return (
+    <div className="flex items-center justify-between px-4 py-3 bg-white border border-slate-200 rounded-lg">
+      <div className="flex items-center gap-2.5">
+        <span className={`w-2 h-2 rounded-full ${c.dot}`} />
+        <span className="text-sm font-bold text-slate-800">{label}</span>
+      </div>
+      <div className="flex items-center gap-3 text-sm">
+        {hasRange ? (
+          <>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-slate-500 uppercase font-bold">Min</span>
+              <span className="font-mono font-bold text-slate-900">{minVal}</span>
+            </div>
+            <span className="text-slate-300">→</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-slate-500 uppercase font-bold">Max</span>
+              <span className="font-mono font-bold text-slate-900">{maxVal}</span>
+            </div>
+          </>
+        ) : minVal !== undefined && minVal !== '' ? (
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] text-slate-500 uppercase font-bold">Min</span>
+            <span className="font-mono font-bold text-slate-900">{minVal}</span>
+          </div>
+        ) : maxVal !== undefined && maxVal !== '' ? (
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] text-slate-500 uppercase font-bold">Max</span>
+            <span className="font-mono font-bold text-slate-900">{maxVal}</span>
+          </div>
+        ) : (
+          <span className="text-xs text-slate-400 italic">Chưa thiết lập</span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const ExecutionPlanViewer = ({ plan }) => {
+  const data = parsePlan(plan);
+  if (!data) {
+    return (
+      <div className="col-span-1 md:col-span-2">
+        <div className="border border-dashed border-slate-300 rounded-xl p-6 text-center bg-slate-50/50">
+          <div className="text-3xl mb-1">📋</div>
+          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Kế Hoạch Thực Hiện</p>
+          <p className="text-xs text-slate-400 mt-1">Nghiên cứu viên chưa cung cấp kế hoạch chi tiết.</p>
+        </div>
+      </div>
+    );
+  }
+
+  const scaleItems = [
+    { key: 'groups', label: 'Số Nhóm', icon: '🔢', color: 'indigo' },
+    { key: 'expectedBeds', label: 'Số Luống', icon: '🛏️', color: 'emerald' },
+    { key: 'replications', label: 'Lần Lặp', icon: '🔁', color: 'sky' },
+    { key: 'expectedPlants', label: 'Cây Dự Kiến', icon: '🌱', color: 'amber' }
+  ];
+  const thresholdItems = [
+    { key: 'temperature', label: 'Nhiệt Độ', icon: '🌡️', color: 'rose' },
+    { key: 'humidity', label: 'Độ Ẩm KK', icon: '💧', color: 'sky' },
+    { key: 'soilMoisture', label: 'Độ Ẩm Đất', icon: '🪴', color: 'amber' }
+  ];
+
+  const filledScale = scaleItems.filter(i => data[i.key] !== undefined && data[i.key] !== null && data[i.key] !== '');
+  const monitoring = data.monitoring || data.Monitoring || {};
+
+  return (
+    <div className="col-span-1 md:col-span-2">
+      <div className="border border-indigo-200 rounded-2xl overflow-hidden bg-white shadow-sm">
+        <div className="px-5 py-4 bg-gradient-to-r from-indigo-600 to-violet-600 text-white flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center text-2xl">📋</div>
+            <div>
+              <p className="text-sm font-bold">Kế Hoạch Thực Hiện</p>
+              <p className="text-[10px] opacity-80">Quy mô thí nghiệm & ngưỡng giám sát môi trường</p>
+            </div>
+          </div>
+          <span className="text-[10px] font-bold uppercase tracking-wider bg-white/20 backdrop-blur-sm px-2.5 py-1 rounded-full">
+            Từ Nghiên Cứu Viên
+          </span>
+        </div>
+
+        {filledScale.length > 0 && (
+          <div className="p-5 border-b border-slate-100">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center text-sm font-bold">1</div>
+              <div>
+                <p className="text-xs font-bold text-slate-800">Quy Mô Thí Nghiệm</p>
+                <p className="text-[10px] text-slate-500">Số lượng nhóm, luống, lần lặp và cây dự kiến</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {filledScale.map(i => (
+                <PlanMetricCard key={i.key} icon={i.icon} label={i.label} value={data[i.key]} color={i.color} sub={i.key} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {thresholdItems.some(i => monitoring[i.key]) && (
+          <div className="p-5 bg-slate-50/50">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center text-sm font-bold">2</div>
+              <div>
+                <p className="text-xs font-bold text-slate-800">Ngưỡng Giám Sát Môi Trường</p>
+                <p className="text-[10px] text-slate-500">Khoảng cho phép của các chỉ số môi trường</p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {thresholdItems.filter(i => monitoring[i.key]).map(i => (
+                <ThresholdRow key={i.key} icon={i.icon} label={`${i.label} (${i.key === 'temperature' ? '°C' : '%'})`} value={monitoring[i.key]} color={i.color} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {filledScale.length === 0 && !thresholdItems.some(i => monitoring[i.key]) && (
+          <div className="p-6 text-center text-xs text-slate-500">
+            <p>Kế hoạch được cung cấp nhưng không có dữ liệu hiển thị.</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
