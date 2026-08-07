@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useToast } from '../../context/ToastContext';
 import { tasksApi, taskReportsApi, measurementRecordsApi } from '../../api/sharedTaskApi';
 import { experimentsApi } from '../../api/studentTechApi';
+import TaskReportForm, { buildReportPayload } from '../../components/tasks/TaskReportForm';
 import { batchesApi } from '../../api/experimentApi';
 
 const STU_TABS = [
@@ -361,8 +362,7 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
     if (!reportText.trim()) { showToast('Vui lòng nhập nội dung báo cáo', 'error'); return; }
     try {
       setSaving(true);
-      const dataObj = {};
-      resultData.forEach(r => { if (r.key.trim()) dataObj[r.key.trim()] = r.value; });
+      const dataObj = buildReportPayload(resultData);
       await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
       showToast('Đã gửi báo cáo!', 'success');
       setReportText('');
@@ -383,8 +383,7 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
     }
     try {
       setCompleting(true);
-      const dataObj = {};
-      resultData.forEach(r => { if (r.key.trim()) dataObj[r.key.trim()] = r.value; });
+      const dataObj = buildReportPayload(resultData);
       await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
       await tasksApi.complete(task.id);
       showToast('Đã hoàn thành tác vụ và gửi báo cáo!', 'success');
@@ -584,54 +583,18 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
                   </div>
                 </div>
               )}
-              <form onSubmit={handleSubmitReport} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
-                    <span>Nội dung báo cáo {isInProgress && <span className="text-rose-500">*</span>}</span>
-                    <span className="text-[10px] text-slate-400 font-normal">{reportText.length} ký tự</span>
-                  </label>
-                  <textarea value={reportText} onChange={e => setReportText(e.target.value)} rows={5}
-                    placeholder="Mô tả kết quả quan sát, các phát hiện và bài học rút ra..."
-                    disabled={isCompleted}
-                    className="w-full px-4 py-3 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 resize-none bg-white disabled:bg-slate-50 disabled:text-slate-500" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5">Dữ liệu định lượng <span className="text-slate-400 font-normal">(tùy chọn)</span></label>
-                  <div className="space-y-2">
-                    {resultData.map((r, idx) => (
-                      <div key={idx} className="flex gap-2">
-                        <input type="text" value={r.key} placeholder="Key (VD: plantsObserved)"
-                          disabled={isCompleted}
-                          onChange={e => updateResult(idx, 'key', e.target.value)}
-                          className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 bg-white font-mono disabled:bg-slate-50" />
-                        <input type="text" value={r.value} placeholder="Giá trị"
-                          disabled={isCompleted}
-                          onChange={e => updateResult(idx, 'value', e.target.value)}
-                          className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 bg-white disabled:bg-slate-50" />
-                        {resultData.length > 1 && !isCompleted && (
-                          <button type="button" onClick={() => setResultData(prev => prev.filter((_, i) => i !== idx))}
-                            className="px-2 text-rose-500 hover:bg-rose-50 rounded-lg font-bold">✕</button>
-                        )}
-                      </div>
-                    ))}
-                    {!isCompleted && (
-                      <button type="button" onClick={() => setResultData(prev => [...prev, { key: '', value: '' }])}
-                        className="text-xs text-blue-600 font-semibold hover:underline inline-flex items-center gap-1">
-                        <span>＋</span> Thêm dòng dữ liệu
-                      </button>
-                    )}
-                  </div>
-                </div>
-                {!isCompleted && (
-                  <div className="flex gap-2 pt-2">
-                    <button type="submit" disabled={saving || !reportText.trim()}
-                      className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2">
-                      <span>✉️</span>
-                      {saving ? 'Đang gửi...' : 'Gửi Báo Cáo'}
-                    </button>
-                  </div>
-                )}
-              </form>
+              <TaskReportForm
+                task={task}
+                reportText={reportText}
+                setReportText={setReportText}
+                resultData={resultData}
+                setResultData={setResultData}
+                saving={saving}
+                disabled={isCompleted}
+                onSubmit={handleSubmitReport}
+                color="blue"
+                submitLabel="Gửi Báo Cáo"
+              />
             </div>
           )}
 

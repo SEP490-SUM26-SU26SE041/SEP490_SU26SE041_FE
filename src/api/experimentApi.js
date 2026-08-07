@@ -94,7 +94,20 @@ export const experimentsApi = {
   createProcedureTemplate: (payload) =>
     apiClient.request('/experiments/procedure-templates', { method: 'POST', body: payload }),
   removeProcedureTemplate: (id) =>
-    apiClient.request(`/experiments/procedure-templates/${id}`, { method: 'DELETE' })
+    apiClient.request(`/experiments/procedure-templates/${id}`, { method: 'DELETE' }),
+
+  // Auto-Setup Experiment (tạo Groups + Batches tự động)
+  autoSetup: (id) =>
+    apiClient.request(`/experiments/${id}/auto-setup`, { method: 'POST' }),
+
+  // Randomize Beds (BE cũ: /randomize-beds; BE mới: /randomize - hỗ trợ cả 2)
+  randomizeBeds: (id) =>
+    apiClient.request(`/experiments/${id}/randomize-beds`, { method: 'POST' })
+      .catch(() => apiClient.request(`/experiments/${id}/randomize`, { method: 'POST' })),
+
+  // Supplement Groups (BE mới) - thêm/sửa groups sau auto-setup
+  supplementGroups: (id, payload) =>
+    apiClient.request(`/experiments/${id}/supplement-groups`, { method: 'POST', body: payload })
 };
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
