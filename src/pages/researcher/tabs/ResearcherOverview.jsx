@@ -37,12 +37,15 @@ const ResearcherOverview = () => {
     total: experiments.length,
     draft: experiments.filter(e => e.status === 'Draft').length,
     active: experiments.filter(e => e.status === 'Active').length,
+    paused: experiments.filter(e => e.status === 'Paused').length,
     completed: experiments.filter(e => e.status === 'Completed').length,
+    cancelled: experiments.filter(e => e.status === 'Cancelled').length,
   };
 
   const statusColors = {
     Draft: 'bg-slate-100 text-slate-600',
     Active: 'bg-emerald-100 text-emerald-700',
+    Paused: 'bg-amber-100 text-amber-700',
     Approved: 'bg-blue-100 text-blue-700',
     Completed: 'bg-emerald-200 text-emerald-800',
     Cancelled: 'bg-rose-100 text-rose-700'
@@ -51,11 +54,12 @@ const ResearcherOverview = () => {
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         {[
           { label: 'Tổng Thí Nghiệm', value: stats.total, color: 'text-primary', bg: 'bg-primary/10' },
           { label: 'Đang Soạn Thảo', value: stats.draft, color: 'text-slate-500', bg: 'bg-slate-100' },
           { label: 'Đang Triển Khai', value: stats.active, color: 'text-emerald-600', bg: 'bg-emerald-50' },
+          { label: 'Tạm Dừng', value: stats.paused, color: 'text-amber-600', bg: 'bg-amber-50' },
           { label: 'Hoàn Thành', value: stats.completed, color: 'text-emerald-700', bg: 'bg-emerald-100' },
         ].map(s => (
           <div key={s.label} className={`${s.bg} border border-outline-variant rounded-2xl p-5 flex flex-col gap-1`}>

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useToast } from '../context/ToastContext';
 import { tasksApi, taskReportsApi } from '../api/sharedTaskApi';
+import TaskReportForm, { buildReportPayload } from '../components/tasks/TaskReportForm';
 
 const Portal = ({ children }) => {
   if (typeof document === 'undefined') return null;
@@ -85,8 +86,7 @@ const PersonalTaskList = () => {
   const handleSubmitComplete = async ({ reportText, resultData, images }) => {
     try {
       // 1. Submit report first (business rule: report required before completion)
-      const dataObj = {};
-      resultData.forEach(r => { if (r.key && r.key.trim()) dataObj[r.key.trim()] = r.value; });
+      const dataObj = buildReportPayload(resultData);
       await taskReportsApi.create({ taskId: selectedTask.id, reportText, resultData: dataObj, images });
       // 2. Then mark complete
       await tasksApi.complete(selectedTask.id);
@@ -283,7 +283,6 @@ const TaskReportModal = ({ task, mode = 'report', onClose, onSubmit }) => {
 
   const isComplete = mode === 'complete';
   const titleText = isComplete ? 'Hoàn Thành & Báo Cáo' : 'Báo Cáo Tác Vụ';
-  const submitText = isComplete ? (saving ? '⏳ Đang hoàn thành...' : '✅ Hoàn Thành & Gửi Báo Cáo') : (saving ? 'Đang gửi...' : 'Gửi Báo Cáo');
   const headerBg = isComplete ? 'bg-gradient-to-r from-emerald-50 to-teal-50' : 'bg-white';
 
   return (
@@ -299,45 +298,26 @@ const TaskReportModal = ({ task, mode = 'report', onClose, onSubmit }) => {
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 overflow-y-auto flex-1">
+        <form onSubmit={handleSubmit} className="p-6 overflow-y-auto flex-1 space-y-4">
           <div className={`p-3 rounded-xl border ${isComplete ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
             <p className="text-xs text-slate-500 font-semibold">Tác vụ</p>
             <p className="font-bold text-sm text-slate-900">{task.title || '—'}</p>
             {task.description && <p className="text-xs text-slate-500 mt-1">{task.description}</p>}
           </div>
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Nội Dung Báo Cáo <span className="text-rose-500">*</span></label>
-            <textarea value={reportText} onChange={e => setReportText(e.target.value)} rows={4}
-              placeholder="Mô tả kết quả đã thực hiện, các quan sát, và bài học rút ra..."
-              className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
-          </div>
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Dữ Liệu Kết Quả (tùy chọn)</label>
-            <div className="space-y-2">
-              {resultData.map((r, idx) => (
-                <div key={idx} className="flex gap-2">
-                  <input type="text" value={r.key} placeholder="Key (VD: plantsObserved)"
-                    onChange={e => updateResult(idx, 'key', e.target.value)}
-                    className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                  <input type="text" value={r.value} placeholder="Giá trị"
-                    onChange={e => updateResult(idx, 'value', e.target.value)}
-                    className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                  {resultData.length > 1 && (
-                    <button type="button" onClick={() => setResultData(prev => prev.filter((_, i) => i !== idx))} className="text-rose-500 font-bold">✕</button>
-                  )}
-                </div>
-              ))}
-            </div>
-            <button type="button" onClick={() => setResultData(prev => [...prev, { key: '', value: '' }])} className="mt-2 text-xs text-blue-600 font-semibold hover:underline">+ Thêm dữ liệu</button>
-          </div>
+          <TaskReportForm
+            task={task}
+            reportText={reportText}
+            setReportText={setReportText}
+            resultData={resultData}
+            setResultData={setResultData}
+            saving={saving}
+            disabled={false}
+            onSubmit={handleSubmit}
+            color={isComplete ? 'emerald' : 'blue'}
+            submitLabel={isComplete ? '✅ Hoàn Thành & Gửi Báo Cáo' : 'Gửi Báo Cáo'}
+          />
           <div className="flex justify-end gap-3 pt-2 border-t border-slate-200">
             <button type="button" onClick={onClose} className="px-5 py-2.5 border border-slate-300 rounded-xl text-sm font-medium hover:bg-slate-50">Hủy</button>
-            <button type="submit" disabled={saving}
-              className={`px-5 py-2.5 text-white rounded-xl text-sm font-bold shadow-lg disabled:opacity-50 ${
-                isComplete ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20'
-              }`}>
-              {submitText}
-            </button>
           </div>
         </form>
       </div>

@@ -14,9 +14,15 @@ const Portal = ({ children }) => {
 
 const STATUS_META = {
   Pending:    { label: 'Chờ',        dot: 'bg-blue-500',    text: 'text-blue-700',    bg: 'bg-blue-50',    border: 'border-blue-200' },
+  Assigned:   { label: 'Đã Giao',    dot: 'bg-indigo-500',  text: 'text-indigo-700',  bg: 'bg-indigo-50',  border: 'border-indigo-200' },
   InProgress: { label: 'Đang Làm',   dot: 'bg-amber-500',   text: 'text-amber-700',   bg: 'bg-amber-50',   border: 'border-amber-200' },
   Completed:  { label: 'Hoàn Thành', dot: 'bg-emerald-500', text: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' },
+  Approved:   { label: 'Đã Duyệt',   dot: 'bg-emerald-600', text: 'text-emerald-800', bg: 'bg-emerald-50', border: 'border-emerald-200' },
+  Rejected:   { label: 'Bị Từ Chối', dot: 'bg-rose-500',    text: 'text-rose-700',    bg: 'bg-rose-50',    border: 'border-rose-200' },
+  Overdue:    { label: 'Quá Hạn',    dot: 'bg-rose-600',    text: 'text-rose-800',    bg: 'bg-rose-50',    border: 'border-rose-200' },
   Cancelled:  { label: 'Đã Hủy',     dot: 'bg-slate-400',   text: 'text-slate-500',   bg: 'bg-slate-50',   border: 'border-slate-200' },
+  Resigned:   { label: 'Đã Từ Chối', dot: 'bg-orange-500',  text: 'text-orange-700',  bg: 'bg-orange-50',  border: 'border-orange-200' },
+  Reassigned: { label: 'Đã Chuyển',  dot: 'bg-violet-500',  text: 'text-violet-700',  bg: 'bg-violet-50',  border: 'border-violet-200' },
 };
 
 const TASK_TYPE_META = {
@@ -29,7 +35,21 @@ const TASK_TYPE_META = {
   Other:       { label: 'Khác',          icon: '📋', color: 'bg-slate-50 text-slate-600' },
 };
 
-const STATUS_ORDER = ['Pending', 'InProgress', 'Completed', 'Cancelled'];
+const STATUS_ORDER = ['Pending', 'Assigned', 'InProgress', 'Overdue', 'Completed', 'Approved', 'Rejected', 'Cancelled', 'Resigned', 'Reassigned'];
+
+// Helper: kiểm tra task đã quá hạn (BE từ chối Start nếu overdue - theo spec line 909)
+export const isTaskOverdue = (task) => {
+  if (!task?.dueDate) return false;
+  const finished = ['Completed', 'Cancelled', 'Approved', 'Rejected'];
+  if (finished.includes(task.status)) return false;
+  return new Date(task.dueDate) < new Date();
+};
+
+// Helper: kiểm tra task đã có report (BE không cho gửi report lần 2 - theo spec line 766)
+export const hasTaskReport = (task) => {
+  return task?.assignments?.some(a => a.reporterId && a.status === 'Completed') ||
+         task?.hasReport === true;
+};
 
 const VIEW_MODES = [
   { id: 'kanban', label: 'Bảng Kanban', icon: '🗂️' },
@@ -285,7 +305,7 @@ const KanbanView = ({ tasks, onSelect, onOpenReports, onChange }) => {
 const KanbanCard = ({ task, onSelect }) => {
   const tm = TASK_TYPE_META[task.taskType] || TASK_TYPE_META.Other;
   const sm = STATUS_META[task.status] || STATUS_META.Pending;
-  const overdue = task.dueDate && new Date(task.dueDate) < new Date() && task.status !== 'Completed' && task.status !== 'Cancelled';
+  const overdue = isTaskOverdue(task);
   const rel = task.dueDate ? relativeDay(task.dueDate) : null;
 
   return (
@@ -483,7 +503,7 @@ const TaskDetailDrawer = ({ task, onClose, onOpenReports, onChange }) => {
   const { showToast } = useToast();
   const tm = TASK_TYPE_META[task.taskType] || TASK_TYPE_META.Other;
   const sm = STATUS_META[task.status] || STATUS_META.Pending;
-  const overdue = task.dueDate && new Date(task.dueDate) < new Date() && task.status !== 'Completed' && task.status !== 'Cancelled';
+  const overdue = isTaskOverdue(task);
   const rel = task.dueDate ? relativeDay(task.dueDate) : null;
 
   const handleCancel = async () => {
@@ -558,6 +578,59 @@ const TaskDetailDrawer = ({ task, onClose, onOpenReports, onChange }) => {
                 <p className="text-sm text-on-surface">{task.requiredSkillDescription}</p>
               </Section>
             )}
+
+            {task.skillRequirements && task.skillRequirements.length > 0 && (
+              <Section title="Skill Requirements" icon="🎯">
+                <div className="space-y-2">
+                  {task.skillRequirements.map((sr, i) => (
+                    <div key={i} className="flex items-center justify-between p-2 bg-indigo-50/50 border border-indigo-100 rounded-lg">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">🎯</span>
+                        <span className="text-sm font-semibold text-on-surface">{sr.skillName || sr.skillId}</span>
+                      </div>
+                      <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
+                        Yêu cầu Level {sr.requiredLevel}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {task.assignments && task.assignments.length > 0 && (
+              <Section title="Lịch Sử Phân Công" icon="📋">
+                <div className="space-y-2">
+                  {task.assignments.map((a, i) => (
+                    <div key={i} className="p-3 bg-white border border-outline-variant rounded-lg">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-semibold">{a.assigneeName}</span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                          a.status === 'Completed' ? 'bg-emerald-100 text-emerald-700' :
+                          a.status === 'Assigned' ? 'bg-blue-100 text-blue-700' :
+                          a.status === 'Reassigned' ? 'bg-violet-100 text-violet-700' :
+                          'bg-slate-100 text-slate-600'
+                        }`}>{a.status}</span>
+                      </div>
+                      <p className="text-[10px] text-on-surface-variant">📧 {a.assigneeEmail}</p>
+                      <p className="text-[10px] text-on-surface-variant">Vai trò: {a.assigneeRole}</p>
+                      {a.reason && <p className="text-xs text-on-surface mt-1">💬 {a.reason}</p>}
+                      {a.assigneeSkills && a.assigneeSkills.length > 0 && (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {a.assigneeSkills.map((sk, j) => (
+                            <span key={j} className="text-[10px] px-1.5 py-0.5 bg-emerald-50 text-emerald-700 rounded">
+                              {sk.skillName} L{sk.proficiencyLevel}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {a.assignedAt && (
+                        <p className="text-[10px] text-on-surface-variant mt-1">📅 {formatViDate(a.assignedAt)}</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            )}
           </div>
 
           {/* Footer actions - researcher chỉ quản lý, không thực thi */}
@@ -574,8 +647,16 @@ const TaskDetailDrawer = ({ task, onClose, onOpenReports, onChange }) => {
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
                   Việc thực hiện do người được gán (Student/Tech) xử lý
                 </div>
+                <button onClick={() => { onOpenReports(task); onClose(); }}
+                  disabled={hasTaskReport(task)}
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-600/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  title={hasTaskReport(task) ? 'Tác vụ đã có báo cáo' : 'Xem / Tạo báo cáo'}>
+                  📄 {hasTaskReport(task) ? 'Đã Có Báo Cáo' : 'Tạo Báo Cáo'}
+                </button>
                 <button onClick={handleCancel}
-                  className="px-4 py-2.5 border border-rose-300 text-rose-600 hover:bg-rose-50 rounded-xl text-sm font-bold transition-all">
+                  disabled={overdue}
+                  className="px-4 py-2.5 border border-rose-300 text-rose-600 hover:bg-rose-50 rounded-xl text-sm font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  title={overdue ? 'Không thể hủy task quá hạn' : 'Hủy tác vụ'}>
                   Hủy Tác Vụ
                 </button>
               </>
@@ -625,9 +706,14 @@ const TaskReportsModal = ({ task, reports, loading, onClose }) => (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[3500] flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col animate-scale-in" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-outline-variant">
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h3 className="font-hanken font-bold text-base text-on-surface">Báo Cáo Tác Vụ</h3>
             <p className="text-xs text-on-surface-variant mt-0.5 truncate">{task?.title || '—'}</p>
+            {reports.length > 0 && (
+              <p className="text-[10px] text-emerald-700 font-bold mt-1 inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 border border-emerald-200 rounded-full">
+                ✅ Đã có báo cáo · BE không cho gửi thêm
+              </p>
+            )}
           </div>
           <button onClick={onClose} className="p-2 rounded-xl hover:bg-surface-container/50 transition-colors shrink-0">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>

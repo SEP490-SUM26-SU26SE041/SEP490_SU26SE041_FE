@@ -23,6 +23,51 @@ const STATUS_FILTERS = [
   { value: 'Cancelled', label: 'Đã Hủy' }
 ];
 
+// Helper: gợi ý luống có đất phù hợp với cây trồng dựa trên từ khoá
+// soilDescription + cropVarietyName -> {label, color, icon}
+const SOIL_HINTS = [
+  { match: ['phù sa', 'alluvial'], icon: '🌾', suitable: ['lúa', 'rice', 'sen', 'ngô', 'bắp', 'đậu', 'rau'], label: 'Phù sa — thích hợp lúa nước, rau màu' },
+  { match: ['sét', 'clay'], icon: '🟫', suitable: ['lúa', 'sen', 'khoai', 'bầu', 'bí'], label: 'Đất sét — giữ nước tốt, thích hợp lúa/sen' },
+  { match: ['cát', 'sand'], icon: '🏜️', suitable: ['khoai', 'lạc', 'dưa hấu', 'dứa', 'ớt'], label: 'Đất cát — thoát nước nhanh, thích hợp khoai/lạc/dưa' },
+  { match: ['thịt', 'loam'], icon: '🌱', suitable: [], label: 'Đất thịt — đa năng, thích hợp hầu hết cây trồng' },
+  { match: ['đá vôi', 'limestone'], icon: '🪨', suitable: ['thanh long', 'xoài', 'cà phê'], label: 'Đất đá vôi — thích hợp cây ăn quả lâu năm' },
+  { match: ['bazan', 'đỏ'], icon: '🟥', suitable: ['cà phê', 'tiêu', 'điều', 'cao su'], label: 'Đất bazan — thích hợp cây công nghiệp dài ngày' },
+  { match: ['mùn', 'humus', 'organic'], icon: '🟩', suitable: ['rau', 'dưa', 'cà chua', 'ớt'], label: 'Đất mùn giàu dinh dưỡng — thích hợp rau quả' },
+];
+
+const getSoilSuggestion = (bed, cropVarietyName) => {
+  const desc = (bed?.soilDescription || '').toLowerCase();
+  if (!desc) return null;
+
+  const crop = (cropVarietyName || '').toLowerCase();
+
+  // Tìm hint khớp với soilDescription
+  let hint = null;
+  for (const h of SOIL_HINTS) {
+    if (h.match.some(k => desc.includes(k))) {
+      hint = h;
+      break;
+    }
+  }
+
+  if (!hint) {
+    // Có mô tả nhưng không match keyword -> hiển thị thô
+    return { label: 'Có mô tả đất', icon: '🪨', match: null, cls: 'bg-amber-50 border-amber-200 text-amber-700' };
+  }
+
+  // Nếu không có cropVarietyName -> chỉ hiển thị hint chung
+  if (!crop || hint.suitable.length === 0) {
+    return { label: hint.label, icon: hint.icon, match: null, cls: 'bg-slate-50 border-slate-200 text-slate-700' };
+  }
+
+  // Kiểm tra match với cropVarietyName
+  const matched = hint.suitable.some(s => crop.includes(s));
+  if (matched) {
+    return { label: hint.label, icon: hint.icon, match: true, cls: 'bg-emerald-50 border-emerald-200 text-emerald-700' };
+  }
+  return { label: hint.label, icon: hint.icon, match: false, cls: 'bg-amber-50 border-amber-200 text-amber-700' };
+};
+
 const Requests = () => {
   const { showToast } = useToast();
   const [filter, setFilter] = useState('');
@@ -291,25 +336,56 @@ const Requests = () => {
 
             {resourceSummary?.availableBeds?.length > 0 && activeRequest.status === 'Pending' && (
               <div className="border-t border-outline-variant pt-6">
-                <h4 className="font-hanken font-bold text-base text-on-surface mb-3 uppercase tracking-wide">Chọn luống để giữ chỗ</h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-60 overflow-y-auto p-1">
-                  {resourceSummary.availableBeds.map(bed => (
-                    <label
-                      key={bed.id}
-                      className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all ${selectedBedIds.includes(bed.id) ? 'border-primary bg-primary-container/30' : 'border-outline-variant hover:bg-surface-container'}`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={selectedBedIds.includes(bed.id)}
-                        onChange={() => toggleBed(bed.id)}
-                        className="w-4 h-4 accent-primary"
-                      />
-                      <div className="flex-1">
-                        <div className="text-sm font-bold text-on-surface">{bed.bedCode}</div>
-                        <div className="text-[10px] text-on-surface-variant">{bed.areaName}</div>
-                      </div>
-                    </label>
-                  ))}
+                <h4 className="font-hanken font-bold text-base text-on-surface mb-1 uppercase tracking-wide">Chọn luống để giữ chỗ</h4>
+                <p className="text-xs text-on-surface-variant mb-3">
+                  🪨 Badge dưới mỗi luống cho biết loại đất &amp; cây trồng phù hợp để dễ lựa chọn
+                  {activeRequest?.cropVarietyName && <span className="ml-1">với cây <strong className="text-emerald-700">{activeRequest.cropVarietyName}</strong></span>}.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-72 overflow-y-auto p-1">
+                  {resourceSummary.availableBeds.map(bed => {
+                    const suggestion = getSoilSuggestion(bed, activeRequest?.cropVarietyName);
+                    const isSelected = selectedBedIds.includes(bed.id);
+                    return (
+                      <label
+                        key={bed.id}
+                        className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                          isSelected ? 'border-primary bg-primary-container/30' : 'border-outline-variant hover:bg-surface-container'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleBed(bed.id)}
+                          className="w-4 h-4 accent-primary mt-0.5 shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <div className="text-sm font-bold text-on-surface">{bed.bedCode}</div>
+                            {bed.allocationStatus && (
+                              <span className="px-1.5 py-0 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                {bed.allocationStatus}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-on-surface-variant mt-0.5">📍 {bed.areaName}{bed.farmName ? ` · ${bed.farmName}` : ''}</div>
+                          {bed.soilDescription && (
+                            <div className="mt-1.5 flex items-start gap-1.5 p-1.5 bg-amber-50/60 border border-amber-100 rounded text-[11px] text-amber-900">
+                              <span className="shrink-0">🪨</span>
+                              <span className="line-clamp-2"><span className="font-bold">Đất:</span> {bed.soilDescription}</span>
+                            </div>
+                          )}
+                          {suggestion && (
+                            <div className={`mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10px] font-bold ${suggestion.cls}`}>
+                              <span>{suggestion.icon}</span>
+                              <span className="line-clamp-1">{suggestion.label}</span>
+                              {suggestion.match === true && <span className="ml-0.5">✓ Phù hợp</span>}
+                              {suggestion.match === false && <span className="ml-0.5">⚠</span>}
+                            </div>
+                          )}
+                        </div>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -473,20 +549,24 @@ const ExecutionPlanViewer = ({ plan }) => {
     );
   }
 
-  const scaleItems = [
-    { key: 'groups', label: 'Số Nhóm', icon: '🔢', color: 'indigo' },
-    { key: 'expectedBeds', label: 'Số Luống', icon: '🛏️', color: 'emerald' },
-    { key: 'replications', label: 'Lần Lặp', icon: '🔁', color: 'sky' },
-    { key: 'expectedPlants', label: 'Cây Dự Kiến', icon: '🌱', color: 'amber' }
-  ];
-  const thresholdItems = [
-    { key: 'temperature', label: 'Nhiệt Độ', icon: '🌡️', color: 'rose' },
-    { key: 'humidity', label: 'Độ Ẩm KK', icon: '💧', color: 'sky' },
-    { key: 'soilMoisture', label: 'Độ Ẩm Đất', icon: '🪴', color: 'amber' }
-  ];
+  // Schema mới: {designType, replicationCount, randomizationMethod, treatments[]}
+  // Hỗ trợ cả int (1=Control, 2=Treatment) và string
+  const designType = data.designType ?? data.DesignType ?? '';
+  const replicationCount = data.replicationCount ?? data.ReplicationCount;
+  const randomizationMethod = data.randomizationMethod ?? data.RandomizationMethod ?? '';
+  const treatments = Array.isArray(data.treatments) ? data.treatments : (Array.isArray(data.Treatments) ? data.Treatments : []);
+  const requiredBeds = (Number(replicationCount) || 0) * treatments.length;
 
-  const filledScale = scaleItems.filter(i => data[i.key] !== undefined && data[i.key] !== null && data[i.key] !== '');
-  const monitoring = data.monitoring || data.Monitoring || {};
+  const designTypeLabels = {
+    CRD: 'CRD — Completely Randomized',
+    RCBD: 'RCBD — Randomized Complete Block',
+    LSD: 'LSD — Latin Square',
+    Factorial: 'Factorial Design',
+    SplitPlot: 'Split-Plot Design',
+    Other: 'Khác'
+  };
+  const designLabel = designTypeLabels[designType] || designType || '—';
+  const isControlGroup = (gt) => Number(gt) === 1 || gt === 'Control' || gt === 1;
 
   return (
     <div className="col-span-1 md:col-span-2">
@@ -495,8 +575,8 @@ const ExecutionPlanViewer = ({ plan }) => {
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-sm flex items-center justify-center text-2xl">📋</div>
             <div>
-              <p className="text-sm font-bold">Kế Hoạch Thực Hiện</p>
-              <p className="text-[10px] opacity-80">Quy mô thí nghiệm & ngưỡng giám sát môi trường</p>
+              <p className="text-sm font-bold">Kế Hoạch Thí Nghiệm</p>
+              <p className="text-[10px] opacity-80">Thiết kế, replication & các treatment</p>
             </div>
           </div>
           <span className="text-[10px] font-bold uppercase tracking-wider bg-white/20 backdrop-blur-sm px-2.5 py-1 rounded-full">
@@ -504,41 +584,70 @@ const ExecutionPlanViewer = ({ plan }) => {
           </span>
         </div>
 
-        {filledScale.length > 0 && (
-          <div className="p-5 border-b border-slate-100">
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center text-sm font-bold">1</div>
-              <div>
-                <p className="text-xs font-bold text-slate-800">Quy Mô Thí Nghiệm</p>
-                <p className="text-[10px] text-slate-500">Số lượng nhóm, luống, lần lặp và cây dự kiến</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {filledScale.map(i => (
-                <PlanMetricCard key={i.key} icon={i.icon} label={i.label} value={data[i.key]} color={i.color} sub={i.key} />
-              ))}
+        {/* Section 1: Thiết kế & Replication */}
+        <div className="p-5 border-b border-slate-100">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center text-sm font-bold">1</div>
+            <div>
+              <p className="text-xs font-bold text-slate-800">Thiết Kế & Replication</p>
+              <p className="text-[10px] text-slate-500">Loại thiết kế, số lần lặp và phương pháp random</p>
             </div>
           </div>
-        )}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl">
+              <p className="text-[10px] font-bold uppercase text-indigo-700">🔬 Loại Thiết Kế</p>
+              <p className="text-sm font-bold text-indigo-900 mt-1 break-words">{designLabel}</p>
+              {designType && <p className="text-[9px] font-mono text-indigo-600 mt-0.5">designType: "{designType}"</p>}
+            </div>
+            <div className="p-3 bg-sky-50 border border-sky-200 rounded-xl">
+              <p className="text-[10px] font-bold uppercase text-sky-700">🔁 Số Lần Lặp</p>
+              <p className="text-2xl font-bold text-sky-900 mt-1">{replicationCount ?? '—'}</p>
+              <p className="text-[9px] font-mono text-sky-600">replicationCount (&gt;= 2)</p>
+            </div>
+            <div className="p-3 bg-violet-50 border border-violet-200 rounded-xl">
+              <p className="text-[10px] font-bold uppercase text-violet-700">🎲 Phương Pháp Random</p>
+              <p className="text-sm font-bold text-violet-900 mt-1 break-words">{randomizationMethod || '—'}</p>
+            </div>
+          </div>
+        </div>
 
-        {thresholdItems.some(i => monitoring[i.key]) && (
+        {/* Section 2: Treatments */}
+        {treatments.length > 0 && (
           <div className="p-5 bg-slate-50/50">
-            <div className="flex items-center gap-2 mb-3">
-              <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center text-sm font-bold">2</div>
-              <div>
-                <p className="text-xs font-bold text-slate-800">Ngưỡng Giám Sát Môi Trường</p>
-                <p className="text-[10px] text-slate-500">Khoảng cho phép của các chỉ số môi trường</p>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center text-sm font-bold">2</div>
+                <div>
+                  <p className="text-xs font-bold text-slate-800">Các Treatment ({treatments.length})</p>
+                  <p className="text-[10px] text-slate-500">Nhóm thí nghiệm mà researcher đề xuất</p>
+                </div>
               </div>
+              {requiredBeds > 0 && (
+                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                  Cần {requiredBeds} luống
+                </span>
+              )}
             </div>
             <div className="space-y-2">
-              {thresholdItems.filter(i => monitoring[i.key]).map(i => (
-                <ThresholdRow key={i.key} icon={i.icon} label={`${i.label} (${i.key === 'temperature' ? '°C' : '%'})`} value={monitoring[i.key]} color={i.color} />
+              {treatments.map((t, idx) => (
+                <div key={idx} className="flex items-start gap-3 p-3 bg-white border border-slate-200 rounded-xl">
+                  <div className="w-7 h-7 rounded-lg bg-purple-100 text-purple-700 flex items-center justify-center text-[10px] font-bold shrink-0">#{idx + 1}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-bold text-slate-800">{t.name || '(chưa đặt tên)'}</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${isControlGroup(t.groupType) ? 'bg-slate-100 text-slate-700 border border-slate-200' : 'bg-indigo-100 text-indigo-700 border border-indigo-200'}`}>
+                        {isControlGroup(t.groupType) ? 'Control' : 'Treatment'}
+                      </span>
+                    </div>
+                    {t.description && <p className="text-[11px] text-slate-600 mt-1 break-words">{t.description}</p>}
+                  </div>
+                </div>
               ))}
             </div>
           </div>
         )}
 
-        {filledScale.length === 0 && !thresholdItems.some(i => monitoring[i.key]) && (
+        {treatments.length === 0 && !designType && !replicationCount && (
           <div className="p-6 text-center text-xs text-slate-500">
             <p>Kế hoạch được cung cấp nhưng không có dữ liệu hiển thị.</p>
           </div>

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useToast } from '../../context/ToastContext';
 import { tasksApi, taskReportsApi, measurementRecordsApi } from '../../api/sharedTaskApi';
+import TaskReportForm, { buildReportPayload } from '../../components/tasks/TaskReportForm';
 
 // ── Portal helper ─────────────────────────────────────────────────────────────
 
@@ -344,8 +345,7 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
     if (!reportText.trim()) { showToast('Vui lòng nhập nội dung báo cáo', 'error'); return; }
     try {
       setSaving(true);
-      const dataObj = {};
-      resultData.forEach(r => { if (r.key.trim()) dataObj[r.key.trim()] = r.value; });
+      const dataObj = buildReportPayload(resultData);
       await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
       showToast('Đã gửi báo cáo!', 'success');
       setReportText('');
@@ -364,8 +364,7 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
     }
     try {
       setCompleting(true);
-      const dataObj = {};
-      resultData.forEach(r => { if (r.key.trim()) dataObj[r.key.trim()] = r.value; });
+      const dataObj = buildReportPayload(resultData);
       await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
       await tasksApi.complete(task.id);
       showToast('Đã hoàn thành tác vụ và gửi báo cáo!', 'success');
@@ -494,33 +493,18 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
                   ⚠️ Báo cáo là bắt buộc. Sau khi gửi, tác vụ sẽ được đánh dấu hoàn thành.
                 </p>
               )}
-              <form onSubmit={handleSubmitReport} className="space-y-3">
-                <textarea value={reportText} onChange={e => setReportText(e.target.value)} rows={3}
-                  placeholder="Mô tả kết quả đã thực hiện..."
-                  className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none" />
-                <div className="space-y-1">
-                  {resultData.map((r, idx) => (
-                    <div key={idx} className="flex gap-2">
-                      <input type="text" value={r.key} placeholder="Key (VD: waterUsed)"
-                        onChange={e => updateResult(idx, 'key', e.target.value)}
-                        className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                      <input type="text" value={r.value} placeholder="Giá trị"
-                        onChange={e => updateResult(idx, 'value', e.target.value)}
-                        className="flex-1 px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-                      {resultData.length > 1 && (
-                        <button type="button" onClick={() => setResultData(prev => prev.filter((_, i) => i !== idx))} className="text-rose-500 font-bold">✕</button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-                <button type="button" onClick={() => setResultData(prev => [...prev, { key: '', value: '' }])} className="text-xs text-emerald-600 font-semibold hover:underline">+ Thêm dữ liệu</button>
-                {task.status === 'Pending' && (
-                  <button type="submit" disabled={saving}
-                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50">
-                    {saving ? 'Đang gửi...' : 'Gửi Báo Cáo'}
-                  </button>
-                )}
-              </form>
+              <TaskReportForm
+                task={task}
+                reportText={reportText}
+                setReportText={setReportText}
+                resultData={resultData}
+                setResultData={setResultData}
+                saving={saving}
+                disabled={task.status === 'Completed'}
+                onSubmit={handleSubmitReport}
+                color="emerald"
+                submitLabel="Gửi Báo Cáo"
+              />
             </div>
           )}
 
