@@ -45,13 +45,107 @@ const STATUS_COLORS = {
 
 // ExperimentStageType enum mới (BE cập nhật): Preparation | Planting | Growing | Harvesting | PostHarvest | Other
 const STAGE_TYPES = [
-  { value: 'Preparation', label: 'Chuẩn bị (Preparation)' },
-  { value: 'Planting', label: 'Gieo trồng (Planting)' },
-  { value: 'Growing', label: 'Sinh trưởng (Growing)' },
-  { value: 'Harvesting', label: 'Thu hoạch (Harvesting)' },
-  { value: 'PostHarvest', label: 'Sau thu hoạch (PostHarvest)' },
-  { value: 'Other', label: 'Khác (Other)' }
+  { value: 'Preparation', label: 'Chuẩn bị (Preparation)', icon: '🛠️', color: 'amber' },
+  { value: 'Planting', label: 'Gieo trồng (Planting)', icon: '🌱', color: 'emerald' },
+  { value: 'Nursery', label: 'Ươm cây (Nursery)', icon: '🪴', color: 'emerald' },
+  { value: 'Care', label: 'Chăm sóc (Care)', icon: '💧', color: 'blue' },
+  { value: 'Growing', label: 'Sinh trưởng (Growing)', icon: '📈', color: 'emerald' },
+  { value: 'Growth', label: 'Theo dõi sinh trưởng (Growth)', icon: '📊', color: 'teal' },
+  { value: 'Evaluation', label: 'Đánh giá (Evaluation)', icon: '✅', color: 'amber' },
+  { value: 'Harvesting', label: 'Thu hoạch (Harvesting)', icon: '🌾', color: 'amber' },
+  { value: 'Harvest', label: 'Thu hoạch (Harvest)', icon: '🌾', color: 'amber' },
+  { value: 'PostHarvest', label: 'Sau thu hoạch (PostHarvest)', icon: '📦', color: 'slate' },
+  { value: 'Other', label: 'Khác (Other)', icon: '📌', color: 'slate' }
 ];
+
+// Schema cho form ResultData theo từng stageType (tự động sinh field)
+// Mỗi field: { key, label, type, unit, min, max, step, hint, group, autoFrom }
+const RESULT_DATA_SCHEMA = {
+  Nursery: [
+    { key: 'soLuong', label: 'Số lượng cây giống', type: 'number', unit: 'cây', min: 0, step: 1, icon: '🌱', group: 'Số lượng' },
+    { key: 'tiLeNayMam', label: 'Tỷ lệ nảy mầm', type: 'number', unit: '%', min: 0, max: 100, step: 0.1, icon: '🌿', group: 'Chất lượng' },
+    { key: 'chatLuongCayGiong', label: 'Đánh giá chất lượng', type: 'select', options: [{ value: 'tot', label: 'Tốt' }, { value: 'dat', label: 'Đạt' }, { value: 'kem', label: 'Kém' }], icon: '⭐', group: 'Chất lượng' },
+    { key: 'ghiChu', label: 'Ghi chú', type: 'text', icon: '📝', group: 'Khác' }
+  ],
+  Planting: [
+    { key: 'dienTichGieo', label: 'Diện tích gieo', type: 'number', unit: 'm²', min: 0, step: 0.1, icon: '📐', group: 'Diện tích' },
+    { key: 'matDoGieo', label: 'Mật độ gieo', type: 'number', unit: 'cây/m²', min: 0, step: 0.1, icon: '🌱', group: 'Diện tích' },
+    { key: 'soLuongHatGiong', label: 'Số lượng hạt giống', type: 'number', unit: 'hạt', min: 0, step: 1, icon: '🌰', group: 'Số lượng' },
+    { key: 'tiLeNayMam', label: 'Tỷ lệ nảy mầm', type: 'number', unit: '%', min: 0, max: 100, step: 0.1, icon: '🌿', group: 'Chất lượng' }
+  ],
+  Care: [
+    { key: 'soLanTuoi', label: 'Số lần tưới', type: 'number', unit: 'lần', min: 0, step: 1, icon: '💧', group: 'Tưới nước' },
+    { key: 'luongNuocTong', label: 'Tổng lượng nước', type: 'number', unit: 'lít', min: 0, step: 1, icon: '💦', group: 'Tưới nước' },
+    { key: 'soLanBonPhan', label: 'Số lần bón phân', type: 'number', unit: 'lần', min: 0, step: 1, icon: '🧪', group: 'Phân bón' },
+    { key: 'loaiPhanBon', label: 'Loại phân bón', type: 'text', icon: '🧬', group: 'Phân bón' },
+    { key: 'soLanPhunThuoc', label: 'Số lần phun thuốc BVTV', type: 'number', unit: 'lần', min: 0, step: 1, icon: '🛡️', group: 'Phòng trừ sâu bệnh' },
+    { key: 'ghiChu', label: 'Ghi chú', type: 'text', icon: '📝', group: 'Khác' }
+  ],
+  Growing: [
+    { key: 'chieuCaoCm', label: 'Chiều cao trung bình', type: 'number', unit: 'cm', min: 0, step: 0.1, icon: '📏', group: 'Sinh trưởng', autoFrom: 'avgHeight' },
+    { key: 'soLaTrungBinh', label: 'Số lá trung bình', type: 'number', unit: 'lá', min: 0, step: 0.1, icon: '🍃', group: 'Sinh trưởng' },
+    { key: 'tiLeSong', label: 'Tỷ lệ sống', type: 'number', unit: '%', min: 0, max: 100, step: 0.1, icon: '❤️', group: 'Sức khỏe', autoFrom: 'survivalRate' },
+    { key: 'tocDoSinhTruong', label: 'Tốc độ sinh trưởng', type: 'number', unit: 'cm/ngày', min: 0, step: 0.01, icon: '📈', group: 'Sinh trưởng' }
+  ],
+  Growth: [
+    { key: 'chieuCaoCm', label: 'Chiều cao trung bình', type: 'number', unit: 'cm', min: 0, step: 0.1, icon: '📏', group: 'Sinh trưởng', autoFrom: 'avgHeight' },
+    { key: 'soLaTrungBinh', label: 'Số lá trung bình', type: 'number', unit: 'lá', min: 0, step: 0.1, icon: '🍃', group: 'Sinh trưởng' },
+    { key: 'tiLeSong', label: 'Tỷ lệ sống', type: 'number', unit: '%', min: 0, max: 100, step: 0.1, icon: '❤️', group: 'Sức khỏe', autoFrom: 'survivalRate' },
+    { key: 'tocDoSinhTruong', label: 'Tốc độ sinh trưởng', type: 'number', unit: 'cm/ngày', min: 0, step: 0.01, icon: '📈', group: 'Sinh trưởng' },
+    { key: 'ghiChu', label: 'Ghi chú', type: 'text', icon: '📝', group: 'Khác' }
+  ],
+  Evaluation: [
+    { key: 'tiLeDauQua', label: 'Tỷ lệ đậu quả', type: 'number', unit: '%', min: 0, max: 100, step: 0.1, icon: '🍎', group: 'Năng suất' },
+    { key: 'tiLeSong', label: 'Tỷ lệ sống', type: 'number', unit: '%', min: 0, max: 100, step: 0.1, icon: '❤️', group: 'Sức khỏe' },
+    { key: 'danhGia', label: 'Đánh giá tổng thể', type: 'select', options: [{ value: 'xuat_sac', label: 'Xuất sắc' }, { value: 'tot', label: 'Tốt' }, { value: 'dat', label: 'Đạt' }, { value: 'kem', label: 'Kém' }], icon: '⭐', group: 'Đánh giá' },
+    { key: 'ghiChu', label: 'Ghi chú', type: 'text', icon: '📝', group: 'Khác' }
+  ],
+  Harvest: [
+    { key: 'sanLuongKg', label: 'Sản lượng', type: 'number', unit: 'kg', min: 0, step: 0.1, icon: '⚖️', group: 'Sản lượng' },
+    { key: 'sanLuongTan', label: 'Sản lượng (tấn)', type: 'number', unit: 'tấn', min: 0, step: 0.01, icon: '🌾', group: 'Sản lượng' },
+    { key: 'chatLuong', label: 'Phân loại chất lượng', type: 'select', options: [{ value: 'A', label: 'Loại A' }, { value: 'B', label: 'Loại B' }, { value: 'C', label: 'Loại C' }], icon: '🏆', group: 'Chất lượng' },
+    { key: 'donGia', label: 'Đơn giá', type: 'number', unit: 'VNĐ/kg', min: 0, step: 100, icon: '💰', group: 'Kinh tế' },
+    { key: 'ghiChu', label: 'Ghi chú', type: 'text', icon: '📝', group: 'Khác' }
+  ],
+  Harvesting: [
+    { key: 'sanLuongKg', label: 'Sản lượng', type: 'number', unit: 'kg', min: 0, step: 0.1, icon: '⚖️', group: 'Sản lượng' },
+    { key: 'chatLuong', label: 'Phân loại chất lượng', type: 'select', options: [{ value: 'A', label: 'Loại A' }, { value: 'B', label: 'Loại B' }, { value: 'C', label: 'Loại C' }], icon: '🏆', group: 'Chất lượng' },
+    { key: 'donGia', label: 'Đơn giá', type: 'number', unit: 'VNĐ/kg', min: 0, step: 100, icon: '💰', group: 'Kinh tế' }
+  ],
+  PostHarvest: [
+    { key: 'khoiLuongBaoQuan', label: 'Khối lượng bảo quản', type: 'number', unit: 'kg', min: 0, step: 0.1, icon: '📦', group: 'Bảo quản' },
+    { key: 'tyLeHaoHut', label: 'Tỷ lệ hao hụt', type: 'number', unit: '%', min: 0, max: 100, step: 0.1, icon: '📉', group: 'Bảo quản' },
+    { key: 'nhietDoBaoQuan', label: 'Nhiệt độ bảo quản', type: 'number', unit: '°C', step: 0.1, icon: '🌡️', group: 'Bảo quản' }
+  ],
+  Preparation: [
+    { key: 'dienTichChuanBi', label: 'Diện tích chuẩn bị', type: 'number', unit: 'm²', min: 0, step: 0.1, icon: '📐', group: 'Diện tích' },
+    { key: 'thietBiSuDung', label: 'Thiết bị sử dụng', type: 'text', icon: '🛠️', group: 'Thiết bị' },
+    { key: 'nhanCong', label: 'Số nhân công', type: 'number', unit: 'người', min: 0, step: 1, icon: '👷', group: 'Nhân lực' }
+  ],
+  Other: [
+    { key: 'ghiChu', label: 'Ghi chú', type: 'text', icon: '📝', group: 'Khác' }
+  ]
+};
+
+// Lấy schema theo stageType, fallback về Other
+const getSchemaForStage = (stageType) => RESULT_DATA_SCHEMA[stageType] || RESULT_DATA_SCHEMA.Other;
+
+// Lấy style màu theo stageType
+const getStageStyle = (stageType) => {
+  const t = STAGE_TYPES.find(s => s.value === stageType);
+  return t || { icon: '📌', color: 'slate' };
+};
+
+// Group các field theo group
+const groupFields = (schema) => {
+  const groups = {};
+  schema.forEach(f => {
+    const g = f.group || 'Khác';
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(f);
+  });
+  return groups;
+};
 
 // GroupType giữ nguyên enum string: Control | Treatment
 const GROUP_TYPES = [
@@ -438,6 +532,7 @@ const ResearcherExperiments = ({ prefillData, onPrefillConsumed }) => {
           }}
         />
       )}
+
     </div>
   );
 };
@@ -487,7 +582,9 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   const [fetchedTabs, setFetchedTabs] = useState(new Set());
 
   // Forms
-  const [stageForm, setStageForm] = useState({ stageName: '', stageOrder: 1, stageType: 'Preparation', objective: '', startDate: '', endDate: '' });
+  const [stageForm, setStageForm] = useState({ stageName: '', stageOrder: 1, stageType: 'Preparation', objective: '', startDate: '', endDate: '', resultSummary: '', resultDataRaw: '', overrideEnabled: false, resultDataOverride: '' });
+  const [editingStageId, setEditingStageId] = useState(null);
+  const [showEditStage, setShowEditStage] = useState(false);
   const [groupForm, setGroupForm] = useState({ groupName: '', groupType: 'Control', treatmentDescription: '' });
   const [designForm, setDesignForm] = useState({ designType: 'RCBD', replicationCount: 3, randomizationMethod: '', designParameters: '' });
 
@@ -649,6 +746,67 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
     } catch (err) { showToast(err.message || 'Lỗi tạo giai đoạn', 'error'); }
   };
   const handleDeleteStage = async (id) => { openConfirm('Xóa Giai Đoạn', 'Bạn có chắc muốn xóa giai đoạn này?', async () => { try { await stagesApi.remove(id); showToast('Đã xóa giai đoạn', 'success'); fetchTabData('stages'); } catch (err) { showToast(err.message, 'error'); } }); };
+
+  // Wrapper cho StagesTab: nhận stageId + payload từ component con
+  const handleUpdateStageFromTab = async (stageId, payload) => {
+    try {
+      await stagesApi.update(stageId, payload);
+      showToast('Đã cập nhật giai đoạn', 'success');
+      fetchTabData('stages');
+    } catch (err) {
+      showToast(err.message || 'Lỗi cập nhật giai đoạn', 'error');
+      throw err;
+    }
+  };
+
+  // Stage edit (giữ cho Modal cũ nếu còn dùng)
+  const openEditStage = (s) => {
+    setStageForm({
+      stageName: s.stageName || '',
+      stageOrder: s.stageOrder ?? 1,
+      stageType: s.stageType ?? 'Preparation',
+      objective: s.objective || '',
+      startDate: s.startDate ? s.startDate.slice(0, 10) : '',
+      endDate: s.endDate ? s.endDate.slice(0, 10) : '',
+      resultSummary: s.resultSummary || '',
+      // ResultData từ BE (string JSON), parse ra để chỉnh nếu cần
+      resultDataRaw: s.resultData || '',
+      // Override edit (UI): khi bật "override", user nhập JSON riêng
+      overrideEnabled: false,
+      resultDataOverride: ''
+    });
+    setEditingStageId(s.id);
+    setShowEditStage(true);
+  };
+  const closeEditStage = () => { setShowEditStage(false); setEditingStageId(null); };
+  const handleUpdateStage = async () => {
+    if (!editingStageId) return;
+    if (!stageForm.stageName.trim()) { showToast('Tên giai đoạn không được trống', 'error'); return; }
+    try {
+      const payload = {
+        stageName: stageForm.stageName,
+        stageOrder: parseInt(stageForm.stageOrder) || 1,
+        stageType: stageForm.stageType,
+        objective: stageForm.objective,
+        startDate: stageForm.startDate || null,
+        endDate: stageForm.endDate || null,
+        resultSummary: stageForm.resultSummary || null
+      };
+      if (stageForm.overrideEnabled && stageForm.resultDataOverride.trim()) {
+        // Validate JSON
+        try { JSON.parse(stageForm.resultDataOverride); }
+        catch { showToast('JSON Override không hợp lệ', 'error'); return; }
+        payload.resultData = stageForm.resultDataOverride;
+      } else {
+        // BÁO BE tự tính
+        payload.resultData = null;
+      }
+      await stagesApi.update(editingStageId, payload);
+      showToast('Đã cập nhật giai đoạn', 'success');
+      closeEditStage();
+      fetchTabData('stages');
+    } catch (err) { showToast(err.message || 'Lỗi cập nhật giai đoạn', 'error'); }
+  };
 
   // Group CRUD
   const handleCreateGroup = async () => {
@@ -954,7 +1112,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
                 <OverviewTab exp={expDetail} editExp={editExp} setEditExp={setEditExp} showEditExp={showEditExp} setShowEditExp={setShowEditExp} onSave={handleUpdateExp} saving={savingExp} />
               )}
               {activeTab === 'stages' && (
-                <StagesTab stages={stages} form={stageForm} setForm={setStageForm} onCreate={handleCreateStage} onDelete={handleDeleteStage} loading={tabLoading} />
+                <StagesTab stages={stages} form={stageForm} setForm={setStageForm} onCreate={handleCreateStage} onDelete={handleDeleteStage} onEdit={openEditStage} onUpdate={handleUpdateStageFromTab} loading={tabLoading} tasks={tasks} measurements={measurements} showToast={showToast} />
               )}
               {activeTab === 'groups' && (
                 <GroupsTab groups={groups} form={groupForm} setForm={setGroupForm} onCreate={handleCreateGroup} onDelete={handleDeleteGroup} loading={tabLoading} />
@@ -1079,64 +1237,539 @@ const OverviewTab = ({ exp, editExp, setEditExp, showEditExp, setShowEditExp, on
 
 // ── Stages Tab ─────────────────────────────────────────────────────────────────
 
-const StagesTab = ({ stages, form, setForm, onCreate, onDelete, loading }) => (
-  <div className="space-y-4">
-    {/* Create form */}
-    <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
-      <h4 className="text-xs font-bold text-blue-700 mb-3">+ Thêm Giai Đoạn Mới</h4>
-      <div className="grid grid-cols-2 gap-3 mb-3">
-        <input placeholder="Tên giai đoạn *" value={form.stageName} onChange={e => setForm({ ...form, stageName: e.target.value })}
-          className="px-3 py-2 border border-blue-200 rounded-lg text-sm bg-white" />
-        <input type="number" placeholder="Thứ tự" value={form.stageOrder} onChange={e => setForm({ ...form, stageOrder: e.target.value })}
-          className="px-3 py-2 border border-blue-200 rounded-lg text-sm bg-white" />
-        <select value={form.stageType} onChange={e => setForm({ ...form, stageType: e.target.value })}
-          className="px-3 py-2 border border-blue-200 rounded-lg text-sm bg-white">
-          {STAGE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-        </select>
-        <input type="date" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })}
-          className="px-3 py-2 border border-blue-200 rounded-lg text-sm bg-white" />
-        <input type="date" value={form.endDate} onChange={e => setForm({ ...form, endDate: e.target.value })}
-          className="px-3 py-2 border border-blue-200 rounded-lg text-sm bg-white" />
-      </div>
-      <textarea placeholder="Mục tiêu giai đoạn" value={form.objective} onChange={e => setForm({ ...form, objective: e.target.value })}
-        rows={2} className="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm bg-white mb-3 resize-none" />
-      <button onClick={onCreate} disabled={loading}
-        className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold disabled:opacity-50">
-        + Tạo Giai Đoạn
-      </button>
-    </div>
+// Parse ResultData an toàn (string JSON từ BE)
+const parseStageResult = (raw) => {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  try { return JSON.parse(raw); } catch { return null; }
+};
 
-    {/* List */}
-    {loading ? <p className="text-center text-sm text-on-surface-variant py-4">Đang tải...</p> :
-      stages.length === 0 ? <p className="text-center text-sm text-on-surface-variant py-4">Chưa có giai đoạn nào.</p> :
-      <div className="space-y-2">
-        {stages.map(s => (
-          <div key={s.id} className="flex flex-col gap-2 p-3 bg-white border border-outline-variant rounded-xl">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center text-xs font-bold text-blue-700 shrink-0">{s.stageOrder}</div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-on-surface truncate">{s.stageName || '—'}</p>
-                <p className="text-[10px] text-on-surface-variant">{STAGE_TYPES.find(t => t.value === s.stageType)?.label || s.stageType || '—'} · {s.startDate || '—'} → {s.endDate || '—'}</p>
-              </div>
-              <button onClick={() => onDelete(s.id)} className="text-rose-400 hover:text-rose-600 text-xs font-bold shrink-0">✕ Xóa</button>
-            </div>
-            {(s.resultSummary || s.resultData) && (
-              <div className="ml-11 mt-1 p-2.5 bg-emerald-50 border border-emerald-100 rounded-lg">
-                <p className="text-[10px] font-bold uppercase text-emerald-700 mb-1">📊 Kết Quả Giai Đoạn</p>
-                {s.resultSummary && <p className="text-xs text-emerald-900 whitespace-pre-line">{s.resultSummary}</p>}
-                {s.resultData && (
-                  <pre className="text-[10px] text-emerald-800/80 mt-1 whitespace-pre-wrap break-words font-mono">
-{typeof s.resultData === 'string' ? s.resultData : JSON.stringify(s.resultData, null, 2)}
-                  </pre>
+// Helper: format số thập phân gọn
+const fmtNum = (v, d = 2) => {
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  if (Number.isNaN(n)) return '—';
+  return n.toFixed(d);
+};
+
+// Render bảng so sánh groups từ ResultData (Hybrid BE-compute)
+const StageResultPanel = ({ result }) => {
+  const parsed = parseStageResult(result);
+  if (!parsed) return (
+    <div className="text-[10px] text-slate-400 italic">Chưa có kết quả — hệ thống sẽ tự tính sau khi bạn bấm Lưu.</div>
+  );
+  const groups = Array.isArray(parsed.groups) ? parsed.groups : [];
+  const comparison = parsed.comparison || null;
+  const recordedAt = parsed.recordedAt || null;
+
+  // Tìm best/worst để highlight
+  const metricsArr = groups.map(g => ({
+    name: g.groupName || g.groupId || '—',
+    type: g.groupType || '—',
+    bed: g.bedCode || '',
+    rep: g.replicateIndex ?? '',
+    h: Number(g.metrics?.avgHeight ?? 0) || 0,
+    leaf: Number(g.metrics?.avgLeafCount ?? 0) || 0,
+    surv: Number(g.metrics?.survivalRate ?? 0) || 0,
+    grow: Number(g.metrics?.growthRate ?? 0) || 0,
+    yield: Number(g.metrics?.yieldKg ?? 0) || 0,
+    raw: g
+  }));
+  const maxH = Math.max(...metricsArr.map(m => m.h), 0);
+  const maxSurv = Math.max(...metricsArr.map(m => m.surv), 0);
+  const best = comparison?.bestGroupName
+    || (metricsArr.length ? metricsArr.reduce((a, b) => (b.h > a.h ? b : a)).name : null);
+
+  return (
+    <div className="space-y-3">
+      {/* Summary header */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-700 rounded-md text-[10px] font-bold uppercase">
+            <span className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" /> BE-computed
+          </span>
+          {recordedAt && (
+            <span className="text-[10px] text-slate-500">Cập nhật: {new Date(recordedAt).toLocaleString('vi-VN')}</span>
+          )}
+        </div>
+        {best && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-100 text-amber-800 rounded-md text-[10px] font-bold">
+            🏆 Tốt nhất: <span className="font-extrabold">{best}</span>
+            {comparison?.significance && <span className="ml-1 px-1 bg-amber-200 rounded text-[9px]">{comparison.significance}</span>}
+          </span>
+        )}
+      </div>
+
+      {/* Comparison table */}
+      {groups.length === 0 ? (
+        <div className="text-[11px] text-slate-500 italic py-2">Chưa có nhóm nào trong thí nghiệm để tính.</div>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <table className="w-full text-[11px]">
+            <thead>
+              <tr className="bg-slate-50 text-slate-600">
+                <th className="text-left px-2.5 py-2 font-bold uppercase tracking-wide text-[10px]">Nhóm</th>
+                <th className="text-left px-2.5 py-2 font-bold uppercase tracking-wide text-[10px]">Loại</th>
+                <th className="text-right px-2.5 py-2 font-bold uppercase tracking-wide text-[10px]">Chiều cao TB<br /><span className="font-normal normal-case text-[9px]">(cm)</span></th>
+                <th className="text-right px-2.5 py-2 font-bold uppercase tracking-wide text-[10px]">Lá TB</th>
+                <th className="text-right px-2.5 py-2 font-bold uppercase tracking-wide text-[10px]">Tỷ lệ sống<br /><span className="font-normal normal-case text-[9px]">(%)</span></th>
+                <th className="text-right px-2.5 py-2 font-bold uppercase tracking-wide text-[10px]">Tốc độ sinh trưởng<br /><span className="font-normal normal-case text-[9px]">(cm/ngày)</span></th>
+                <th className="text-right px-2.5 py-2 font-bold uppercase tracking-wide text-[10px]">Năng suất<br /><span className="font-normal normal-case text-[9px]">(kg)</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {metricsArr.map((m, i) => {
+                const isBest = best && m.name === best;
+                const hWidth = maxH > 0 ? Math.max(6, Math.round((m.h / maxH) * 100)) : 0;
+                const sWidth = maxSurv > 0 ? Math.max(6, Math.round((m.surv / maxSurv) * 100)) : 0;
+                return (
+                  <tr key={i} className={`border-t border-slate-100 ${isBest ? 'bg-amber-50/60' : i % 2 === 0 ? 'bg-white' : 'bg-slate-50/30'}`}>
+                    <td className="px-2.5 py-2">
+                      <div className="flex items-center gap-1.5">
+                        {isBest && <span>🏆</span>}
+                        <span className="font-bold text-slate-800">{m.name}</span>
+                        {m.bed && <span className="px-1 py-0.5 bg-slate-100 rounded text-[9px] text-slate-500">{m.bed}</span>}
+                        {m.rep !== '' && m.rep !== null && <span className="px-1 py-0.5 bg-slate-100 rounded text-[9px] text-slate-500">R{m.rep}</span>}
+                      </div>
+                    </td>
+                    <td className="px-2.5 py-2">
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${m.type === 'Control' ? 'bg-slate-200 text-slate-700' : 'bg-emerald-100 text-emerald-700'}`}>{m.type}</span>
+                    </td>
+                    <td className="px-2.5 py-2 text-right font-mono font-bold text-slate-800">
+                      <div>{fmtNum(m.h, 1)}</div>
+                      <div className="mt-1 h-1 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-emerald-500" style={{ width: hWidth + '%' }} /></div>
+                    </td>
+                    <td className="px-2.5 py-2 text-right font-mono text-slate-700">{fmtNum(m.leaf, 1)}</td>
+                    <td className="px-2.5 py-2 text-right font-mono text-slate-700">
+                      <div>{fmtNum(m.surv, 1)}%</div>
+                      <div className="mt-1 h-1 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-blue-500" style={{ width: sWidth + '%' }} /></div>
+                    </td>
+                    <td className="px-2.5 py-2 text-right font-mono text-slate-700">{fmtNum(m.grow, 2)}</td>
+                    <td className="px-2.5 py-2 text-right font-mono text-slate-700">{fmtNum(m.yield, 2)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {comparison?.note && (
+        <div className="text-[10px] text-slate-600 italic px-1">📝 {comparison.note}</div>
+      )}
+    </div>
+  );
+};
+
+const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate, loading, tasks = [], measurements = [], showToast }) => {
+  // State cho accordion: stageId đang mở rộng
+  const [expandedId, setExpandedId] = useState(null);
+  // State form local cho mỗi stage khi edit
+  const [editingId, setEditingId] = useState(null);
+  const [editData, setEditData] = useState({});
+  const [savingId, setSavingId] = useState(null);
+
+  const toggleExpand = (id) => setExpandedId(expandedId === id ? null : id);
+
+  const startEdit = (s) => {
+    setEditingId(s.id);
+    // Parse ResultData nếu có
+    let parsed = {};
+    if (s.resultData) {
+      try { parsed = typeof s.resultData === 'string' ? JSON.parse(s.resultData) : s.resultData; }
+      catch { parsed = {}; }
+    }
+    setEditData({
+      stageName: s.stageName || '',
+      stageOrder: s.stageOrder ?? 1,
+      stageType: s.stageType || 'Preparation',
+      objective: s.objective || '',
+      startDate: s.startDate ? s.startDate.slice(0, 10) : '',
+      endDate: s.endDate ? s.endDate.slice(0, 10) : '',
+      resultSummary: s.resultSummary || '',
+      resultData: parsed
+    });
+  };
+
+  const cancelEdit = () => { setEditingId(null); setEditData({}); };
+
+  const updateResultField = (key, value) => {
+    setEditData(prev => ({ ...prev, resultData: { ...prev.resultData, [key]: value } }));
+  };
+
+  const saveEdit = async (stageId) => {
+    setSavingId(stageId);
+    try {
+      const payload = {
+        stageName: editData.stageName,
+        stageOrder: parseInt(editData.stageOrder) || 1,
+        stageType: editData.stageType,
+        objective: editData.objective,
+        startDate: editData.startDate || null,
+        endDate: editData.endDate || null,
+        resultSummary: editData.resultSummary || null,
+        resultData: JSON.stringify(editData.resultData || {})
+      };
+      await onUpdate && onUpdate(stageId, payload);
+      showToast && showToast('Đã lưu kết quả giai đoạn', 'success');
+      cancelEdit();
+    } catch (err) {
+      showToast && showToast(err.message || 'Lỗi lưu', 'error');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  // Filter tasks/measurements theo stage
+  const getStageTasks = (stageId) => tasks.filter(t => t.stageId === stageId || t.stage?.id === stageId);
+  const getStageMeasurements = (stageId) => measurements.filter(m => m.stageId === stageId || m.stage?.id === stageId);
+
+  return (
+    <div className="space-y-4">
+      {/* Create form (compact) */}
+      <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
+        <h4 className="text-xs font-bold text-blue-700 mb-3">+ Thêm Giai Đoạn Mới</h4>
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <input placeholder="Tên giai đoạn *" value={form.stageName} onChange={e => setForm({ ...form, stageName: e.target.value })}
+            className="px-3 py-2 border border-blue-200 rounded-lg text-sm bg-white" />
+          <input type="number" placeholder="Thứ tự" value={form.stageOrder} onChange={e => setForm({ ...form, stageOrder: e.target.value })}
+            className="px-3 py-2 border border-blue-200 rounded-lg text-sm bg-white" />
+          <select value={form.stageType} onChange={e => setForm({ ...form, stageType: e.target.value })}
+            className="px-3 py-2 border border-blue-200 rounded-lg text-sm bg-white">
+            {STAGE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </select>
+          <input type="date" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })}
+            className="px-3 py-2 border border-blue-200 rounded-lg text-sm bg-white" />
+          <input type="date" value={form.endDate} onChange={e => setForm({ ...form, endDate: e.target.value })}
+            className="px-3 py-2 border border-blue-200 rounded-lg text-sm bg-white" />
+        </div>
+        <textarea placeholder="Mục tiêu giai đoạn" value={form.objective} onChange={e => setForm({ ...form, objective: e.target.value })}
+          rows={2} className="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm bg-white mb-3 resize-none" />
+        <button onClick={onCreate} disabled={loading}
+          className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold disabled:opacity-50">
+          + Tạo Giai Đoạn
+        </button>
+      </div>
+
+      {/* Stages List (accordion) */}
+      {loading ? <p className="text-center text-sm text-on-surface-variant py-4">Đang tải...</p> :
+        stages.length === 0 ? <p className="text-center text-sm text-on-surface-variant py-4">Chưa có giai đoạn nào.</p> :
+        <div className="space-y-2">
+          {stages.map(s => {
+            const isExpanded = expandedId === s.id;
+            const isEditing = editingId === s.id;
+            const stageTypeMeta = getStageStyle(s.stageType);
+            const parsedResult = s.resultData
+              ? (typeof s.resultData === 'string' ? safeParseJSON(s.resultData, {}) : s.resultData)
+              : {};
+            const stageTasks = getStageTasks(s.id);
+            const stageMeasurements = getStageMeasurements(s.id);
+            const schema = getSchemaForStage(s.stageType);
+            const grouped = groupFields(schema);
+
+            // Tô nền theo color của stage type
+            const colorBg = {
+              amber: 'bg-amber-50 border-amber-200',
+              emerald: 'bg-emerald-50 border-emerald-200',
+              blue: 'bg-blue-50 border-blue-200',
+              teal: 'bg-teal-50 border-teal-200',
+              slate: 'bg-slate-50 border-slate-200'
+            }[stageTypeMeta.color] || 'bg-slate-50 border-slate-200';
+
+            const colorBadge = {
+              amber: 'bg-amber-100 text-amber-800',
+              emerald: 'bg-emerald-100 text-emerald-800',
+              blue: 'bg-blue-100 text-blue-800',
+              teal: 'bg-teal-100 text-teal-800',
+              slate: 'bg-slate-100 text-slate-800'
+            }[stageTypeMeta.color] || 'bg-slate-100 text-slate-800';
+
+            return (
+              <div key={s.id} className={`bg-white border-2 rounded-2xl overflow-hidden transition-all ${isExpanded ? 'border-blue-400 shadow-md' : 'border-outline-variant'}`}>
+                {/* Header (clickable) */}
+                <div className="flex items-center gap-3 p-3.5 cursor-pointer hover:bg-slate-50/50 transition-colors"
+                  onClick={() => toggleExpand(s.id)}>
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-base shrink-0 ${colorBadge}`}>
+                    {stageTypeMeta.icon}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-bold text-on-surface truncate">{s.stageName || '—'}</span>
+                      <span className={`px-2 py-0.5 rounded-md text-[9px] font-extrabold uppercase tracking-wider ${colorBadge}`}>
+                        {stageTypeMeta.label.split('(')[0].trim()}
+                      </span>
+                      <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[9px] font-bold">
+                        #{s.stageOrder}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-on-surface-variant mt-0.5">
+                      📅 {s.startDate || '—'} → {s.endDate || '—'}
+                      {stageTasks.length > 0 && <span className="ml-2">📋 {stageTasks.length} tác vụ</span>}
+                      {stageMeasurements.length > 0 && <span className="ml-2">📊 {stageMeasurements.length} đo lường</span>}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {s.resultSummary && (
+                      <span className="hidden md:inline-flex px-2 py-1 bg-emerald-100 text-emerald-700 rounded-md text-[10px] font-bold max-w-[180px] truncate">
+                        ✅ {s.resultSummary}
+                      </span>
+                    )}
+                    <span className={`text-slate-400 text-xs transition-transform ${isExpanded ? 'rotate-180' : ''}`}>▼</span>
+                  </div>
+                </div>
+
+                {/* Expanded Content */}
+                {isExpanded && (
+                  <div className={`border-t border-outline-variant ${colorBg} p-4 space-y-4 animate-fade-in`}>
+                    {/* Read-only view */}
+                    {!isEditing && (
+                      <>
+                        {/* Objective */}
+                        {s.objective && (
+                          <div className="bg-white/70 rounded-lg p-3 border border-white">
+                            <p className="text-[10px] font-bold uppercase text-slate-600 mb-1">🎯 Mục tiêu</p>
+                            <p className="text-xs text-slate-800">{s.objective}</p>
+                          </div>
+                        )}
+
+                        {/* Tasks liên quan */}
+                        <div className="bg-white/70 rounded-lg p-3 border border-white">
+                          <p className="text-[10px] font-bold uppercase text-slate-600 mb-2 flex items-center gap-1.5">
+                            📋 Tác vụ của giai đoạn
+                            <span className="px-1.5 py-0.5 bg-slate-100 rounded text-[9px]">{stageTasks.length}</span>
+                          </p>
+                          {stageTasks.length === 0 ? (
+                            <p className="text-[10px] text-slate-400 italic">Chưa có tác vụ nào được giao cho giai đoạn này.</p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {stageTasks.map(t => (
+                                <div key={t.id} className="flex items-center gap-2 text-[11px] bg-white p-2 rounded-md">
+                                  <span className={`w-1.5 h-1.5 rounded-full ${t.status === 'Completed' ? 'bg-emerald-500' : t.status === 'InProgress' ? 'bg-blue-500' : 'bg-slate-300'}`} />
+                                  <span className="font-bold text-slate-800 flex-1 truncate">{t.taskName || t.title}</span>
+                                  <span className="text-[9px] text-slate-500">{t.assignedUserName || 'Chưa giao'}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Measurements */}
+                        <div className="bg-white/70 rounded-lg p-3 border border-white">
+                          <p className="text-[10px] font-bold uppercase text-slate-600 mb-2 flex items-center gap-1.5">
+                            📐 Các chỉ số đo lường
+                            <span className="px-1.5 py-0.5 bg-slate-100 rounded text-[9px]">{stageMeasurements.length}</span>
+                          </p>
+                          {stageMeasurements.length === 0 ? (
+                            <p className="text-[10px] text-slate-400 italic">Chưa có chỉ số đo lường nào cho giai đoạn này.</p>
+                          ) : (
+                            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                              {stageMeasurements.map(m => (
+                                <div key={m.id} className="bg-white p-2 rounded-md border border-slate-100">
+                                  <p className="text-[9px] font-bold text-slate-500 uppercase truncate">{m.measurementName || m.name}</p>
+                                  <p className="text-sm font-mono font-bold text-slate-800 mt-0.5">
+                                    {m.targetValue ?? m.value ?? '—'}
+                                    <span className="text-[9px] text-slate-500 ml-1">{m.unit || ''}</span>
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Result Summary */}
+                        {s.resultSummary && (
+                          <div className="bg-emerald-50/70 rounded-lg p-3 border border-emerald-200">
+                            <p className="text-[10px] font-bold uppercase text-emerald-700 mb-1">✅ Nhận xét kết quả</p>
+                            <p className="text-xs text-emerald-900 whitespace-pre-line leading-relaxed">{s.resultSummary}</p>
+                          </div>
+                        )}
+
+                        {/* Result Data (read-only) */}
+                        {Object.keys(parsedResult).length > 0 && (
+                          <div className="bg-blue-50/70 rounded-lg p-3 border border-blue-200">
+                            <p className="text-[10px] font-bold uppercase text-blue-700 mb-2">📊 Số liệu kết quả</p>
+                            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                              {schema.filter(f => parsedResult[f.key] !== undefined && parsedResult[f.key] !== null && parsedResult[f.key] !== '').map(f => (
+                                <div key={f.key} className="bg-white p-2 rounded-md border border-blue-100">
+                                  <p className="text-[9px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                                    <span>{f.icon}</span>
+                                    <span className="truncate">{f.label}</span>
+                                  </p>
+                                  <p className="text-sm font-mono font-bold text-blue-900 mt-0.5">
+                                    {parsedResult[f.key]}
+                                    {f.unit && <span className="text-[9px] text-slate-500 ml-1">{f.unit}</span>}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Actions */}
+                        <div className="flex items-center gap-2 pt-2 border-t border-white">
+                          <button onClick={(e) => { e.stopPropagation(); startEdit(s); }}
+                            className="flex-1 inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-all">
+                            <span>✏️</span> Nhập / Sửa kết quả
+                          </button>
+                          <button onClick={(e) => { e.stopPropagation(); onDelete(s.id); }}
+                            className="px-3 py-2.5 bg-white border border-rose-200 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-bold">
+                            ✕ Xóa
+                          </button>
+                        </div>
+                      </>
+                    )}
+
+                    {/* Edit form */}
+                    {isEditing && (
+                      <div className="bg-white rounded-lg p-4 border-2 border-blue-300 space-y-4">
+                        <div className="flex items-center justify-between -mt-1">
+                          <h4 className="text-sm font-extrabold text-slate-800 flex items-center gap-2">
+                            <span className="w-1.5 h-5 bg-blue-500 rounded" /> Chỉnh sửa giai đoạn & nhập kết quả
+                          </h4>
+                          <button onClick={cancelEdit} className="text-[10px] text-slate-500 hover:text-slate-700 font-bold">✕ Đóng</button>
+                        </div>
+
+                        {/* Thông tin cơ bản */}
+                        <div className="space-y-3">
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Tên giai đoạn *</label>
+                            <input value={editData.stageName}
+                              onChange={e => setEditData({ ...editData, stageName: e.target.value })}
+                              className="w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-200 focus:border-blue-400 outline-none" />
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                            <div>
+                              <label className="text-[10px] font-bold text-slate-500 uppercase">Thứ tự</label>
+                              <input type="number" value={editData.stageOrder}
+                                onChange={e => setEditData({ ...editData, stageOrder: e.target.value })}
+                                className="w-full mt-1 px-2.5 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-bold text-slate-500 uppercase">Loại</label>
+                              <select value={editData.stageType}
+                                onChange={e => setEditData({ ...editData, stageType: e.target.value })}
+                                className="w-full mt-1 px-2.5 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+                                {STAGE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-bold text-slate-500 uppercase">Bắt đầu</label>
+                              <input type="date" value={editData.startDate}
+                                onChange={e => setEditData({ ...editData, startDate: e.target.value })}
+                                className="w-full mt-1 px-2.5 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-bold text-slate-500 uppercase">Kết thúc</label>
+                              <input type="date" value={editData.endDate}
+                                onChange={e => setEditData({ ...editData, endDate: e.target.value })}
+                                className="w-full mt-1 px-2.5 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 uppercase">Mục tiêu</label>
+                            <textarea value={editData.objective}
+                              onChange={e => setEditData({ ...editData, objective: e.target.value })}
+                              rows={2} className="w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white resize-none" />
+                          </div>
+                        </div>
+
+                        {/* Form nhập số liệu (theo stageType) */}
+                        <div className="border-t border-slate-200 pt-3">
+                          <div className="flex items-center justify-between mb-3">
+                            <h5 className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                              📊 Số liệu kết quả — <span className="text-blue-600">{stageTypeMeta.label}</span>
+                            </h5>
+                            <span className="text-[10px] text-slate-500">{Object.keys(grouped).length} nhóm · {schema.length} chỉ số</span>
+                          </div>
+
+                          {Object.entries(grouped).map(([groupName, fields]) => (
+                            <div key={groupName} className="mb-3 last:mb-0">
+                              <p className="text-[10px] font-bold text-slate-500 uppercase mb-1.5 tracking-wider">{groupName}</p>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                                {fields.map(field => {
+                                  const currentVal = editData.resultData?.[field.key];
+                                  const hasValue = currentVal !== undefined && currentVal !== null && currentVal !== '';
+                                  return (
+                                    <div key={field.key} className={`relative rounded-lg p-2.5 border transition-all ${hasValue ? 'bg-blue-50/50 border-blue-200' : 'bg-slate-50 border-slate-200'}`}>
+                                      <label className="text-[10px] font-bold text-slate-600 flex items-center gap-1.5 mb-1">
+                                        <span>{field.icon}</span>
+                                        <span>{field.label}</span>
+                                        {field.autoFrom && (
+                                          <span className="px-1 py-0.5 bg-blue-100 text-blue-700 rounded text-[8px] font-bold" title={`Có thể tự tính từ ${field.autoFrom}`}>AUTO</span>
+                                        )}
+                                      </label>
+                                      {field.type === 'select' ? (
+                                        <select value={currentVal || ''}
+                                          onChange={e => updateResultField(field.key, e.target.value)}
+                                          className="w-full px-2.5 py-1.5 border border-slate-200 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-200 focus:border-blue-400 outline-none">
+                                          <option value="">-- Chọn --</option>
+                                          {field.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                        </select>
+                                      ) : field.type === 'text' ? (
+                                        <input type="text" value={currentVal || ''}
+                                          onChange={e => updateResultField(field.key, e.target.value)}
+                                          className="w-full px-2.5 py-1.5 border border-slate-200 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-200 focus:border-blue-400 outline-none" />
+                                      ) : (
+                                        <div className="flex items-center gap-1.5">
+                                          <input type="number" value={currentVal ?? ''}
+                                            min={field.min} max={field.max} step={field.step}
+                                            onChange={e => updateResultField(field.key, e.target.value === '' ? null : Number(e.target.value))}
+                                            className="flex-1 px-2.5 py-1.5 border border-slate-200 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-200 focus:border-blue-400 outline-none font-mono font-bold" />
+                                          {field.unit && (
+                                            <span className="text-[10px] text-slate-500 font-bold bg-white px-2 py-1.5 rounded-md border border-slate-200 shrink-0">{field.unit}</span>
+                                          )}
+                                        </div>
+                                      )}
+                                      {field.hint && (
+                                        <p className="text-[9px] text-slate-500 mt-1 italic">{field.hint}</p>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Summary */}
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">📝 Nhận xét & Kết luận</label>
+                          <textarea value={editData.resultSummary}
+                            onChange={e => setEditData({ ...editData, resultSummary: e.target.value })}
+                            rows={3}
+                            placeholder={`VD: ${stageTypeMeta.label.split('(')[0].trim()} đạt kết quả tốt. Chi tiết xem các số liệu bên trên...`}
+                            className="w-full mt-1 px-3 py-2 border border-amber-200 rounded-lg text-sm bg-amber-50/30 focus:ring-2 focus:ring-amber-200 focus:border-amber-400 outline-none resize-none" />
+                        </div>
+
+                        {/* Actions */}
+                        <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+                          <button onClick={cancelEdit}
+                            className="px-4 py-2 border border-slate-300 rounded-xl text-xs font-bold hover:bg-slate-50">
+                            Hủy
+                          </button>
+                          <button onClick={() => saveEdit(s.id)} disabled={savingId === s.id}
+                            className="inline-flex items-center gap-1.5 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/20 transition-all disabled:opacity-50">
+                            {savingId === s.id ? '⏳ Đang lưu...' : (<><span>💾</span> Lưu kết quả</>)}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
-            )}
-          </div>
-        ))}
-      </div>
-    }
-  </div>
-);
+            );
+          })}
+        </div>
+      }
+    </div>
+  );
+};
+
+// Helper parse JSON an toàn
+function safeParseJSON(s, fallback = null) {
+  try { return typeof s === 'string' ? JSON.parse(s) : s; }
+  catch { return fallback; }
+}
 
 // ── Groups Tab ─────────────────────────────────────────────────────────────────
 
@@ -2097,6 +2730,126 @@ const TasksTab = ({
                   className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50">
                   ✅ Xác Nhận Gán
                 </button>
+              </div>
+            </div>
+          </div>
+        </Portal>
+      )}
+
+      {/* Stage Edit Modal — must live inside ExperimentDetailModal so it shares scope with showEditStage / stageForm / handlers */}
+      {showEditStage && (
+        <Portal>
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[3050] flex items-center justify-center p-4 animate-fade-in">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden max-h-[92vh] flex flex-col">
+              <div className="px-6 py-4 border-b border-outline-variant flex items-center justify-between bg-gradient-to-r from-blue-50 to-emerald-50 shrink-0">
+                <div>
+                  <h3 className="font-hanken font-bold text-lg text-slate-800">✏️ Chỉnh Sửa & Đánh Giá Giai Đoạn</h3>
+                  <p className="text-[11px] text-slate-500 mt-0.5">BE sẽ tự động tính lại ResultData từ MeasurementRecords khi bạn bấm Lưu.</p>
+                </div>
+                <button onClick={closeEditStage} className="text-gray-400 hover:text-gray-600">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 space-y-5">
+                <section>
+                  <h4 className="text-xs font-bold uppercase text-slate-600 tracking-wider mb-3 flex items-center gap-2">
+                    <span className="w-1 h-4 bg-blue-500 rounded" /> Thông tin giai đoạn
+                  </h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="col-span-2">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Tên giai đoạn *</label>
+                      <input value={stageForm.stageName} onChange={e => setStageForm({ ...stageForm, stageName: e.target.value })}
+                        className="w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-200 focus:border-blue-400 outline-none" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Thứ tự</label>
+                      <input type="number" value={stageForm.stageOrder} onChange={e => setStageForm({ ...stageForm, stageOrder: e.target.value })}
+                        className="w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Loại</label>
+                      <select value={stageForm.stageType} onChange={e => setStageForm({ ...stageForm, stageType: e.target.value })}
+                        className="w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+                        {STAGE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Ngày bắt đầu</label>
+                      <input type="date" value={stageForm.startDate} onChange={e => setStageForm({ ...stageForm, startDate: e.target.value })}
+                        className="w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Ngày kết thúc</label>
+                      <input type="date" value={stageForm.endDate} onChange={e => setStageForm({ ...stageForm, endDate: e.target.value })}
+                        className="w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">Mục tiêu</label>
+                      <textarea value={stageForm.objective} onChange={e => setStageForm({ ...stageForm, objective: e.target.value })}
+                        rows={2} className="w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white resize-none" />
+                    </div>
+                  </div>
+                </section>
+
+                <section>
+                  <h4 className="text-xs font-bold uppercase text-slate-600 tracking-wider mb-3 flex items-center gap-2">
+                    <span className="w-1 h-4 bg-emerald-500 rounded" /> Kết quả tự động (BE-computed)
+                  </h4>
+                  <StageResultPanel result={stageForm.resultDataRaw} />
+                </section>
+
+                <section>
+                  <h4 className="text-xs font-bold uppercase text-slate-600 tracking-wider mb-3 flex items-center gap-2">
+                    <span className="w-1 h-4 bg-amber-500 rounded" /> 📝 Nhận xét & Kết luận
+                  </h4>
+                  <textarea
+                    value={stageForm.resultSummary}
+                    onChange={e => setStageForm({ ...stageForm, resultSummary: e.target.value })}
+                    rows={4}
+                    placeholder="VD: Nhóm Control có chiều cao TB cao hơn Treatment 1 (18.5cm vs 14.2cm), tỷ lệ sống tương đương. Treatment 2 cho năng suất vượt trội..."
+                    className="w-full px-3 py-2.5 border border-amber-200 rounded-lg text-sm bg-amber-50/30 focus:ring-2 focus:ring-amber-200 focus:border-amber-400 outline-none resize-none" />
+                </section>
+
+                <section>
+                  <button onClick={() => setStageForm({ ...stageForm, overrideEnabled: !stageForm.overrideEnabled })}
+                    className="w-full flex items-center justify-between px-3 py-2.5 bg-slate-50 hover:bg-slate-100 rounded-lg border border-slate-200 text-left">
+                    <span className="flex items-center gap-2">
+                      <span className={`w-4 h-4 rounded border-2 flex items-center justify-center ${stageForm.overrideEnabled ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}>
+                        {stageForm.overrideEnabled && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4"><polyline points="20 6 9 17 4 12" /></svg>}
+                      </span>
+                      <span className="text-xs font-bold text-slate-700">⚙️ Nâng cao: Override ResultData thủ công (JSON)</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400">{stageForm.overrideEnabled ? 'Đang bật' : 'Tắt'}</span>
+                  </button>
+                  {stageForm.overrideEnabled && (
+                    <div className="mt-2">
+                      <p className="text-[10px] text-amber-700 mb-1.5">
+                        ⚠️ Nếu bật, phải gửi JSON đúng schema <code className="bg-amber-100 px-1 rounded">{`{ groups: [...], comparison: {...} }`}</code>. Nếu tắt, BE tự tính lại.
+                      </p>
+                      <textarea value={stageForm.resultDataOverride}
+                        onChange={e => setStageForm({ ...stageForm, resultDataOverride: e.target.value })}
+                        rows={8} placeholder='{ "groups": [...], "comparison": {...} }'
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-[11px] bg-slate-50 font-mono resize-none focus:ring-2 focus:ring-blue-200 outline-none" />
+                    </div>
+                  )}
+                </section>
+              </div>
+
+              <div className="px-6 py-4 border-t border-outline-variant flex items-center justify-between gap-2 shrink-0 bg-slate-50">
+                <span className="text-[10px] text-slate-500">
+                  {stageForm.overrideEnabled ? '🔧 Sẽ gửi ResultData thủ công' : '⚡ BE sẽ tự tính lại ResultData'}
+                </span>
+                <div className="flex gap-2">
+                  <button onClick={closeEditStage} type="button"
+                    className="px-4 py-2 border border-slate-300 rounded-xl text-xs font-bold hover:bg-white">
+                    Hủy
+                  </button>
+                  <button onClick={handleUpdateStage}
+                    className="inline-flex items-center gap-1.5 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/20 transition-all">
+                    <span>💾</span> Lưu & Tính lại
+                  </button>
+                </div>
               </div>
             </div>
           </div>
