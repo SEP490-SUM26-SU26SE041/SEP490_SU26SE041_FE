@@ -1,8 +1,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useToast } from '../../context/ToastContext';
-import { tasksApi, taskReportsApi, measurementRecordsApi } from '../../api/sharedTaskApi';
+import { tasksApi, taskReportsApi, taskImagesApi, measurementRecordsApi } from '../../api/sharedTaskApi';
+import { measurementDefinitionsApi, batchesApi } from '../../api/experimentApi';
 import TaskReportForm, { buildReportPayload } from '../../components/tasks/TaskReportForm';
+import ImageUploader from '../../components/tasks/ImageUploader';
+import BulkMeasurementForm from '../../components/technician/BulkMeasurementForm';
+import {
+  extractMeasurementsFromReport, buildMeasurementPayloads, createMeasurementsFromTaskReport,
+  extractBulkItemsFromResultData, createMeasurementsBulk, filterDefinitionsByTaskGroup
+} from '../../utils/measurementBridge';
 
 // ── Portal helper ─────────────────────────────────────────────────────────────
 
@@ -312,33 +319,127 @@ const TechTasksTab = () => {
 const TaskDetailModal = ({ task, onClose, onUpdated }) => {
   const { showToast } = useToast();
   const [reports, setReports] = useState([]);
-  const [images, setImages] = useState([]);
+  const [uploadedImages, setUploadedImages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [reportText, setReportText] = useState('');
   const [resultData, setResultData] = useState([{ key: '', value: '' }]);
+  const [reportImages, setReportImages] = useState([]);
   const [saving, setSaving] = useState(false);
   const [completing, setCompleting] = useState(false);
-  const [imageUrl, setImageUrl] = useState('');
-  const [imageCaption, setImageCaption] = useState('');
-  const [uploading, setUploading] = useState(false);
-  const [taskImagesApi, setTaskImagesApi] = useState(null);
+  // reportId → List<TaskImage> fetch từ API GET /task-images/task/{reportId}
+  const [reportImagesByReportId, setReportImagesByReportId] = useState({});
+  const [imagesLoading, setImagesLoading] = useState(false);
+  // MeasurementDefinitions của experiment hiện tại
+  const [definitions, setDefinitions] = useState([]);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [rep, img] = await Promise.allSettled([
-          taskReportsApi.getByTask(task.id),
-          task.id ? fetch(`/api/task-images/task/${task.id}`, {
-            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-          }).then(r => r.json()).then(d => d.data || []) : Promise.resolve([])
-        ]);
-        setReports(Array.isArray(rep.value) ? rep.value : []);
-        setImages(Array.isArray(img.value) ? img.value : []);
-      } catch { /* silent */ } finally { setLoading(false); }
+        // Chỉ fetch reports. Ảnh của từng report sẽ được load ở useEffect bên dưới.
+        const rep = await taskReportsApi.getByTask(task.id);
+        setReports(Array.isArray(rep) ? rep : []);
+      } catch { /* silent */ setReports([]); } finally { setLoading(false); }
     };
     fetchData();
   }, [task.id]);
+
+  /**
+   * Load ảnh từ API GET /task-images/task/{reportId} cho từng report.
+   * Fallback: nếu API fail, dùng r.images.
+   */
+  useEffect(() => {
+    const valid = reports.filter(r => r.id);
+    if (valid.length === 0) {
+      setReportImagesByReportId({});
+      return;
+    }
+    const need = valid.filter(r => !reportImagesByReportId[r.id]);
+    if (need.length === 0) return;
+
+    let cancelled = false;
+    setImagesLoading(true);
+    (async () => {
+      const results = await Promise.allSettled(
+        need.map(r => taskImagesApi.getByTaskReport(r.id))
+      );
+      if (cancelled) return;
+      setReportImagesByReportId(prev => {
+        const next = { ...prev };
+        need.forEach((r, i) => {
+          const res = results[i];
+          if (res.status === 'fulfilled') {
+            const list = Array.isArray(res.value) ? res.value : (Array.isArray(res.value?.data) ? res.value.data : []);
+            next[r.id] = list;
+          } else {
+            next[r.id] = Array.isArray(r.images) ? r.images : [];
+          }
+        });
+        return next;
+      });
+      setImagesLoading(false);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reports]);
+
+  /**
+   * Load MeasurementDefinitions của experiment để map key 'def_<uuid>' → metric info
+   */
+  useEffect(() => {
+    const expId = task?.experimentId || task?.experiment?.id;
+    if (!expId) {
+      setDefinitions([]);
+      return;
+    }
+    let cancelled = false;
+    measurementDefinitionsApi.getByExperiment(expId)
+      .then(data => {
+        if (cancelled) return;
+        setDefinitions(Array.isArray(data) ? data : []);
+      })
+      .catch(() => { if (!cancelled) setDefinitions([]); });
+    return () => { cancelled = true; };
+  }, [task?.experimentId, task?.experiment?.id]);
+
+  /**
+   * Resolve key 'def_<uuid>' hoặc custom key trong resultData thành label hiển thị.
+   * - Nếu key bắt đầu bằng 'def_' → tra definition theo id → trả về metricName (+ unit)
+   * - Nếu không → trả về key gốc
+   * Map lưu trong `definitionMap` (memoized).
+   */
+  const definitionMap = useMemo(() => {
+    const m = new Map();
+    for (const d of definitions) m.set(d.id, d);
+    return m;
+  }, [definitions]);
+
+  const resolveMetricLabel = (key) => {
+    if (typeof key !== 'string') return String(key);
+    if (key.startsWith('def_')) {
+      const defId = key.slice(4);
+      const def = definitionMap.get(defId);
+      if (def?.metricName) {
+        return def.unit ? `${def.metricName} (${def.unit})` : def.metricName;
+      }
+      // Fallback: rút gọn UUID nếu chưa load xong definitions
+      return `Chỉ số #${defId.slice(0, 8)}`;
+    }
+    return key;
+  };
+
+  // Fetch batch để lấy groupId chính xác (dùng API GET /batches/{batchId})
+  // → filter MeasurementDefinition đúng nhóm của batch hiện tại
+  const [batchGroupId, setBatchGroupId] = useState(null);
+  useEffect(() => {
+    const batchId = task?.batchId || task?.batch?.id;
+    if (!batchId) { setBatchGroupId(null); return; }
+    let cancelled = false;
+    batchesApi.getById(batchId)
+      .then(b => { if (!cancelled) setBatchGroupId(b?.groupId || null); })
+      .catch(() => { if (!cancelled) setBatchGroupId(null); });
+    return () => { cancelled = true; };
+  }, [task?.batchId, task?.batch?.id]);
 
   const handleSubmitReport = async (e) => {
     e.preventDefault();
@@ -346,28 +447,186 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
     try {
       setSaving(true);
       const dataObj = buildReportPayload(resultData);
-      await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
-      showToast('Đã gửi báo cáo!', 'success');
+      const reportRes = await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
+      const reportId = reportRes?.id || reportRes?.data?.id;
+
+      // Bridge: tạo MeasurementRecord từ các field đo lường
+// - Observation/Measurement: dùng POST /measurement-records/bulk (đúng schema)
+// - Các task khác: dùng POST /measurement-records từng cái (legacy bridge)
+      const usesBulkPath = task?.taskType === 'Measurement' || task?.taskType === 'Observation';
+      // Lọc definitions theo nhóm của batch (fetch trực tiếp qua GET /batches/{batchId})
+      const effectiveDefinitions = filterDefinitionsByTaskGroup(definitions, task, batchGroupId);
+      let mResult;
+      if (usesBulkPath) {
+        // Truyền definitions để items có metricName/unit/targetValue
+        const bulkItems = extractBulkItemsFromResultData(resultData, effectiveDefinitions);
+        mResult = await createMeasurementsBulk(task, bulkItems, {
+          measuredAt: new Date().toISOString(),
+          notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
+        }, measurementRecordsApi.bulk);
+      } else {
+        // Build Map<name, definition> để map measurementName → definitionId
+        const defByName = new Map(
+          effectiveDefinitions.map(d => [d.metricName, d])
+        );
+        const payloads = buildMeasurementPayloads(
+          task,
+          extractMeasurementsFromReport(dataObj),
+          {
+            measuredAt: new Date().toISOString(),
+            notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
+          },
+          defByName
+        );
+        mResult = await createMeasurementsFromTaskReport(payloads, measurementRecordsApi);
+      }
+
+      // Gắn ảnh đính kèm vào TaskReport (multipart với File + đầy đủ metadata)
+      let imageOk = 0;
+      if (reportImages.length > 0) {
+        const imageResults = await Promise.allSettled(
+          reportImages.map((img) => {
+            if (img.file) {
+              return taskImagesApi.upload({
+                file: img.file,
+                imageUrl: img.url,
+                caption: img.caption || '',
+                capturedAt: img.uploadedAt || new Date().toISOString(),
+                experimentId: task.experimentId || task.experiment?.id,
+                batchId: task.batchId || task.batch?.id,
+                taskReportId: reportId,
+                taskId: task.id
+              });
+            }
+            return taskImagesApi.create({
+              taskReportId: reportId,
+              taskId: task.id,
+              experimentId: task.experimentId || task.experiment?.id,
+              batchId: task.batchId || task.batch?.id,
+              imageUrl: img.url,
+              caption: img.caption || '',
+              capturedAt: img.uploadedAt || new Date().toISOString()
+            });
+          })
+        );
+        imageOk = imageResults.filter(r => r.status === 'fulfilled' && r.value?.success !== false).length;
+      }
+
+      const toastMsg = [];
+      if (usesBulkPath) {
+        if (mResult.created > 0) toastMsg.push(`📊 ${mResult.created} chỉ số`);
+        if (mResult.skipped > 0) toastMsg.push(`⚠️ ${mResult.skipped} bỏ qua`);
+      } else if (mResult.success > 0) {
+        toastMsg.push(`📊 ${mResult.success} chỉ số`);
+      }
+      if (imageOk > 0) toastMsg.push(`📷 ${imageOk} ảnh`);
+      showToast(toastMsg.length > 0 ? `Đã gửi báo cáo! ${toastMsg.join(' · ')}` : 'Đã gửi báo cáo!', 'success');
+
       setReportText('');
       setResultData([{ key: '', value: '' }]);
+      setReportImages([]);
       const rep = await taskReportsApi.getByTask(task.id);
       setReports(Array.isArray(rep) ? rep : []);
     } catch (err) { showToast(err.message || 'Lỗi gửi báo cáo', 'error'); }
     finally { setSaving(false); }
   };
 
-  // Business rule: phải gửi báo cáo trước, sau đó mới complete
+  // Business rule: phải gửi báo cáo trước, sau đó mới complete.
+  // Cho phép complete nếu: có nội dung báo cáo HOẶC có ảnh mới HOẶC đã có lịch sử báo cáo
   const handleCompleteTask = async () => {
-    if (!reportText.trim()) {
-      showToast('Vui lòng nhập nội dung báo cáo trước khi hoàn thành', 'error');
+    const hasNewContent = reportText.trim().length > 0;
+    const hasNewImages = reportImages.length > 0;
+    const hasReportHistory = reports.length > 0;
+    if (!hasNewContent && !hasNewImages && !hasReportHistory) {
+      showToast('Vui lòng nhập nội dung báo cáo hoặc đính kèm ảnh trước khi hoàn thành', 'error');
       return;
     }
     try {
       setCompleting(true);
-      const dataObj = buildReportPayload(resultData);
-      await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
+
+      let reportId;
+      let dataObj = {};
+      if (hasNewContent) {
+        dataObj = buildReportPayload(resultData);
+        const reportRes = await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
+        reportId = reportRes?.id || reportRes?.data?.id;
+      } else if (hasReportHistory) {
+        // Dùng report gần nhất làm anchor cho ảnh mới
+        reportId = reports[reports.length - 1]?.id;
+      }
+
+      let mResult = { created: 0, skipped: 0, success: 0 };
+      if (hasNewContent && Object.keys(dataObj).length > 0) {
+        const usesBulkPath = task?.taskType === 'Measurement' || task?.taskType === 'Observation';
+        const effectiveDefinitions = filterDefinitionsByTaskGroup(definitions, task, batchGroupId);
+        if (usesBulkPath) {
+          const bulkItems = extractBulkItemsFromResultData(resultData, effectiveDefinitions);
+          mResult = await createMeasurementsBulk(task, bulkItems, {
+            measuredAt: new Date().toISOString(),
+            notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
+          }, measurementRecordsApi.bulk);
+        } else {
+          const defByName = new Map(
+            effectiveDefinitions.map(d => [d.metricName, d])
+          );
+          const payloads = buildMeasurementPayloads(
+            task,
+            extractMeasurementsFromReport(dataObj),
+            {
+              measuredAt: new Date().toISOString(),
+              notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
+            },
+            defByName
+          );
+          mResult = await createMeasurementsFromTaskReport(payloads, measurementRecordsApi);
+        }
+      }
+
+      if (hasNewImages && reportId) {
+        await Promise.allSettled(
+          reportImages.map((img) => {
+            if (img.file) {
+              return taskImagesApi.upload({
+                file: img.file,
+                imageUrl: img.url,
+                caption: img.caption || '',
+                capturedAt: img.uploadedAt || new Date().toISOString(),
+                experimentId: task.experimentId || task.experiment?.id,
+                batchId: task.batchId || task.batch?.id,
+                taskReportId: reportId,
+                taskId: task.id
+              });
+            }
+            return taskImagesApi.create({
+              taskReportId: reportId,
+              taskId: task.id,
+              experimentId: task.experimentId || task.experiment?.id,
+              batchId: task.batchId || task.batch?.id,
+              imageUrl: img.url,
+              caption: img.caption || '',
+              capturedAt: img.uploadedAt || new Date().toISOString()
+            });
+          })
+        );
+      }
+
       await tasksApi.complete(task.id);
-      showToast('Đã hoàn thành tác vụ và gửi báo cáo!', 'success');
+
+      const toastMsg = [];
+      const usesBulkPath = task?.taskType === 'Measurement' || task?.taskType === 'Observation';
+      if (usesBulkPath) {
+        if (mResult.created > 0) toastMsg.push(`📊 ${mResult.created} chỉ số`);
+        if (mResult.skipped > 0) toastMsg.push(`⚠️ ${mResult.skipped} bỏ qua`);
+      } else if (mResult.success > 0) {
+        toastMsg.push(`📊 ${mResult.success} chỉ số`);
+      }
+      if (hasNewImages) toastMsg.push(`📷 ${reportImages.length} ảnh`);
+      const modeLabel = hasNewContent ? 'báo cáo mới' : (hasNewImages ? 'bổ sung ảnh' : 'lịch sử');
+      showToast(toastMsg.length > 0
+        ? `Đã hoàn thành tác vụ (${modeLabel})! ${toastMsg.join(' · ')}`
+        : `Đã hoàn thành tác vụ dựa trên ${modeLabel}!`,
+        'success');
+
       if (onUpdated) onUpdated();
       onClose();
     } catch (err) {
@@ -375,30 +634,6 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
     } finally {
       setCompleting(false);
     }
-  };
-
-  const handleUploadImage = async (e) => {
-    e.preventDefault();
-    if (!imageUrl.trim()) { showToast('Vui lòng nhập URL ảnh', 'error'); return; }
-    try {
-      setUploading(true);
-      const token = localStorage.getItem('token');
-      await fetch('/api/task-images/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          experimentId: task.experimentId || '00000000-0000-0000-0000-000000000000',
-          batchId: task.batchId || '00000000-0000-0000-0000-000000000000',
-          imageUrl: imageUrl.trim(),
-          caption: imageCaption.trim(),
-          capturedAt: new Date().toISOString()
-        })
-      });
-      showToast('Đã upload ảnh!', 'success');
-      setImageUrl('');
-      setImageCaption('');
-    } catch (err) { showToast(err.message || 'Lỗi upload ảnh', 'error'); }
-    finally { setUploading(false); }
   };
 
   const updateResult = (idx, field, value) => {
@@ -499,6 +734,8 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
                 setReportText={setReportText}
                 resultData={resultData}
                 setResultData={setResultData}
+                images={reportImages}
+                setImages={setReportImages}
                 saving={saving}
                 disabled={task.status === 'Completed'}
                 onSubmit={handleSubmitReport}
@@ -507,23 +744,6 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
               />
             </div>
           )}
-
-          {/* Upload Image */}
-          <div className="border-t border-slate-200 pt-6">
-            <h4 className="font-bold text-sm text-slate-900 mb-3">📷 Upload Ảnh</h4>
-            <form onSubmit={handleUploadImage} className="space-y-3">
-              <input type="text" value={imageUrl} onChange={e => setImageUrl(e.target.value)}
-                placeholder="URL ảnh (sau khi upload lên storage)"
-                className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-              <input type="text" value={imageCaption} onChange={e => setImageCaption(e.target.value)}
-                placeholder="Mô tả ảnh (tùy chọn)"
-                className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-              <button type="submit" disabled={uploading}
-                className="w-full py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-teal-600/20 disabled:opacity-50">
-                {uploading ? 'Đang upload...' : 'Upload Ảnh'}
-              </button>
-            </form>
-          </div>
 
           {/* Reports History */}
           {reports.length > 0 && (
@@ -534,7 +754,8 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
                   const resultEntries = r.resultData && typeof r.resultData === 'object'
                     ? Object.entries(r.resultData)
                     : [];
-                  const imageList = Array.isArray(r.images) ? r.images : [];
+                  // Ưu tiên ảnh fetch từ API /task-images/task/{reportId}
+                  const imageList = reportImagesByReportId[r.id] || (Array.isArray(r.images) ? r.images : []);
                   const dateText = r.reportedAt || r.createdAt;
                   const reporterName = r.reporterName || r.reportedByName || 'Technician';
                   return (
@@ -561,8 +782,8 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
                       {resultEntries.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mt-2">
                           {resultEntries.map(([k, v]) => (
-                            <span key={k} className="px-2 py-0.5 bg-white border border-green-200 text-emerald-800 rounded-full text-[10px] font-mono font-bold">
-                              {k}: <span className="text-slate-900">{String(v)}</span>
+                            <span key={k} className="px-2 py-0.5 bg-white border border-green-200 text-emerald-800 rounded-full text-[10px] font-semibold">
+                              {resolveMetricLabel(k)}: <span className="text-slate-900 font-bold">{String(v)}</span>
                             </span>
                           ))}
                         </div>
@@ -571,12 +792,21 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
                       {imageList.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mt-2">
                           {imageList.map((img, i) => (
-                            <a key={i} href={img.url || img} target="_blank" rel="noopener noreferrer"
-                              className="block w-12 h-12 rounded-md overflow-hidden border border-green-200 hover:opacity-80">
-                              <img src={img.url || img} alt={img.name || `img-${i}`} className="w-full h-full object-cover" />
+                            <a key={img.id || i} href={img.imageUrl || img.url} target="_blank" rel="noopener noreferrer"
+                              className="block w-12 h-12 rounded-md overflow-hidden border border-green-200 hover:opacity-80 relative group"
+                              title={img.caption || ''}>
+                              <img src={img.imageUrl || img.url} alt={img.caption || `img-${i}`} className="w-full h-full object-cover" />
+                              {img.caption && (
+                                <span className="absolute bottom-0 left-0 right-0 px-1 py-0.5 bg-black/70 text-white text-[8px] truncate opacity-0 group-hover:opacity-100">
+                                  {img.caption}
+                                </span>
+                              )}
                             </a>
                           ))}
                         </div>
+                      )}
+                      {imagesLoading && imageList.length === 0 && (
+                        <p className="text-[10px] text-slate-400 italic mt-2">⏳ Đang tải ảnh...</p>
                       )}
                     </div>
                   );
@@ -586,11 +816,11 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
           )}
 
           {/* Images */}
-          {images.length > 0 && (
+          {uploadedImages.length > 0 && (
             <div className="border-t border-slate-200 pt-6">
-              <h4 className="font-bold text-sm text-slate-900 mb-3">Hình Ảnh ({images.length})</h4>
+              <h4 className="font-bold text-sm text-slate-900 mb-3">Hình Ảnh ({uploadedImages.length})</h4>
               <div className="grid grid-cols-3 gap-2">
-                {images.map(img => (
+                {uploadedImages.map(img => (
                   <div key={img.id} className="bg-slate-100 rounded-xl overflow-hidden aspect-square">
                     {img.imageUrl ? (
                       <img src={img.imageUrl} alt={img.caption || ''} className="w-full h-full object-cover" onError={(e) => e.target.style.display='none'} />
@@ -606,23 +836,35 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
         </div>
       </div>
       {/* Footer action - chỉ hiện khi đang làm (phải hoàn thành qua báo cáo) */}
-      {task.status === 'InProgress' && (
-        <div className="px-6 py-4 border-t border-slate-200 bg-slate-50/50 flex items-center justify-between gap-3 sticky bottom-0">
-          <div className="text-xs text-slate-500">
-            <span className="font-semibold text-slate-700">Quy trình:</span> Báo cáo bắt buộc trước khi hoàn thành
+      {task.status === 'InProgress' && (() => {
+        // Cho phép hoàn thành khi: có nội dung báo cáo HOẶC có ảnh mới HOẶC đã có lịch sử báo cáo
+        const hasNewContent = reportText.trim().length > 0;
+        const hasNewImages = reportImages.length > 0;
+        const hasReportHistory = reports.length > 0;
+        const canComplete = hasNewContent || hasNewImages || hasReportHistory;
+        const hint = !hasNewContent && !hasNewImages && !hasReportHistory
+          ? 'Cần nhập nội dung hoặc đính kèm ảnh trước khi hoàn thành'
+          : (hasNewContent || hasNewImages
+              ? '✅ Có dữ liệu mới sẽ gửi kèm khi hoàn thành'
+              : '📜 Sẽ hoàn thành dựa trên lịch sử báo cáo đã có');
+        return (
+          <div className="px-6 py-4 border-t border-slate-200 bg-slate-50/50 flex items-center justify-between gap-3 sticky bottom-0">
+            <div className="text-xs text-slate-500">
+              <span className="font-semibold text-slate-700">Quy trình:</span> {hint}
+            </div>
+            <div className="flex gap-2">
+              <button onClick={onClose}
+                className="px-4 py-2 border border-slate-300 rounded-xl text-sm font-medium hover:bg-white">
+                Đóng
+              </button>
+              <button onClick={handleCompleteTask} disabled={completing || !canComplete}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all">
+                {completing ? '⏳ Đang hoàn thành...' : '✅ Hoàn Thành & Gửi Báo Cáo'}
+              </button>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <button onClick={onClose}
-              className="px-4 py-2 border border-slate-300 rounded-xl text-sm font-medium hover:bg-white">
-              Đóng
-            </button>
-            <button onClick={handleCompleteTask} disabled={completing || !reportText.trim()}
-              className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all">
-              {completing ? '⏳ Đang hoàn thành...' : '✅ Hoàn Thành & Gửi Báo Cáo'}
-            </button>
-          </div>
-        </div>
-      )}
+        );
+      })()}
       {task.status !== 'InProgress' && (
         <div className="px-6 py-4 border-t border-slate-200 bg-slate-50/50 flex justify-end sticky bottom-0">
           <button onClick={onClose}
@@ -644,6 +886,9 @@ const TechReportsTab = () => {
   const [tasks, setTasks] = useState([]);
   const [selectedTask, setSelectedTask] = useState('');
   const [loading, setLoading] = useState(true);
+  // reportId → List<TaskImage> fetch từ API /task-images/task/{reportId}
+  const [reportImagesByReportId, setReportImagesByReportId] = useState({});
+  const [imagesLoading, setImagesLoading] = useState(false);
 
   useEffect(() => {
     const load = async () => {
@@ -681,6 +926,45 @@ const TechReportsTab = () => {
     };
     load();
   }, []);
+
+  /**
+   * Load ảnh từ API GET /task-images/task/{reportId} cho các report.
+   * Cached theo reportId, fallback về r.images nếu API fail.
+   */
+  useEffect(() => {
+    const valid = reports.filter(r => r.id);
+    if (valid.length === 0) {
+      setReportImagesByReportId({});
+      return;
+    }
+    const need = valid.filter(r => !reportImagesByReportId[r.id]);
+    if (need.length === 0) return;
+
+    let cancelled = false;
+    setImagesLoading(true);
+    (async () => {
+      const results = await Promise.allSettled(
+        need.map(r => taskImagesApi.getByTaskReport(r.id))
+      );
+      if (cancelled) return;
+      setReportImagesByReportId(prev => {
+        const next = { ...prev };
+        need.forEach((r, i) => {
+          const res = results[i];
+          if (res.status === 'fulfilled') {
+            const list = Array.isArray(res.value) ? res.value : (Array.isArray(res.value?.data) ? res.value.data : []);
+            next[r.id] = list;
+          } else {
+            next[r.id] = Array.isArray(r.images) ? r.images : [];
+          }
+        });
+        return next;
+      });
+      setImagesLoading(false);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reports]);
 
   const taskOptions = useMemo(() => {
     const seen = new Set();
@@ -722,7 +1006,9 @@ const TechReportsTab = () => {
       ) : reports.length === 0 ? (
         <div className="bg-white rounded-2xl p-12 text-center text-slate-400">Chưa có báo cáo nào.</div>
       ) : (
-        visibleReports.map(r => (
+        visibleReports.map(r => {
+          const imageList = reportImagesByReportId[r.id] || (Array.isArray(r.images) ? r.images : []);
+          return (
           <div key={r.id} className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
             <div className="flex justify-between items-start mb-3">
               <div className="min-w-0">
@@ -750,16 +1036,37 @@ const TechReportsTab = () => {
             </div>
             <p className="text-sm text-slate-700 mb-3">{r.reportText}</p>
             {r.resultData && Object.keys(r.resultData).length > 0 && (
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2 mb-3">
                 {Object.entries(r.resultData).map(([k, v]) => (
-                  <span key={k} className="px-3 py-1 bg-slate-100 rounded-lg text-xs font-mono">
-                    <span className="text-slate-500">{k}:</span> <span className="font-bold text-slate-900">{String(v)}</span>
+                  <span key={k} className="px-3 py-1 bg-slate-100 rounded-lg text-xs">
+                    <span className="text-slate-500">{resolveMetricLabel(k)}:</span> <span className="font-bold text-slate-900">{String(v)}</span>
                   </span>
                 ))}
               </div>
             )}
+            {/* Ảnh từ API /task-images/task/{reportId} */}
+            {imageList.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {imageList.map((img, i) => (
+                  <a key={img.id || i} href={img.imageUrl || img.url} target="_blank" rel="noopener noreferrer"
+                    className="block w-16 h-16 rounded-lg overflow-hidden border border-slate-200 hover:opacity-80 relative group"
+                    title={img.caption || ''}>
+                    <img src={img.imageUrl || img.url} alt={img.caption || `img-${i}`} className="w-full h-full object-cover" />
+                    {img.caption && (
+                      <span className="absolute bottom-0 left-0 right-0 px-1 py-0.5 bg-black/70 text-white text-[9px] truncate opacity-0 group-hover:opacity-100">
+                        {img.caption}
+                      </span>
+                    )}
+                  </a>
+                ))}
+              </div>
+            )}
+            {imagesLoading && imageList.length === 0 && (
+              <p className="text-[10px] text-slate-400 italic mt-2">⏳ Đang tải ảnh từ server...</p>
+            )}
           </div>
-        ))
+          );
+        })
       )}
     </div>
   );
@@ -774,6 +1081,7 @@ const TechMeasurementsTab = () => {
   const [selectedBatch, setSelectedBatch] = useState('');
   const [filterBatchId, setFilterBatchId] = useState('');
   const [loading, setLoading] = useState(true);
+  const [showBulkForm, setShowBulkForm] = useState(false);
 
   const fetchRecords = async (bId) => {
     if (!bId) { setRecords([]); setLoading(false); return; }
@@ -857,6 +1165,22 @@ const TechMeasurementsTab = () => {
 
   return (
     <div className="space-y-4 animate-fade-in">
+      {/* Header với nút bulk */}
+      <div className="bg-gradient-to-r from-emerald-50 to-teal-50 rounded-2xl border border-emerald-200 p-4 shadow-sm">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h3 className="text-base font-bold text-slate-900">📊 Dữ Liệu Đo Lường</h3>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Xem các bản ghi đã đo + ghi nhận hàng loạt theo <strong>MeasurementDefinition</strong>.
+            </p>
+          </div>
+          <button onClick={() => setShowBulkForm(true)}
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-sm shadow-emerald-600/20">
+            📏 Ghi nhận đo lường (Bulk)
+          </button>
+        </div>
+      </div>
+
       {/* Batch filter */}
       <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -923,6 +1247,22 @@ const TechMeasurementsTab = () => {
           </div>
         </div>
       )}
+
+      {/* Modal ghi nhận đo lường hàng loạt */}
+      <BulkMeasurementForm
+        open={showBulkForm}
+        onClose={() => setShowBulkForm(false)}
+        showToast={showToast}
+        experimentId={tasks.find(t => t.batchId === selectedBatch)?.experimentId || tasks.find(t => t.experimentId)?.experimentId || ''}
+        stageId={tasks.find(t => t.batchId === selectedBatch)?.stageId || tasks.find(t => t.experimentStageId)?.experimentStageId || ''}
+        defaultBatchId={selectedBatch}
+        batches={batchOptions}
+        onSubmitted={() => {
+          // Reload records của batch hiện tại
+          if (selectedBatch) fetchRecords(selectedBatch);
+          else if (filterBatchId) fetchRecords(filterBatchId);
+        }}
+      />
     </div>
   );
 };

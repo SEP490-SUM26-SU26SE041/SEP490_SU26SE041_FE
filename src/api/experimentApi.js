@@ -169,21 +169,103 @@ export const taskReportsApi = {
 // ── Measurement Records ──────────────────────────────────────────────────────
 
 export const measurementRecordsApi = {
+  // Tạo một record (legacy — dùng cho trường hợp đơn lẻ)
   create: (payload) =>
     apiClient.request('/measurement-records', { method: 'POST', body: payload }),
+
+  // Tạo nhiều record cùng lúc (bulk) — dùng cho form đo lường chuẩn
+  bulk: (payload) =>
+    apiClient.request('/measurement-records/bulk', { method: 'POST', body: payload }),
+
   getByBatch: (batchId) =>
     apiClient.request(`/measurement-records/batch/${batchId}`).then(u),
+
+  // Lấy tất cả measurement của một experiment (dùng cho tab thống kê)
+  getByExperiment: (experimentId, params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    const url = `/measurement-records/experiment/${experimentId}${qs ? `?${qs}` : ''}`;
+    return apiClient.request(url).then(u);
+  },
+
   update: (id, payload) =>
     apiClient.request(`/measurement-records/${id}`, { method: 'PUT', body: payload }),
   remove: (id) =>
     apiClient.request(`/measurement-records/${id}`, { method: 'DELETE' })
 };
 
+// Measurement Definitions (định nghĩa metric: tên, đơn vị, target value)
+export const measurementDefinitionsApi = {
+  /**
+   * Lấy tất cả MeasurementDefinition của experiment.
+   * Dùng route /experiments/{experimentId}/measurements (chuẩn Swagger).
+   * Vì mỗi experiment có các nhóm giống nhau → chỉ số đo lường giống nhau.
+   * @param {string} experimentId
+   * @returns {Promise<Array<{id, groupId, groupName, metricName, unit, targetValue, description}>>}
+   */
+  getByExperiment: (experimentId) =>
+    apiClient.request(`/experiments/${experimentId}/measurements`).then(u),
+
+  /**
+   * Legacy route /measurement-definitions?experimentId=X (giữ tương thích ngược).
+   * Prefer dùng getByExperiment() ở trên.
+   */
+  getByExperimentLegacy: (experimentId) =>
+    apiClient.request(`/measurement-definitions?experimentId=${experimentId}`).then(u),
+
+  getById: (id) =>
+    apiClient.request(`/measurement-definitions/${id}`).then(u),
+  validate: (definitionId, value) =>
+    apiClient.request(`/measurement-definitions/${definitionId}/validate?value=${encodeURIComponent(value)}`).then(u),
+  create: (payload) =>
+    apiClient.request('/measurement-definitions', { method: 'POST', body: payload }),
+  update: (id, payload) =>
+    apiClient.request(`/measurement-definitions/${id}`, { method: 'PUT', body: payload }),
+  remove: (id) =>
+    apiClient.request(`/measurement-definitions/${id}`, { method: 'DELETE' })
+};
+
+// Stage / Experiment Statistics (cho researcher tổng hợp)
+export const statisticsApi = {
+  // Thống kê theo giai đoạn
+  byStage: (stageId, params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return apiClient.request(`/experiments/stages/${stageId}/statistics${qs ? `?${qs}` : ''}`).then(u);
+  },
+  // Thống kê toàn experiment
+  byExperiment: (experimentId, params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return apiClient.request(`/experiments/${experimentId}/statistics${qs ? `?${qs}` : ''}`).then(u);
+  },
+  // Export CSV / XLSX
+  export: (stageId, body) =>
+    apiClient.request(`/experiments/stages/${stageId}/statistics/export`, {
+      method: 'POST',
+      body,
+      // yêu cầu trả raw blob, không parse JSON
+      responseType: 'blob'
+    })
+};
+
 // ── Task Images ─────────────────────────────────────────────────────────────
+// Multipart upload với File + đầy đủ metadata (experimentId, batchId, taskReportId, taskId, ...)
 
 export const taskImagesApi = {
-  upload: (payload) =>
-    apiClient.request('/task-images/upload', { method: 'POST', body: payload }),
+  upload: ({ file, imageUrl, caption, capturedAt, experimentId, batchId, taskReportId, taskId, tags, exif }) => {
+    const formData = new FormData();
+    if (file) formData.append('File', file);
+    if (imageUrl) formData.append('imageUrl', imageUrl);
+    if (caption) formData.append('caption', caption);
+    if (capturedAt) formData.append('capturedAt', capturedAt);
+    if (experimentId) formData.append('experimentId', experimentId);
+    if (batchId) formData.append('batchId', batchId);
+    if (taskReportId) formData.append('taskReportId', taskReportId);
+    if (taskId) formData.append('taskId', taskId);
+    if (tags) formData.append('tags', tags);
+    if (exif) formData.append('exif', typeof exif === 'string' ? exif : JSON.stringify(exif));
+    return apiClient.request('/task-images/upload', { method: 'POST', body: formData }).then(u);
+  },
+  create: (payload) =>
+    apiClient.request('/task-images', { method: 'POST', body: payload }).then(u),
   getByTaskReport: (reportId) =>
     apiClient.request(`/task-images/task/${reportId}`).then(u),
   getByBatch: (batchId) =>

@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useToast } from '../../context/ToastContext';
-import { tasksApi, taskReportsApi, measurementRecordsApi } from '../../api/sharedTaskApi';
+import { tasksApi, taskReportsApi, taskImagesApi, measurementRecordsApi } from '../../api/sharedTaskApi';
 import { experimentsApi } from '../../api/studentTechApi';
 import TaskReportForm, { buildReportPayload } from '../../components/tasks/TaskReportForm';
-import { batchesApi } from '../../api/experimentApi';
+import ImageUploader from '../../components/tasks/ImageUploader';
+import { extractMeasurementsFromReport, buildMeasurementPayloads, createMeasurementsFromTaskReport, previewMeasurements, extractBulkItemsFromResultData, createMeasurementsBulk, filterDefinitionsByTaskGroup } from '../../utils/measurementBridge';
+import { batchesApi, measurementDefinitionsApi } from '../../api/experimentApi';
 
 const STU_TABS = [
   { id: 'overview', label: 'Tổng Quan', icon: '🏠' },
@@ -338,13 +340,16 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
   const [loading, setLoading] = useState(true);
   const [reportText, setReportText] = useState('');
   const [resultData, setResultData] = useState([{ key: '', value: '' }]);
+  const [reportImages, setReportImages] = useState([]);
   const [saving, setSaving] = useState(false);
   const [completing, setCompleting] = useState(false);
-  const [imageUrl, setImageUrl] = useState('');
-  const [imageCaption, setImageCaption] = useState('');
-  const [uploading, setUploading] = useState(false);
+  // Map: reportId → List<TaskImage> fetch từ API GET /task-images/task/{reportId}
+  const [reportImagesByReportId, setReportImagesByReportId] = useState({});
+  const [imagesLoading, setImagesLoading] = useState(false);
   const [displayedReportText, setDisplayedReportText] = useState('');
   const [displayedResultData, setDisplayedResultData] = useState([{ key: '', value: '' }]);
+  // MeasurementDefinitions của experiment hiện tại (cache để map key 'def_<uuid>' → metric info)
+  const [definitions, setDefinitions] = useState([]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -357,16 +362,181 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
     fetchData();
   }, [task.id]);
 
+  /**
+   * Load ảnh từ API GET /task-images/task/{reportId} cho từng report.
+   * Cache theo reportId để tránh gọi lại khi re-render.
+   * Fallback: nếu API fail, dùng images có sẵn trong report (r.images).
+   */
+  useEffect(() => {
+    if (!Array.isArray(reports) || reports.length === 0) {
+      setReportImagesByReportId({});
+      return;
+    }
+    const reportsNeedingFetch = reports.filter(r => r.id && !reportImagesByReportId[r.id]);
+    if (reportsNeedingFetch.length === 0) return;
+
+    let cancelled = false;
+    setImagesLoading(true);
+    (async () => {
+      const results = await Promise.allSettled(
+        reportsNeedingFetch.map(r => taskImagesApi.getByTaskReport(r.id))
+      );
+      if (cancelled) return;
+      setReportImagesByReportId(prev => {
+        const next = { ...prev };
+        reportsNeedingFetch.forEach((r, i) => {
+          const res = results[i];
+          if (res.status === 'fulfilled') {
+            const list = Array.isArray(res.value) ? res.value : (Array.isArray(res.value?.data) ? res.value.data : []);
+            next[r.id] = list;
+          } else {
+            // Fallback: dùng ảnh có sẵn trong report
+            next[r.id] = Array.isArray(r.images) ? r.images : [];
+          }
+        });
+        return next;
+      });
+      setImagesLoading(false);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reports]);
+
+  /**
+   * Load MeasurementDefinitions của experiment để map key 'def_<uuid>' → metric info
+   * (metricName, unit, targetValue) trong kết quả báo cáo.
+   */
+  useEffect(() => {
+    const expId = task?.experimentId || task?.experiment?.id;
+    if (!expId) {
+      setDefinitions([]);
+      return;
+    }
+    let cancelled = false;
+    measurementDefinitionsApi.getByExperiment(expId)
+      .then(data => {
+        if (cancelled) return;
+        setDefinitions(Array.isArray(data) ? data : []);
+      })
+      .catch(() => { if (!cancelled) setDefinitions([]); });
+    return () => { cancelled = true; };
+  }, [task?.experimentId, task?.experiment?.id]);
+
+  // Map id → definition
+  const definitionMap = useMemo(() => {
+    const m = new Map();
+    for (const d of definitions) m.set(d.id, d);
+    return m;
+  }, [definitions]);
+
+  // Resolve key 'def_<uuid>' thành label hiển thị (metricName + unit)
+  const resolveMetricLabel = (key) => {
+    if (typeof key !== 'string') return String(key);
+    if (key.startsWith('def_')) {
+      const defId = key.slice(4);
+      const def = definitionMap.get(defId);
+      if (def?.metricName) {
+        return def.unit ? `${def.metricName} (${def.unit})` : def.metricName;
+      }
+      return `Chỉ số #${defId.slice(0, 8)}`;
+    }
+    return key;
+  };
+
+  // Fetch batch để lấy groupId chính xác (dùng API GET /batches/{batchId})
+  const [batchGroupId, setBatchGroupId] = useState(null);
+  useEffect(() => {
+    const batchId = task?.batchId || task?.batch?.id;
+    if (!batchId) { setBatchGroupId(null); return; }
+    let cancelled = false;
+    batchesApi.getById(batchId)
+      .then(b => { if (!cancelled) setBatchGroupId(b?.groupId || null); })
+      .catch(() => { if (!cancelled) setBatchGroupId(null); });
+    return () => { cancelled = true; };
+  }, [task?.batchId, task?.batch?.id]);
+
   const handleSubmitReport = async (e) => {
     e.preventDefault();
     if (!reportText.trim()) { showToast('Vui lòng nhập nội dung báo cáo', 'error'); return; }
     try {
       setSaving(true);
       const dataObj = buildReportPayload(resultData);
-      await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
-      showToast('Đã gửi báo cáo!', 'success');
+      const reportRes = await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
+      const reportId = reportRes?.id || reportRes?.data?.id;
+
+      // Bridge: tạo MeasurementRecord (Bulk cho Measurement/Observation Task, Legacy cho các loại khác)
+      const usesBulkPath = task?.taskType === 'Measurement' || task?.taskType === 'Observation';
+      // Lọc definitions theo nhóm của batch (fetch trực tiếp qua GET /batches/{batchId})
+      const effectiveDefinitions = filterDefinitionsByTaskGroup(definitions, task, batchGroupId);
+      let mResult;
+      if (usesBulkPath) {
+        // Truyền definitions để items có metricName/unit/targetValue
+        const bulkItems = extractBulkItemsFromResultData(resultData, effectiveDefinitions);
+        mResult = await createMeasurementsBulk(task, bulkItems, {
+          measuredAt: new Date().toISOString(),
+          notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
+        }, measurementRecordsApi.bulk);
+      } else {
+        // Build Map<name, definition> để map key 'plantHeight' → definition tương ứng
+        const defByName = new Map(
+          effectiveDefinitions.map(d => [d.metricName, d])
+        );
+        const payloads = buildMeasurementPayloads(
+          task,
+          extractMeasurementsFromReport(dataObj),
+          {
+            measuredAt: new Date().toISOString(),
+            notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
+          },
+          defByName
+        );
+        mResult = await createMeasurementsFromTaskReport(payloads, measurementRecordsApi);
+      }
+
+      // Gắn ảnh đính kèm vào TaskReport (multipart với File + đầy đủ metadata)
+      let imageOk = 0;
+      if (reportImages.length > 0) {
+        const imageResults = await Promise.allSettled(
+          reportImages.map((img) => {
+            if (img.file) {
+              return taskImagesApi.upload({
+                file: img.file,
+                imageUrl: img.url,
+                caption: img.caption || '',
+                capturedAt: img.uploadedAt || new Date().toISOString(),
+                experimentId: task.experimentId || task.experiment?.id,
+                batchId: task.batchId || task.batch?.id,
+                taskReportId: reportId,
+                taskId: task.id
+              });
+            }
+            return taskImagesApi.create({
+              taskReportId: reportId,
+              taskId: task.id,
+              experimentId: task.experimentId || task.experiment?.id,
+              batchId: task.batchId || task.batch?.id,
+              imageUrl: img.url,
+              caption: img.caption || '',
+              capturedAt: img.uploadedAt || new Date().toISOString()
+            });
+          })
+        );
+        imageOk = imageResults.filter(r => r.status === 'fulfilled' && r.value?.success !== false).length;
+      }
+
+      const toastMsg = [];
+      if (usesBulkPath) {
+        if (mResult.created > 0) toastMsg.push(`📊 ${mResult.created} chỉ số`);
+        if (mResult.skipped > 0) toastMsg.push(`⚠️ ${mResult.skipped} bỏ qua`);
+      } else if (mResult.success > 0) {
+        toastMsg.push(`📊 ${mResult.success} chỉ số`);
+      }
+      if (imageOk > 0) toastMsg.push(`📷 ${imageOk} ảnh`);
+      showToast(toastMsg.length > 0 ? `Đã gửi báo cáo! ${toastMsg.join(' · ')}` : 'Đã gửi báo cáo!', 'success');
+
       setReportText('');
       setResultData([{ key: '', value: '' }]);
+      setReportImages([]);
       const data = await taskReportsApi.getByTask(task.id);
       setReports(Array.isArray(data) ? data : []);
       if (onUpdated) onUpdated();
@@ -374,19 +544,108 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
     finally { setSaving(false); }
   };
 
-  // Business rule: phải gửi báo cáo trước, sau đó mới được complete
+  // Business rule: phải gửi báo cáo trước, sau đó mới được complete.
+  // Cho phép complete nếu: có nội dung báo cáo HOẶC có ảnh mới HOẶC đã có lịch sử báo cáo
   const handleCompleteTask = async () => {
-    if (!reportText.trim()) {
-      showToast('Vui lòng nhập nội dung báo cáo trước khi hoàn thành', 'error');
+    const hasNewContent = reportText.trim().length > 0;
+    const hasNewImages = reportImages.length > 0;
+    const hasReportHistory = reports.length > 0;
+    if (!hasNewContent && !hasNewImages && !hasReportHistory) {
+      showToast('Vui lòng nhập nội dung báo cáo hoặc đính kèm ảnh trước khi hoàn thành', 'error');
       setActiveTab('report');
       return;
     }
     try {
       setCompleting(true);
-      const dataObj = buildReportPayload(resultData);
-      await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
+
+      // 1. Tạo TaskReport mới nếu có nội dung/ảnh mới
+      let reportId;
+      let dataObj = {};
+      if (hasNewContent) {
+        dataObj = buildReportPayload(resultData);
+        const reportRes = await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
+        reportId = reportRes?.id || reportRes?.data?.id;
+      } else if (hasReportHistory) {
+        // Dùng report gần nhất làm anchor cho ảnh mới
+        reportId = reports[reports.length - 1]?.id;
+      }
+
+      // 2. Bridge: tạo MeasurementRecord (Bulk cho Measurement/Observation Task, Legacy cho các loại khác)
+      let mResult = { created: 0, skipped: 0, success: 0 };
+      if (hasNewContent && Object.keys(dataObj).length > 0) {
+        const usesBulkPath = task?.taskType === 'Measurement' || task?.taskType === 'Observation';
+        // Lọc definitions theo nhóm của batch (fetch trực tiếp qua GET /batches/{batchId})
+        const effectiveDefinitions = filterDefinitionsByTaskGroup(definitions, task, batchGroupId);
+        if (usesBulkPath) {
+          const bulkItems = extractBulkItemsFromResultData(resultData, effectiveDefinitions);
+          mResult = await createMeasurementsBulk(task, bulkItems, {
+            measuredAt: new Date().toISOString(),
+            notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
+          }, measurementRecordsApi.bulk);
+        } else {
+          const defByName = new Map(
+            effectiveDefinitions.map(d => [d.metricName, d])
+          );
+          const payloads = buildMeasurementPayloads(
+            task,
+            extractMeasurementsFromReport(dataObj),
+            {
+              measuredAt: new Date().toISOString(),
+              notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
+            },
+            defByName
+          );
+          mResult = await createMeasurementsFromTaskReport(payloads, measurementRecordsApi);
+        }
+      }
+
+      // 3. Gắn ảnh đính kèm vào TaskReport (multipart với File + đầy đủ metadata)
+      if (hasNewImages && reportId) {
+        await Promise.allSettled(
+          reportImages.map((img) => {
+            if (img.file) {
+              return taskImagesApi.upload({
+                file: img.file,
+                imageUrl: img.url,
+                caption: img.caption || '',
+                capturedAt: img.uploadedAt || new Date().toISOString(),
+                experimentId: task.experimentId || task.experiment?.id,
+                batchId: task.batchId || task.batch?.id,
+                taskReportId: reportId,
+                taskId: task.id
+              });
+            }
+            return taskImagesApi.create({
+              taskReportId: reportId,
+              taskId: task.id,
+              experimentId: task.experimentId || task.experiment?.id,
+              batchId: task.batchId || task.batch?.id,
+              imageUrl: img.url,
+              caption: img.caption || '',
+              capturedAt: img.uploadedAt || new Date().toISOString()
+            });
+          })
+        );
+      }
+
+      // 4. Hoàn thành task
       await tasksApi.complete(task.id);
-      showToast('Đã hoàn thành tác vụ và gửi báo cáo!', 'success');
+
+      const toastMsg = [];
+      const usesBulkPath = task?.taskType === 'Measurement' || task?.taskType === 'Observation';
+      if (usesBulkPath) {
+        if (mResult.created > 0) toastMsg.push(`📊 ${mResult.created} chỉ số`);
+        if (mResult.skipped > 0) toastMsg.push(`⚠️ ${mResult.skipped} bỏ qua`);
+      } else if (mResult.success > 0) {
+        toastMsg.push(`📊 ${mResult.success} chỉ số`);
+      }
+      if (hasNewImages) toastMsg.push(`📷 ${reportImages.length} ảnh`);
+      const modeLabel = hasNewContent ? 'báo cáo mới' : (hasNewImages ? 'bổ sung ảnh' : 'lịch sử');
+      showToast(toastMsg.length > 0
+        ? `Đã hoàn thành tác vụ (${modeLabel})! ${toastMsg.join(' · ')}`
+        : `Đã hoàn thành tác vụ dựa trên ${modeLabel}!`,
+        'success');
+
       if (onUpdated) onUpdated();
       onClose();
     } catch (err) {
@@ -394,32 +653,6 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
     } finally {
       setCompleting(false);
     }
-  };
-
-  const handleUploadImage = async (e) => {
-    e.preventDefault();
-    if (!imageUrl.trim()) { showToast('Vui lòng nhập URL ảnh', 'error'); return; }
-    try {
-      setUploading(true);
-      const token = localStorage.getItem('token');
-      await fetch('/api/task-images/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          taskId: task.id,
-          taskReportId: null,
-          experimentId: task.experimentId || '00000000-0000-0000-0000-000000000000',
-          batchId: task.batchId || '00000000-0000-0000-0000-000000000000',
-          imageUrl: imageUrl.trim(),
-          caption: imageCaption.trim(),
-          capturedAt: new Date().toISOString()
-        })
-      });
-      showToast('Đã upload ảnh!', 'success');
-      setImageUrl('');
-      setImageCaption('');
-    } catch (err) { showToast(err.message || 'Lỗi upload ảnh', 'error'); }
-    finally { setUploading(false); }
   };
 
   const updateResult = (idx, field, value) => {
@@ -589,6 +822,8 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
                 setReportText={setReportText}
                 resultData={resultData}
                 setResultData={setResultData}
+                images={reportImages}
+                setImages={setReportImages}
                 saving={saving}
                 disabled={isCompleted}
                 onSubmit={handleSubmitReport}
@@ -600,44 +835,64 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
 
           {activeTab === 'images' && (
             <div className="space-y-4">
+              {/* Upload section - cho phép upload ảnh mới */}
               {!isCompleted && (
-                <form onSubmit={handleUploadImage} className="space-y-3 bg-gradient-to-br from-teal-50 to-emerald-50 p-4 rounded-xl border border-teal-200">
-                  <p className="text-xs font-bold text-teal-800 uppercase flex items-center gap-1.5">📷 Upload Ảnh Minh Chứng</p>
-                  <input type="text" value={imageUrl} onChange={e => setImageUrl(e.target.value)}
-                    placeholder="URL ảnh (sau khi upload lên storage)"
-                    className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 bg-white" />
-                  <input type="text" value={imageCaption} onChange={e => setImageCaption(e.target.value)}
-                    placeholder="Mô tả ảnh (tùy chọn)"
-                    className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-400 bg-white" />
-                  <button type="submit" disabled={uploading || !imageUrl.trim()}
-                    className="w-full py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-teal-600/20 disabled:opacity-50 transition-all flex items-center justify-center gap-2">
-                    <span>📤</span>
-                    {uploading ? 'Đang upload...' : 'Upload Ảnh'}
-                  </button>
-                </form>
+                <ImageUploader
+                  value={reportImages}
+                  onChange={setReportImages}
+                  experimentId={task?.experimentId}
+                  batchId={task?.batchId}
+                  taskId={task?.id}
+                  disabled={saving}
+                />
               )}
 
-              {/* Reports images gallery */}
+              {/* Reports images gallery - lấy ảnh từ API /task-images/task/{reportId} */}
               <div>
                 <p className="text-xs font-bold text-slate-700 mb-3 flex items-center justify-between">
-                  <span>📷 Thư Viện Ảnh</span>
-                  <span className="text-[10px] text-slate-400 font-normal">{reports.reduce((sum, r) => sum + (Array.isArray(r.images) ? r.images.length : 0), 0)} ảnh</span>
+                  <span>📷 Thư Viện Ảnh Minh Chứng</span>
+                  <span className="text-[10px] text-slate-400 font-normal flex items-center gap-1">
+                    {imagesLoading && <span className="inline-block w-2 h-2 bg-blue-500 rounded-full animate-pulse" />}
+                    {Object.values(reportImagesByReportId).reduce((sum, arr) => sum + (Array.isArray(arr) ? arr.length : 0), 0)} ảnh
+                  </span>
                 </p>
-                {reports.reduce((sum, r) => sum + (Array.isArray(r.images) ? r.images.length : 0), 0) === 0 ? (
-                  <div className="text-center text-sm text-slate-400 py-12 border-2 border-dashed border-slate-200 rounded-xl">
-                    <div className="text-4xl mb-2">🖼️</div>
-                    <p>Chưa có ảnh minh chứng nào</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                    {reports.flatMap(r => (Array.isArray(r.images) ? r.images : []).map((img, i) => (
-                      <a key={`${r.id}-${i}`} href={img.url || img} target="_blank" rel="noopener noreferrer"
-                        className="aspect-square rounded-lg overflow-hidden border border-slate-200 hover:border-blue-400 hover:shadow-md transition-all group">
-                        <img src={img.url || img} alt={img.name || 'img'} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
-                      </a>
-                    )))}
-                  </div>
-                )}
+                {(() => {
+                  const allImages = Object.entries(reportImagesByReportId).flatMap(([reportId, imgs]) =>
+                    (Array.isArray(imgs) ? imgs : []).map((img, i) => ({ ...img, _reportId: reportId, _key: `${reportId}-${img.id || i}` }))
+                  );
+                  if (allImages.length === 0 && !imagesLoading) {
+                    return (
+                      <div className="text-center text-sm text-slate-400 py-12 border-2 border-dashed border-slate-200 rounded-xl">
+                        <div className="text-4xl mb-2">🖼️</div>
+                        <p>Chưa có ảnh minh chứng nào</p>
+                      </div>
+                    );
+                  }
+                  if (allImages.length === 0 && imagesLoading) {
+                    return (
+                      <div className="text-center text-sm text-slate-400 py-12 border-2 border-dashed border-slate-200 rounded-xl">
+                        <div className="text-3xl mb-2 animate-pulse">⏳</div>
+                        <p>Đang tải ảnh từ server...</p>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                      {allImages.map((img) => (
+                        <a key={img._key} href={img.imageUrl || img.url} target="_blank" rel="noopener noreferrer"
+                          className="aspect-square rounded-lg overflow-hidden border border-slate-200 hover:border-blue-400 hover:shadow-md transition-all group relative">
+                          <img src={img.imageUrl || img.url} alt={img.caption || 'img'}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                          {img.caption && (
+                            <span className="absolute bottom-0 left-0 right-0 px-1.5 py-1 bg-black/60 text-white text-[9px] truncate opacity-0 group-hover:opacity-100 transition-opacity">
+                              {img.caption}
+                            </span>
+                          )}
+                        </a>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           )}
@@ -656,7 +911,8 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
                   <div className="absolute left-2 top-2 bottom-2 w-0.5 bg-slate-200" />
                   {reports.map((r, idx) => {
                     const resultEntries = r.resultData && typeof r.resultData === 'object' ? Object.entries(r.resultData) : [];
-                    const imageList = Array.isArray(r.images) ? r.images : [];
+                    // Ưu tiên ảnh fetch từ API /task-images/task/{reportId}, fallback về r.images
+                    const imageList = reportImagesByReportId[r.id] || (Array.isArray(r.images) ? r.images : []);
                     const dateText = r.reportedAt || r.createdAt;
                     const reporterName = r.reporterName || r.reportedByName || 'Bạn';
                     return (
@@ -683,8 +939,8 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
                           {resultEntries.length > 0 && (
                             <div className="flex flex-wrap gap-1.5 mt-2">
                               {resultEntries.map(([k, v]) => (
-                                <span key={k} className="px-2 py-0.5 bg-white border border-blue-200 text-blue-800 rounded-full text-[10px] font-mono font-bold">
-                                  {k}: <span className="text-slate-900">{String(v)}</span>
+                                <span key={k} className="px-2 py-0.5 bg-white border border-blue-200 text-blue-800 rounded-full text-[10px] font-semibold">
+                                  {resolveMetricLabel(k)}: <span className="text-slate-900 font-bold">{String(v)}</span>
                                 </span>
                               ))}
                             </div>
@@ -692,9 +948,15 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
                           {imageList.length > 0 && (
                             <div className="flex flex-wrap gap-1.5 mt-2">
                               {imageList.map((img, i) => (
-                                <a key={i} href={img.url || img} target="_blank" rel="noopener noreferrer"
-                                  className="block w-12 h-12 rounded-md overflow-hidden border border-blue-200 hover:opacity-80">
-                                  <img src={img.url || img} alt={img.name || `img-${i}`} className="w-full h-full object-cover" />
+                                <a key={img.id || i} href={img.imageUrl || img.url} target="_blank" rel="noopener noreferrer"
+                                  className="block w-12 h-12 rounded-md overflow-hidden border border-blue-200 hover:opacity-80 relative group"
+                                  title={img.caption || ''}>
+                                  <img src={img.imageUrl || img.url} alt={img.caption || `img-${i}`} className="w-full h-full object-cover" />
+                                  {img.caption && (
+                                    <span className="absolute bottom-0 left-0 right-0 px-1 py-0.5 bg-black/70 text-white text-[8px] truncate opacity-0 group-hover:opacity-100">
+                                      {img.caption}
+                                    </span>
+                                  )}
                                 </a>
                               ))}
                             </div>
@@ -711,30 +973,41 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
 
         {/* Footer - STICKY với action phù hợp theo tab và status */}
         <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 shrink-0">
-          {isInProgress ? (
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-xs text-slate-600 min-w-0">
-                <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-                  <span className="text-sm">⚠️</span>
+          {isInProgress ? (() => {
+            const hasNewContent = reportText.trim().length > 0;
+            const hasNewImages = reportImages.length > 0;
+            const hasReportHistory = reports.length > 0;
+            const canComplete = hasNewContent || hasNewImages || hasReportHistory;
+            const hint = !hasNewContent && !hasNewImages && !hasReportHistory
+              ? 'Cần nhập nội dung hoặc đính kèm ảnh trước khi hoàn thành'
+              : (hasNewContent || hasNewImages
+                  ? 'Có dữ liệu mới sẽ gửi kèm khi hoàn thành'
+                  : 'Sẽ hoàn thành dựa trên lịch sử báo cáo đã có');
+            return (
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-xs text-slate-600 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                    <span className="text-sm">⚠️</span>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-800 text-sm">Quy trình nghiệp vụ</p>
+                    <p className="text-[10px] text-slate-500 truncate">{hint}</p>
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <p className="font-bold text-slate-800 text-sm">Quy trình nghiệp vụ</p>
-                  <p className="text-[10px] text-slate-500 truncate">Báo cáo bắt buộc trước khi hoàn thành</p>
+                <div className="flex gap-2 shrink-0">
+                  <button onClick={onClose}
+                    className="px-4 py-2 border border-slate-300 rounded-xl text-sm font-semibold hover:bg-white transition-colors">
+                    Đóng
+                  </button>
+                  <button onClick={handleCompleteTask} disabled={completing || !canComplete}
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2">
+                    <span>✅</span>
+                    {completing ? 'Đang hoàn thành...' : 'Hoàn Thành & Gửi Báo Cáo'}
+                  </button>
                 </div>
               </div>
-              <div className="flex gap-2 shrink-0">
-                <button onClick={onClose}
-                  className="px-4 py-2 border border-slate-300 rounded-xl text-sm font-semibold hover:bg-white transition-colors">
-                  Đóng
-                </button>
-                <button onClick={handleCompleteTask} disabled={completing || !reportText.trim()}
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2">
-                  <span>✅</span>
-                  {completing ? 'Đang hoàn thành...' : 'Hoàn Thành & Gửi Báo Cáo'}
-                </button>
-              </div>
-            </div>
-          ) : isCompleted ? (
+            );
+          })() : isCompleted ? (
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 text-xs text-slate-600">
                 <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
@@ -1278,6 +1551,9 @@ const StudentReportsTab = () => {
   const [tasks, setTasks] = useState([]);
   const [selectedTask, setSelectedTask] = useState('');
   const [loading, setLoading] = useState(true);
+  // reportId → List<TaskImage> fetch từ API /task-images/task/{reportId}
+  const [reportImagesByReportId, setReportImagesByReportId] = useState({});
+  const [imagesLoading, setImagesLoading] = useState(false);
 
   useEffect(() => {
     const load = async () => {
@@ -1316,6 +1592,45 @@ const StudentReportsTab = () => {
     load();
   }, []);
 
+  /**
+   * Load ảnh từ API GET /task-images/task/{reportId} cho các report có id.
+   * Cached theo reportId, fallback về r.images nếu API fail.
+   */
+  useEffect(() => {
+    const valid = reports.filter(r => r.id);
+    if (valid.length === 0) {
+      setReportImagesByReportId({});
+      return;
+    }
+    const need = valid.filter(r => !reportImagesByReportId[r.id]);
+    if (need.length === 0) return;
+
+    let cancelled = false;
+    setImagesLoading(true);
+    (async () => {
+      const results = await Promise.allSettled(
+        need.map(r => taskImagesApi.getByTaskReport(r.id))
+      );
+      if (cancelled) return;
+      setReportImagesByReportId(prev => {
+        const next = { ...prev };
+        need.forEach((r, i) => {
+          const res = results[i];
+          if (res.status === 'fulfilled') {
+            const list = Array.isArray(res.value) ? res.value : (Array.isArray(res.value?.data) ? res.value.data : []);
+            next[r.id] = list;
+          } else {
+            next[r.id] = Array.isArray(r.images) ? r.images : [];
+          }
+        });
+        return next;
+      });
+      setImagesLoading(false);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reports]);
+
   const taskOptions = useMemo(() => {
     const seen = new Set();
     const opts = [];
@@ -1331,6 +1646,60 @@ const StudentReportsTab = () => {
     () => selectedTask ? reports.filter(r => r.taskId === selectedTask) : reports,
     [reports, selectedTask]
   );
+
+  // Map taskId → experimentId
+  const taskExpMap = useMemo(() => {
+    const m = new Map();
+    for (const t of tasks) if (t.id && t.experimentId) m.set(t.id, t.experimentId);
+    return m;
+  }, [tasks]);
+
+  // Lấy unique experimentIds cần resolve
+  const neededExpIds = useMemo(() => {
+    const set = new Set();
+    for (const r of visibleReports) {
+      const expId = taskExpMap.get(r.taskId);
+      if (expId) set.add(expId);
+    }
+    return Array.from(set);
+  }, [visibleReports, taskExpMap]);
+
+  // Cache definitions theo experimentId: Map<experimentId, Map<defId, definition>>
+  const [defsByExp, setDefsByExp] = useState({});
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      for (const expId of neededExpIds) {
+        if (defsByExp[expId]) continue;
+        try {
+          const data = await measurementDefinitionsApi.getByExperiment(expId);
+          if (cancelled) return;
+          const list = Array.isArray(data) ? data : [];
+          setDefsByExp(prev => ({ ...prev, [expId]: list }));
+        } catch {
+          if (!cancelled) setDefsByExp(prev => ({ ...prev, [expId]: [] }));
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [neededExpIds.join('|')]);
+
+  const resolveMetricLabel = (key, taskId) => {
+    if (typeof key !== 'string') return String(key);
+    if (key.startsWith('def_')) {
+      const defId = key.slice(4);
+      const expId = taskExpMap.get(taskId);
+      const defs = expId ? defsByExp[expId] || [] : [];
+      const def = defs.find(d => d.id === defId);
+      if (def?.metricName) {
+        return def.unit ? `${def.metricName} (${def.unit})` : def.metricName;
+      }
+      return `Chỉ số #${defId.slice(0, 8)}`;
+    }
+    return key;
+  };
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -1358,7 +1727,7 @@ const StudentReportsTab = () => {
           const resultEntries = r.resultData && typeof r.resultData === 'object'
             ? Object.entries(r.resultData)
             : [];
-          const imageList = Array.isArray(r.images) ? r.images : [];
+          const imageList = reportImagesByReportId[r.id] || (Array.isArray(r.images) ? r.images : []);
           const dateText = r.reportedAt || r.createdAt;
           const reporterName = r.reporterName || r.reportedByName || 'Bạn';
           return (
@@ -1398,7 +1767,7 @@ const StudentReportsTab = () => {
                   <div className="grid grid-cols-2 gap-2">
                     {resultEntries.map(([k, v]) => (
                       <div key={k} className="text-xs">
-                        <p className="text-[10px] text-slate-400 font-mono break-all">{k}</p>
+                        <p className="text-[10px] text-slate-400 font-semibold break-all">{resolveMetricLabel(k, r.taskId)}</p>
                         <p className="font-semibold text-slate-900 break-all">{String(v)}</p>
                       </div>
                     ))}
@@ -1409,12 +1778,21 @@ const StudentReportsTab = () => {
               {imageList.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {imageList.map((img, i) => (
-                    <a key={i} href={img.url || img} target="_blank" rel="noopener noreferrer"
-                      className="block w-16 h-16 rounded-lg overflow-hidden border border-slate-200 hover:opacity-80">
-                      <img src={img.url || img} alt={img.name || `img-${i}`} className="w-full h-full object-cover" />
+                    <a key={img.id || i} href={img.imageUrl || img.url} target="_blank" rel="noopener noreferrer"
+                      className="block w-16 h-16 rounded-lg overflow-hidden border border-slate-200 hover:opacity-80 relative group"
+                      title={img.caption || ''}>
+                      <img src={img.imageUrl || img.url} alt={img.caption || `img-${i}`} className="w-full h-full object-cover" />
+                      {img.caption && (
+                        <span className="absolute bottom-0 left-0 right-0 px-1 py-0.5 bg-black/70 text-white text-[9px] truncate opacity-0 group-hover:opacity-100">
+                          {img.caption}
+                        </span>
+                      )}
                     </a>
                   ))}
                 </div>
+              )}
+              {imagesLoading && imageList.length === 0 && (
+                <p className="text-[10px] text-slate-400 italic mt-2">⏳ Đang tải ảnh từ server...</p>
               )}
             </div>
           );

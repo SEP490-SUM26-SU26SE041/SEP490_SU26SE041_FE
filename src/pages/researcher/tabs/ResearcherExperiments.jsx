@@ -6,6 +6,8 @@ import { stagesApi, groupsApi, designApi, measurementsApi, schedulesApi, batches
 import { cropsApi } from '../../../api/cropApi';
 import { useToast } from '../../../context/ToastContext';
 import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
+import BatchEditModal from '../../../components/researcher/BatchEditModal';
+import StatisticsDashboard from '../../../components/researcher/StatisticsDashboard';
 
 // ── Portal helper ─────────────────────────────────────────────────────────────
 
@@ -575,6 +577,19 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   const [showEditExp, setShowEditExp] = useState(false);
   const [savingExp, setSavingExp] = useState(false);
 
+  // Batch edit state
+  const [editingBatch, setEditingBatch] = useState(null);
+  const [showEditBatch, setShowEditBatch] = useState(false);
+  const [updatingBatch, setUpdatingBatch] = useState(false);
+
+  // Đồng bộ editExp với expDetail khi expDetail thay đổi từ bên ngoài (refresh, save...)
+  // Chỉ sync khi KHÔNG đang edit để tránh ghi đè dữ liệu user đang nhập
+  useEffect(() => {
+    if (expDetail && !showEditExp) {
+      setEditExp(expDetail);
+    }
+  }, [expDetail, showEditExp]);
+
   // Confirm dialog state
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
 
@@ -686,7 +701,13 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
       setAreas(Array.isArray(areaData) ? areaData : []);
       const bedData = await bedsApi.getAvailableByFarm(farmId);
       setAvailableBeds(Array.isArray(bedData) ? bedData : []);
-    } catch { setAreas([]); setAvailableBeds([]); }
+    } catch {
+      setAreas([]);
+      setAvailableBeds([]);
+    } finally {
+      // Reset loading kể cả khi 404 (endpoint BE chưa có)
+      setTabLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -709,8 +730,11 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
       await experimentsApi.updateStatus(experiment.id, newStatus);
       showToast('Đã cập nhật trạng thái thí nghiệm', 'success');
       const updated = await experimentsApi.getById(experiment.id);
-      setExpDetail(updated);
-      if (onExperimentUpdated) onExperimentUpdated(updated);
+      const updatedData = updated?.data || updated;
+      setExpDetail(updatedData);
+      setEditExp(updatedData);
+      localStorage.setItem(`exp_detail_${experiment.id}`, JSON.stringify(updatedData));
+      if (onExperimentUpdated) onExperimentUpdated(updatedData);
     } catch (err) { showToast(err.message || 'Lỗi cập nhật trạng thái', 'error'); }
   };
 
@@ -729,8 +753,12 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
       showToast('Đã cập nhật thí nghiệm', 'success');
       setShowEditExp(false);
       const updated = await experimentsApi.getById(experiment.id);
-      setExpDetail(updated);
-      if (onExperimentUpdated) onExperimentUpdated(updated);
+      const updatedData = updated?.data || updated;
+      setExpDetail(updatedData);
+      setEditExp(updatedData); // Đồng bộ form state với data mới nhất
+      // Cập nhật cache để lần mở sau có data mới
+      localStorage.setItem(`exp_detail_${experiment.id}`, JSON.stringify(updatedData));
+      if (onExperimentUpdated) onExperimentUpdated(updatedData);
     } catch (err) { showToast(err.message || 'Lỗi cập nhật', 'error'); }
     finally { setSavingExp(false); }
   };
@@ -929,6 +957,25 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   };
   const handleDeleteBatch = async (id) => { openConfirm('Xóa Lô', 'Bạn có chắc muốn xóa lô này?', async () => { try { await batchesApi.remove(id); showToast('Đã xóa lô', 'success'); fetchTabData('batches'); } catch (err) { showToast(err.message, 'error'); } }); };
 
+  const handleUpdateBatch = async (batchId, payload) => {
+    try {
+      setUpdatingBatch(true);
+      await batchesApi.update(batchId, payload);
+      showToast('Đã cập nhật lô', 'success');
+      await fetchTabData('batches');
+    } catch (err) {
+      showToast(err.message || 'Lỗi cập nhật lô', 'error');
+      throw err;
+    } finally {
+      setUpdatingBatch(false);
+    }
+  };
+
+  const openBatchEdit = (batch) => {
+    setEditingBatch(batch);
+    setShowEditBatch(true);
+  };
+
   // Bed assignment CRUD
   const handleAssignBed = async () => {
     if (!bedForm.bedId) { showToast('Vui lòng chọn luống', 'error'); return; }
@@ -1121,13 +1168,13 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
                 <DesignTab design={design} form={designForm} setForm={setDesignForm} onSave={handleSaveDesign} onDelete={handleDeleteDesign} loading={tabLoading} />
               )}
               {activeTab === 'measurements' && (
-                <MeasurementsTab measurements={measurements} groups={groups} form={measurementForm} setForm={setMeasurementForm} onCreate={handleCreateMeasurement} onDelete={handleDeleteMeasurement} loading={tabLoading} />
+                <MeasurementsTab measurements={measurements} groups={groups} form={measurementForm} setForm={setMeasurementForm} onCreate={handleCreateMeasurement} onDelete={handleDeleteMeasurement} loading={tabLoading} experimentId={experiment?.id} stages={stages} />
               )}
               {activeTab === 'schedules' && (
                 <SchedulesTab schedules={schedules} stages={stages} batches={batches} form={scheduleForm} setForm={setScheduleForm} onCreate={handleCreateSchedule} onDelete={handleDeleteSchedule} loading={tabLoading} />
               )}
               {activeTab === 'batches' && (
-                <BatchesTab batches={batches} bedAssignments={bedAssignments} groups={groups} form={batchForm} setForm={setBatchForm} onCreate={handleCreateBatch} onDelete={handleDeleteBatch} onRandomizeBeds={handleRandomizeBeds} loading={tabLoading} />
+                <BatchesTab batches={batches} bedAssignments={bedAssignments} groups={groups} form={batchForm} setForm={setBatchForm} onCreate={handleCreateBatch} onDelete={handleDeleteBatch} onEdit={openBatchEdit} onRandomizeBeds={handleRandomizeBeds} loading={tabLoading} />
               )}
               {activeTab === 'tasks' && (
                 <TasksTab
@@ -1153,6 +1200,16 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
         message={confirmDialog.message}
         onConfirm={() => { confirmDialog.onConfirm?.(); setConfirmDialog({ ...confirmDialog, isOpen: false }); }}
         onCancel={() => setConfirmDialog({ ...confirmDialog, isOpen: false })}
+      />
+
+      {/* Batch Edit Modal */}
+      <BatchEditModal
+        open={showEditBatch}
+        batch={editingBatch}
+        bedAssignments={bedAssignments}
+        groups={groups}
+        onClose={() => { setShowEditBatch(false); setEditingBatch(null); }}
+        onSave={handleUpdateBatch}
       />
     </div>
     </Portal>
@@ -2023,10 +2080,11 @@ const DesignTab = ({ design, form, setForm, onSave, onDelete, loading }) => {
 
 // ── Measurements Tab ─────────────────────────────────────────────────────────────
 
-const MeasurementsTab = ({ measurements, groups, form, setForm, onCreate, onDelete, loading }) => (
+const MeasurementsTab = ({ measurements, groups, form, setForm, onCreate, onDelete, loading, experimentId, stages }) => (
   <div className="space-y-4">
+    {/* CRUD MeasurementDefinition (giữ lại để tạo các metric mới) */}
     <div className="bg-teal-50 rounded-xl p-4 border border-teal-100">
-      <h4 className="text-xs font-bold text-teal-700 mb-3">+ Thêm Chỉ Số Đo Lường</h4>
+      <h4 className="text-xs font-bold text-teal-700 mb-3">+ Thêm Chỉ Số Đo Lường (MeasurementDefinition)</h4>
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div>
           <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Nhóm *</label>
@@ -2094,31 +2152,89 @@ const MeasurementsTab = ({ measurements, groups, form, setForm, onCreate, onDele
         </table>
       </div>
     }
+
+    {/* Dashboard thống kê tổng hợp theo stage / experiment */}
+    <div className="border-t-2 border-dashed border-slate-200 pt-5 mt-2">
+      <h3 className="text-sm font-bold text-slate-900 mb-3 flex items-center gap-2">
+        📈 Thống kê & Phân tích
+        <span className="text-[10px] text-slate-500 font-normal">— AVG, MIN, MAX, STDDEV, Median, Q1, Q3, so sánh nhóm, xuất CSV/Excel</span>
+      </h3>
+      <StatisticsDashboard experimentId={experimentId} stages={stages || []} />
+    </div>
   </div>
 );
 
 // ── Schedules Tab ───────────────────────────────────────────────────────────────
 
-const SchedulesTab = ({ schedules, stages, batches, form, setForm, onCreate, onDelete, loading }) => (
+const SchedulesTab = ({ schedules, stages, batches, form, setForm, onCreate, onDelete, loading }) => {
+  // Auto-fill startDate/endDate khi chọn giai đoạn (nếu giai đoạn có thông tin)
+  const handleStageChange = (stageId) => {
+    const selected = stages.find(s => s.id === stageId);
+    if (!selected) {
+      setForm({ ...form, experimentStageId: stageId });
+      return;
+    }
+    const updates = { ...form, experimentStageId: stageId };
+    // Chỉ auto-fill khi field chưa có giá trị (tránh ghi đè dữ liệu user đã nhập)
+    if (!form.startDate && selected.startDate) {
+      updates.startDate = selected.startDate.split('T')[0];
+    }
+    if (!form.endDate && selected.endDate) {
+      updates.endDate = selected.endDate.split('T')[0];
+    }
+    setForm(updates);
+  };
+
+  return (
   <div className="space-y-4">
     <div className="bg-amber-50 rounded-xl p-4 border border-amber-100">
       <h4 className="text-xs font-bold text-amber-700 mb-3">+ Thêm Lịch Chăm Sóc</h4>
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div>
           <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Giai Đoạn</label>
-          <select value={form.experimentStageId} onChange={e => setForm({ ...form, experimentStageId: e.target.value })}
+          <select value={form.experimentStageId} onChange={e => handleStageChange(e.target.value)}
             className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white">
             <option value="">— Chọn giai đoạn —</option>
-            {stages.map(s => <option key={s.id} value={s.id}>{s.stageName}</option>)}
+            {stages.map(s => {
+              const range = (s.startDate || s.endDate)
+                ? ` (${(s.startDate || '?').split('T')[0]} → ${(s.endDate || '?').split('T')[0]})`
+                : '';
+              return <option key={s.id} value={s.id}>{s.stageName}{range}</option>;
+            })}
           </select>
+          {form.experimentStageId && (() => {
+            const sel = stages.find(s => s.id === form.experimentStageId);
+            if (!sel?.startDate && !sel?.endDate) return null;
+            return (
+              <p className="text-[10px] text-amber-700 mt-1 italic">
+                💡 Giai đoạn: <span className="font-mono">{(sel.startDate || '—').split('T')[0]}</span> → <span className="font-mono">{(sel.endDate || '—').split('T')[0]}</span>
+              </p>
+            );
+          })()}
         </div>
         <div>
-          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Lô</label>
+          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Lô áp dụng</label>
           <select value={form.batchId} onChange={e => setForm({ ...form, batchId: e.target.value })}
             className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white">
-            <option value="">— Chọn lô —</option>
-            {batches.map(b => <option key={b.id} value={b.id}>{b.batchCode}</option>)}
+            <option value="">— Tất cả lô (áp dụng chung) —</option>
+            {batches.map(b => {
+              const grp = (b.groupName || b.group?.groupName) ? ` · ${b.groupName || b.group?.groupName}` : '';
+              const count = b.plantCount ? ` · ${b.plantCount} cây` : '';
+              return <option key={b.id} value={b.id}>{b.batchCode}{grp}{count}</option>;
+            })}
           </select>
+          {form.batchId && (() => {
+            const b = batches.find(x => x.id === form.batchId);
+            if (!b) return null;
+            return (
+              <p className="text-[10px] text-amber-700 mt-1 italic">
+                🌱 Lô <strong>{b.batchCode}</strong>
+                {(b.groupName || b.group?.groupName) && <> · Nhóm <strong>{b.groupName || b.group?.groupName}</strong></>}
+                {b.plantCount != null && <> · {b.plantCount} cây</>}
+                {b.plantingDate && <> · Trồng <span className="font-mono">{(b.plantingDate || '').split('T')[0]}</span></>}
+              </p>
+            );
+          })()}
         </div>
         <div>
           <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Loại Tác Vụ</label>
@@ -2168,27 +2284,50 @@ const SchedulesTab = ({ schedules, stages, batches, form, setForm, onCreate, onD
     {loading ? <p className="text-center text-sm text-on-surface-variant py-4">Đang tải...</p> :
       schedules.length === 0 ? <p className="text-center text-sm text-on-surface-variant py-4">Chưa có lịch nào.</p> :
       <div className="space-y-2">
-        {schedules.map(sc => (
-          <div key={sc.id} className="flex items-center gap-3 p-3 bg-white border border-outline-variant rounded-xl">
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-on-surface truncate">{sc.title || '—'}</p>
-              <p className="text-[10px] text-on-surface-variant">
-                {sc.frequencyDays ? `${sc.frequencyDays} ngày/lần · ` : ''}
-                {sc.startDate || '—'} → {sc.endDate || '—'}
-              </p>
-              {sc.instruction && <p className="text-[10px] text-on-surface-variant mt-0.5 truncate">{sc.instruction}</p>}
+        {schedules.map(sc => {
+          const batch = batches.find(b => b.id === sc.batchId);
+          const stage = stages.find(s => s.id === sc.experimentStageId);
+          return (
+            <div key={sc.id} className="flex items-center gap-3 p-3 bg-white border border-outline-variant rounded-xl hover:border-amber-300 transition-colors">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                  <span className="text-sm font-semibold text-on-surface truncate">{sc.title || '—'}</span>
+                  {stage && (
+                    <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-[9px] font-bold uppercase">
+                      📅 {stage.stageName}
+                    </span>
+                  )}
+                  {batch ? (
+                    <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[9px] font-bold">
+                      🌱 {batch.batchCode}
+                      {batch.groupName && <> · {batch.groupName}</>}
+                    </span>
+                  ) : (
+                    <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[9px] font-bold">
+                      🌐 Mọi lô
+                    </span>
+                  )}
+                </div>
+                <p className="text-[10px] text-on-surface-variant">
+                  {sc.frequencyDays ? `${sc.frequencyDays} ngày/lần · ` : ''}
+                  📍 {sc.startDate || '—'} → {sc.endDate || '—'}
+                  {batch?.plantingDate && <> · Trồng {(batch.plantingDate || '').split('T')[0]}</>}
+                </p>
+                {sc.instruction && <p className="text-[10px] text-on-surface-variant mt-0.5 truncate">{sc.instruction}</p>}
+              </div>
+              <button onClick={() => onDelete(sc.id)} className="text-rose-400 hover:text-rose-600 text-xs font-bold shrink-0">✕ Xóa</button>
             </div>
-            <button onClick={() => onDelete(sc.id)} className="text-rose-400 hover:text-rose-600 text-xs font-bold shrink-0">✕ Xóa</button>
-          </div>
-        ))}
+          );
+        })}
       </div>
     }
   </div>
-);
+  );
+};
 
 // ── Batches Tab ───────────────────────────────────────────────────────────────
 
-const BatchesTab = ({ batches, bedAssignments, groups, form, setForm, onCreate, onDelete, onRandomizeBeds, loading }) => (
+const BatchesTab = ({ batches, bedAssignments, groups, form, setForm, onCreate, onDelete, onEdit, onRandomizeBeds, loading }) => (
   <div className="space-y-4">
     {/* Info banner if no beds assigned */}
     {bedAssignments.length === 0 && (
@@ -2276,7 +2415,7 @@ const BatchesTab = ({ batches, bedAssignments, groups, form, setForm, onCreate, 
       <div className="overflow-x-auto bg-white border border-outline-variant rounded-xl">
         <table className="w-full text-xs">
           <thead className="bg-rose-50 border-b border-rose-100">
-            <tr>{['Mã Lô', 'Luống (Khu/Trại)', 'Nhóm', 'Ngày Trồng', 'Dự Kiến Thu Hoạch', 'Số Cây', ''].map(h => (
+            <tr>{['Mã Lô', 'Luống (Khu/Trại)', 'Nhóm', 'Ngày Trồng', 'Dự Kiến Thu Hoạch', 'Số Cây', 'Ghi Chú', 'Thao Tác'].map(h => (
               <th key={h} className="px-4 py-3 text-left font-bold text-rose-700 uppercase">{h}</th>
             ))}</tr>
           </thead>
@@ -2285,9 +2424,17 @@ const BatchesTab = ({ batches, bedAssignments, groups, form, setForm, onCreate, 
               const ba = bedAssignments.find(x => x.id === b.experimentBedAssignmentId);
               const bedDisplay = b.bedCode || b.bedName || ba?.bedCode || ba?.bedName || '—';
               const areaFarm = [b.areaName, b.farmName].filter(Boolean).join(' / ') || ba ? [ba?.areaName, ba?.farmName].filter(Boolean).join(' / ') : '';
+              const isIncomplete = !b.experimentBedAssignmentId || !b.groupId || !b.plantingDate;
               return (
-                <tr key={b.id} className="hover:bg-surface-container/20">
-                  <td className="px-4 py-3 font-bold font-mono">{b.batchCode || '—'}</td>
+                <tr key={b.id} className={`hover:bg-surface-container/20 ${isIncomplete ? 'bg-amber-50/40' : ''}`}>
+                  <td className="px-4 py-3 font-bold font-mono">
+                    {b.batchCode || '—'}
+                    {isIncomplete && (
+                      <span className="ml-1.5 inline-block px-1.5 py-0.5 text-[9px] font-bold bg-amber-200 text-amber-800 rounded-full" title="Thiếu thông tin — bấm ✏️ để bổ sung">
+                        ⚠️ Thiếu
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <div className="font-semibold">{bedDisplay}</div>
                     {areaFarm && <div className="text-[10px] text-on-surface-variant mt-0.5">🌾 {areaFarm}</div>}
@@ -2299,8 +2446,19 @@ const BatchesTab = ({ batches, bedAssignments, groups, form, setForm, onCreate, 
                   <td className="px-4 py-3 font-mono">{b.plantingDate || '—'}</td>
                   <td className="px-4 py-3 font-mono">{b.expectedHarvestDate || '—'}</td>
                   <td className="px-4 py-3 font-bold">{b.plantCount || '—'}</td>
+                  <td className="px-4 py-3 text-on-surface-variant max-w-[160px]">
+                    <div className="truncate" title={b.notes || ''}>{b.notes || '—'}</div>
+                  </td>
                   <td className="px-4 py-3 text-right">
-                    <button onClick={() => onDelete(b.id)} className="text-rose-400 hover:text-rose-600 font-bold">✕ Xóa</button>
+                    <div className="flex justify-end gap-1">
+                      {onEdit && (
+                        <button onClick={() => onEdit(b)} title="Chỉnh sửa thông tin lô"
+                          className="px-2 py-1 text-amber-600 hover:bg-amber-50 rounded-lg text-xs font-bold">
+                          ✏️ Sửa
+                        </button>
+                      )}
+                      <button onClick={() => onDelete(b.id)} className="px-2 py-1 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg text-xs font-bold">✕</button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -2459,17 +2617,46 @@ const TasksTab = ({
       </div>
 
       {/* Manual create form */}
-      {showCreateForm && (
+      {showCreateForm && (() => {
+        const handleStageChange = (stageId) => {
+          const selected = stages.find(s => s.id === stageId);
+          if (!selected) {
+            setForm({ ...form, experimentStageId: stageId });
+            return;
+          }
+          const updates = { ...form, experimentStageId: stageId };
+          // Auto-fill dueDate từ stage.startDate nếu user chưa nhập
+          if (!form.dueDate && selected.startDate) {
+            updates.dueDate = selected.startDate.split('T')[0];
+          }
+          setForm(updates);
+        };
+
+        return (
         <div className="bg-white rounded-xl p-4 border border-indigo-200 space-y-3 animate-fade-in">
           <h4 className="text-xs font-bold text-indigo-700">Tạo Tác Vụ Thủ Công</h4>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Giai Đoạn</label>
-              <select value={form.experimentStageId} onChange={e => setForm({ ...form, experimentStageId: e.target.value })}
+              <select value={form.experimentStageId} onChange={e => handleStageChange(e.target.value)}
                 className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white">
                 <option value="">— Chọn giai đoạn —</option>
-                {stages.map(s => <option key={s.id} value={s.id}>{s.stageName}</option>)}
+                {stages.map(s => {
+                  const range = (s.startDate || s.endDate)
+                    ? ` (${(s.startDate || '?').split('T')[0]} → ${(s.endDate || '?').split('T')[0]})`
+                    : '';
+                  return <option key={s.id} value={s.id}>{s.stageName}{range}</option>;
+                })}
               </select>
+              {form.experimentStageId && (() => {
+                const sel = stages.find(s => s.id === form.experimentStageId);
+                if (!sel?.startDate && !sel?.endDate) return null;
+                return (
+                  <p className="text-[10px] text-indigo-600 mt-1 italic">
+                    💡 Giai đoạn: <span className="font-mono">{(sel.startDate || '—').split('T')[0]}</span> → <span className="font-mono">{(sel.endDate || '—').split('T')[0]}</span>
+                  </p>
+                );
+              })()}
             </div>
             <div>
               <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Lô</label>
@@ -2533,7 +2720,8 @@ const TasksTab = ({
             </button>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Grouped task list by date */}
       {loading ? (
@@ -2730,126 +2918,6 @@ const TasksTab = ({
                   className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50">
                   ✅ Xác Nhận Gán
                 </button>
-              </div>
-            </div>
-          </div>
-        </Portal>
-      )}
-
-      {/* Stage Edit Modal — must live inside ExperimentDetailModal so it shares scope with showEditStage / stageForm / handlers */}
-      {showEditStage && (
-        <Portal>
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[3050] flex items-center justify-center p-4 animate-fade-in">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl overflow-hidden max-h-[92vh] flex flex-col">
-              <div className="px-6 py-4 border-b border-outline-variant flex items-center justify-between bg-gradient-to-r from-blue-50 to-emerald-50 shrink-0">
-                <div>
-                  <h3 className="font-hanken font-bold text-lg text-slate-800">✏️ Chỉnh Sửa & Đánh Giá Giai Đoạn</h3>
-                  <p className="text-[11px] text-slate-500 mt-0.5">BE sẽ tự động tính lại ResultData từ MeasurementRecords khi bạn bấm Lưu.</p>
-                </div>
-                <button onClick={closeEditStage} className="text-gray-400 hover:text-gray-600">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-6 space-y-5">
-                <section>
-                  <h4 className="text-xs font-bold uppercase text-slate-600 tracking-wider mb-3 flex items-center gap-2">
-                    <span className="w-1 h-4 bg-blue-500 rounded" /> Thông tin giai đoạn
-                  </h4>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="col-span-2">
-                      <label className="text-[10px] font-bold text-slate-500 uppercase">Tên giai đoạn *</label>
-                      <input value={stageForm.stageName} onChange={e => setStageForm({ ...stageForm, stageName: e.target.value })}
-                        className="w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-200 focus:border-blue-400 outline-none" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-500 uppercase">Thứ tự</label>
-                      <input type="number" value={stageForm.stageOrder} onChange={e => setStageForm({ ...stageForm, stageOrder: e.target.value })}
-                        className="w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-500 uppercase">Loại</label>
-                      <select value={stageForm.stageType} onChange={e => setStageForm({ ...stageForm, stageType: e.target.value })}
-                        className="w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
-                        {STAGE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-500 uppercase">Ngày bắt đầu</label>
-                      <input type="date" value={stageForm.startDate} onChange={e => setStageForm({ ...stageForm, startDate: e.target.value })}
-                        className="w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-500 uppercase">Ngày kết thúc</label>
-                      <input type="date" value={stageForm.endDate} onChange={e => setStageForm({ ...stageForm, endDate: e.target.value })}
-                        className="w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-                    </div>
-                    <div className="col-span-2">
-                      <label className="text-[10px] font-bold text-slate-500 uppercase">Mục tiêu</label>
-                      <textarea value={stageForm.objective} onChange={e => setStageForm({ ...stageForm, objective: e.target.value })}
-                        rows={2} className="w-full mt-1 px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white resize-none" />
-                    </div>
-                  </div>
-                </section>
-
-                <section>
-                  <h4 className="text-xs font-bold uppercase text-slate-600 tracking-wider mb-3 flex items-center gap-2">
-                    <span className="w-1 h-4 bg-emerald-500 rounded" /> Kết quả tự động (BE-computed)
-                  </h4>
-                  <StageResultPanel result={stageForm.resultDataRaw} />
-                </section>
-
-                <section>
-                  <h4 className="text-xs font-bold uppercase text-slate-600 tracking-wider mb-3 flex items-center gap-2">
-                    <span className="w-1 h-4 bg-amber-500 rounded" /> 📝 Nhận xét & Kết luận
-                  </h4>
-                  <textarea
-                    value={stageForm.resultSummary}
-                    onChange={e => setStageForm({ ...stageForm, resultSummary: e.target.value })}
-                    rows={4}
-                    placeholder="VD: Nhóm Control có chiều cao TB cao hơn Treatment 1 (18.5cm vs 14.2cm), tỷ lệ sống tương đương. Treatment 2 cho năng suất vượt trội..."
-                    className="w-full px-3 py-2.5 border border-amber-200 rounded-lg text-sm bg-amber-50/30 focus:ring-2 focus:ring-amber-200 focus:border-amber-400 outline-none resize-none" />
-                </section>
-
-                <section>
-                  <button onClick={() => setStageForm({ ...stageForm, overrideEnabled: !stageForm.overrideEnabled })}
-                    className="w-full flex items-center justify-between px-3 py-2.5 bg-slate-50 hover:bg-slate-100 rounded-lg border border-slate-200 text-left">
-                    <span className="flex items-center gap-2">
-                      <span className={`w-4 h-4 rounded border-2 flex items-center justify-center ${stageForm.overrideEnabled ? 'bg-blue-500 border-blue-500' : 'border-slate-300'}`}>
-                        {stageForm.overrideEnabled && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4"><polyline points="20 6 9 17 4 12" /></svg>}
-                      </span>
-                      <span className="text-xs font-bold text-slate-700">⚙️ Nâng cao: Override ResultData thủ công (JSON)</span>
-                    </span>
-                    <span className="text-[10px] text-slate-400">{stageForm.overrideEnabled ? 'Đang bật' : 'Tắt'}</span>
-                  </button>
-                  {stageForm.overrideEnabled && (
-                    <div className="mt-2">
-                      <p className="text-[10px] text-amber-700 mb-1.5">
-                        ⚠️ Nếu bật, phải gửi JSON đúng schema <code className="bg-amber-100 px-1 rounded">{`{ groups: [...], comparison: {...} }`}</code>. Nếu tắt, BE tự tính lại.
-                      </p>
-                      <textarea value={stageForm.resultDataOverride}
-                        onChange={e => setStageForm({ ...stageForm, resultDataOverride: e.target.value })}
-                        rows={8} placeholder='{ "groups": [...], "comparison": {...} }'
-                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-[11px] bg-slate-50 font-mono resize-none focus:ring-2 focus:ring-blue-200 outline-none" />
-                    </div>
-                  )}
-                </section>
-              </div>
-
-              <div className="px-6 py-4 border-t border-outline-variant flex items-center justify-between gap-2 shrink-0 bg-slate-50">
-                <span className="text-[10px] text-slate-500">
-                  {stageForm.overrideEnabled ? '🔧 Sẽ gửi ResultData thủ công' : '⚡ BE sẽ tự tính lại ResultData'}
-                </span>
-                <div className="flex gap-2">
-                  <button onClick={closeEditStage} type="button"
-                    className="px-4 py-2 border border-slate-300 rounded-xl text-xs font-bold hover:bg-white">
-                    Hủy
-                  </button>
-                  <button onClick={handleUpdateStage}
-                    className="inline-flex items-center gap-1.5 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/20 transition-all">
-                    <span>💾</span> Lưu & Tính lại
-                  </button>
-                </div>
               </div>
             </div>
           </div>

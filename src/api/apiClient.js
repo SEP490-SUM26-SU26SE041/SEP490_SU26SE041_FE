@@ -55,8 +55,21 @@ const buildHeaders = (extra = {}) => {
   return headers;
 };
 
-const handleResponse = async (res) => {
+const handleResponse = async (res, responseType) => {
   if (res.status === 204) return null;
+
+  // Trả về blob thô (cho file download)
+  if (responseType === 'blob') {
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      const message = text || `Yêu cầu thất bại (${res.status})`;
+      const error = new Error(message);
+      error.status = res.status;
+      throw error;
+    }
+    return await res.blob();
+  }
+
   const contentType = res.headers.get('content-type') || '';
   const isJson = contentType.includes('application/json');
   const body = isJson ? await res.json() : await res.text();
@@ -73,7 +86,7 @@ const handleResponse = async (res) => {
   return body;
 };
 
-const request = async (path, { method = 'GET', body, headers = {}, params } = {}) => {
+const request = async (path, { method = 'GET', body, headers = {}, params, responseType } = {}) => {
   let url = `${API_BASE_URL}${path}`;
   if (params && Object.keys(params).length > 0) {
     const query = new URLSearchParams(
@@ -82,18 +95,26 @@ const request = async (path, { method = 'GET', body, headers = {}, params } = {}
     if (query) url += `?${query}`;
   }
 
+  const isFormData = body instanceof FormData;
+
   const fetchOptions = {
     method,
-    headers: buildHeaders(body ? { 'Content-Type': 'application/json', ...headers } : headers)
+    headers: isFormData
+      ? buildHeaders(headers)
+      : buildHeaders(body ? { 'Content-Type': 'application/json', ...headers } : headers)
   };
   if (body !== undefined) {
-    const formattedBody = formatDatesDeep(body);
-    fetchOptions.body = JSON.stringify(formattedBody, jsonReplacer);
+    if (isFormData) {
+      fetchOptions.body = body;
+    } else {
+      const formattedBody = formatDatesDeep(body);
+      fetchOptions.body = JSON.stringify(formattedBody, jsonReplacer);
+    }
   }
 
   try {
     const res = await fetch(url, fetchOptions);
-    return await handleResponse(res);
+    return await handleResponse(res, responseType);
   } catch (err) {
     if (err.status === 401) {
       localStorage.removeItem('token');

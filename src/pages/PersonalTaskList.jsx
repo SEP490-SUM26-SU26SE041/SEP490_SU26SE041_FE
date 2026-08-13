@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useToast } from '../context/ToastContext';
-import { tasksApi, taskReportsApi } from '../api/sharedTaskApi';
+import { tasksApi, taskReportsApi, taskImagesApi, measurementRecordsApi } from '../api/sharedTaskApi';
+import { measurementDefinitionsApi, batchesApi } from '../api/experimentApi';
 import TaskReportForm, { buildReportPayload } from '../components/tasks/TaskReportForm';
+import { extractMeasurementsFromReport, buildMeasurementPayloads, createMeasurementsFromTaskReport, MEASUREMENT_FIELD_MAP, getMeasurementNameVi, extractBulkItemsFromResultData, createMeasurementsBulk, filterDefinitionsByTaskGroup } from '../utils/measurementBridge';
 
 const Portal = ({ children }) => {
   if (typeof document === 'undefined') return null;
@@ -87,10 +89,108 @@ const PersonalTaskList = () => {
     try {
       // 1. Submit report first (business rule: report required before completion)
       const dataObj = buildReportPayload(resultData);
-      await taskReportsApi.create({ taskId: selectedTask.id, reportText, resultData: dataObj, images });
-      // 2. Then mark complete
+      const reportRes = await taskReportsApi.create({ taskId: selectedTask.id, reportText, resultData: dataObj });
+      const reportId = reportRes?.id || reportRes?.data?.id;
+
+      // 2. Bridge: tự động tạo MeasurementRecord từ các field đo lường trong resultData
+      let definitions = [];
+      try {
+        const expId = selectedTask.experimentId || selectedTask.experiment?.id;
+        if (expId) {
+          const data = await measurementDefinitionsApi.getByExperiment(expId);
+          definitions = Array.isArray(data) ? data : [];
+        }
+      } catch { definitions = []; }
+
+      // Fetch batch qua API GET /batches/{batchId} để lấy groupId chắc chắn đúng
+      let batchGroupId = null;
+      try {
+        const batchId = selectedTask.batchId || selectedTask.batch?.id;
+        if (batchId) {
+          const b = await batchesApi.getById(batchId);
+          batchGroupId = b?.groupId || null;
+        }
+      } catch { batchGroupId = null; }
+
+      // Lọc definitions theo nhóm của batch (chỉ lấy 1 nhóm, tránh trùng metricName)
+      const effectiveDefinitions = filterDefinitionsByTaskGroup(definitions, selectedTask, batchGroupId);
+
+      const isMeasurementTask = selectedTask.taskType === 'Measurement' || selectedTask.taskType === 'Observation';
+      let measureResult;
+      if (isMeasurementTask) {
+        const bulkItems = extractBulkItemsFromResultData(resultData, effectiveDefinitions);
+        measureResult = await createMeasurementsBulk(selectedTask, bulkItems, {
+          measuredAt: new Date().toISOString(),
+          notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
+        }, measurementRecordsApi.bulk);
+      } else {
+        // Build Map<name, definition> để measurementName → definitionId
+        const defByName = new Map(effectiveDefinitions.map(d => [d.metricName, d]));
+        const measurementPayloads = buildMeasurementPayloads(
+          selectedTask,
+          extractMeasurementsFromReport(dataObj),
+          {
+            measuredAt: new Date().toISOString(),
+            notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
+          },
+          defByName
+        );
+        measureResult = await createMeasurementsFromTaskReport(measurementPayloads, measurementRecordsApi);
+      }
+
+      // 3. Gắn ảnh đính kèm vào TaskReport (multipart với File + đầy đủ metadata)
+      let imageOk = 0;
+      if (images && images.length > 0) {
+        const imageResults = await Promise.allSettled(
+          images.map((img) => {
+            // Mỗi img có { file, previewUrl, caption, fileName, fileSize, imageId?, url? }
+            // - Nếu có file (mới chọn từ máy) → gửi multipart với File
+            // - Nếu không có file (ảnh đã upload trước đó) → gửi JSON với imageUrl
+            if (img.file) {
+              return taskImagesApi.upload({
+                file: img.file,
+                imageUrl: img.url, // optional URL nếu đã có Cloudinary
+                caption: img.caption || '',
+                capturedAt: img.uploadedAt || new Date().toISOString(),
+                experimentId: selectedTask.experimentId || selectedTask.experiment?.id,
+                batchId: selectedTask.batchId || selectedTask.batch?.id,
+                taskReportId: reportId,
+                taskId: selectedTask.id
+              });
+            }
+            return taskImagesApi.create({
+              taskReportId: reportId,
+              taskId: selectedTask.id,
+              experimentId: selectedTask.experimentId || selectedTask.experiment?.id,
+              batchId: selectedTask.batchId || selectedTask.batch?.id,
+              imageUrl: img.url,
+              caption: img.caption || '',
+              capturedAt: img.uploadedAt || new Date().toISOString()
+            });
+          })
+        );
+        imageOk = imageResults.filter(r => r.status === 'fulfilled' && r.value?.success !== false).length;
+      }
+
+      // 4. Mark complete
       await tasksApi.complete(selectedTask.id);
-      showToast('Đã hoàn thành tác vụ và gửi báo cáo!', 'success');
+
+      // Toast thông báo đầy đủ
+      const toastMsg = [];
+      const measurementCount = measureResult.success ?? measureResult.created ?? 0;
+      if (measurementCount > 0) {
+        const preview = previewMeasurements(dataObj);
+        toastMsg.push(`📊 ${measurementCount} chỉ số${preview ? ` (${preview})` : ''}`);
+      }
+      if (imageOk > 0) toastMsg.push(`📷 ${imageOk} ảnh`);
+      showToast(
+        toastMsg.length > 0 ? `Đã hoàn thành tác vụ! ${toastMsg.join(' · ')}` : 'Đã hoàn thành tác vụ và gửi báo cáo!',
+        'success'
+      );
+      if (measureResult.failed > 0) {
+        console.warn('[handleSubmitComplete] Một số measurement không tạo được:', measureResult.errors);
+      }
+
       setShowReportModal(false);
       setSelectedTask(null);
       fetchTasks();
@@ -310,6 +410,8 @@ const TaskReportModal = ({ task, mode = 'report', onClose, onSubmit }) => {
             setReportText={setReportText}
             resultData={resultData}
             setResultData={setResultData}
+            images={images}
+            setImages={setImages}
             saving={saving}
             disabled={false}
             onSubmit={handleSubmit}
