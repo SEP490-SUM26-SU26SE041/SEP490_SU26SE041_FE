@@ -1,17 +1,22 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import ImageUploader from './ImageUploader';
+import { measurementDefinitionsApi, batchesApi } from '../../api/experimentApi';
+import { localValidateValue } from '../../utils/measurement';
 
 /**
  * TaskReportForm
  * Form báo cáo tác vụ với:
  *  - Quick form theo taskType (Planting/Watering/Fertilizing/Observation/Inspection/Harvest/Other)
  *  - Nút "+ Thêm cột" để user (Student/Tech) tự custom key-value
+ *  - Upload ảnh lên Cloudinary thông qua BE API
  *
  * Props:
- *  - task: object task (cần taskType)
+ *  - task: object task (cần taskType, experimentId, batchId)
  *  - reportText, setReportText
- *  - resultData, setResultData: mảng [{ key, value }] — luôn bao gồm cả quick fields + custom
+ *  - resultData, setResultData: mảng [{ key, value }]
+ *  - images, setImages: mảng [{ url, caption, uploadedAt, imageId }]
  *  - saving: boolean
- *  - disabled: boolean (ví dụ task đã Completed)
+ *  - disabled: boolean
  *  - onSubmit: handler
  *  - color: 'blue' | 'indigo' | 'amber' | ...
  */
@@ -59,14 +64,12 @@ const QUICK_FORM_SCHEMA = {
     icon: '👁️',
     color: 'purple',
     title: 'Báo Cáo Quan Sát',
-    description: 'Ghi nhận tình trạng sinh trưởng',
-    fields: [
-      { key: 'plantHeight', label: 'Chiều cao trung bình', type: 'number', unit: 'cm', required: false },
-      { key: 'leafCount', label: 'Số lá trung bình', type: 'number', unit: 'lá', required: false },
-      { key: 'leafColor', label: 'Màu sắc lá', type: 'select', options: ['Xanh đậm', 'Xanh nhạt', 'Vàng', 'Có đốm', 'Khác'], required: false },
-      { key: 'pestSigns', label: 'Dấu hiệu sâu bệnh', type: 'select', options: ['Không có', 'Ít', 'Trung bình', 'Nhiều'], required: false },
-      { key: 'growthStage', label: 'Giai đoạn sinh trưởng', type: 'select', options: ['Mầm', 'Cây con', 'Phát triển', 'Ra hoa', 'Kết trái', 'Thu hoạch'], required: false }
-    ]
+    description: 'Ghi nhận tình trạng sinh trưởng theo các chỉ số đo lường chuẩn của experiment',
+    // Observation cũng dùng dynamic form — fetch các MeasurementDefinition của experiment
+    // (mỗi experiment có các chỉ số đo lường giống nhau cho các nhóm).
+    // Khi gửi báo cáo, hệ thống tự động tạo MeasurementRecord cho mỗi chỉ số.
+    fields: [],
+    isDynamic: true
   },
   Inspection: {
     icon: '🔍',
@@ -99,6 +102,16 @@ const QUICK_FORM_SCHEMA = {
     title: 'Báo Cáo Khác',
     description: 'Ghi nhận thông tin tự do',
     fields: []
+  },
+  Measurement: {
+    icon: '📏',
+    color: 'teal',
+    title: 'Báo Cáo Đo Lường (Growth Tracking)',
+    description: 'Ghi nhận các chỉ số tăng trưởng theo MeasurementDefinition của experiment.',
+    // fields sẽ được build động từ API
+    fields: [],
+    // Flag để form tự fetch definitions
+    isDynamic: true
   }
 };
 
@@ -110,7 +123,8 @@ const COLOR_CLASSES = {
   purple: { bg: 'bg-purple-50', border: 'border-purple-100', text: 'text-purple-700', icon: 'bg-purple-100 text-purple-600' },
   indigo: { bg: 'bg-indigo-50', border: 'border-indigo-100', text: 'text-indigo-700', icon: 'bg-indigo-100 text-indigo-600' },
   orange: { bg: 'bg-orange-50', border: 'border-orange-100', text: 'text-orange-700', icon: 'bg-orange-100 text-orange-600' },
-  slate: { bg: 'bg-slate-50', border: 'border-slate-100', text: 'text-slate-700', icon: 'bg-slate-100 text-slate-600' }
+  slate: { bg: 'bg-slate-50', border: 'border-slate-100', text: 'text-slate-700', icon: 'bg-slate-100 text-slate-600' },
+  teal: { bg: 'bg-teal-50', border: 'border-teal-100', text: 'text-teal-700', icon: 'bg-teal-100 text-teal-600' }
 };
 
 const TaskReportForm = ({
@@ -119,14 +133,107 @@ const TaskReportForm = ({
   setReportText,
   resultData,
   setResultData,
+  images = [],
+  setImages,
   saving = false,
   disabled = false,
   onSubmit,
   color = 'indigo',
   submitLabel = 'Gửi Báo Cáo'
 }) => {
-  const schema = useMemo(() => QUICK_FORM_SCHEMA[task?.taskType] || QUICK_FORM_SCHEMA.Other, [task?.taskType]);
+  const baseSchema = useMemo(() => QUICK_FORM_SCHEMA[task?.taskType] || QUICK_FORM_SCHEMA.Other, [task?.taskType]);
+  const [definitions, setDefinitions] = useState([]);
+  const [loadingDefs, setLoadingDefs] = useState(false);
+  // GroupId lấy từ batch (ưu tiên fetch qua GET /batches/{batchId} - chắc chắn đúng)
+  const [batchGroupId, setBatchGroupId] = useState(null);
+  const [batchGroupName, setBatchGroupName] = useState('');
+  const [loadingBatch, setLoadingBatch] = useState(false);
+
+  // Lấy groupId ưu tiên theo thứ tự:
+  //   1. batchGroupId (fetch qua GET /batches/{batchId}) ← chắc chắn đúng
+  //   2. task.batch.groupId (nếu BE đã populate batch vào task)
+  //   3. task.batchGroupId / task.groupId (fallback field flat)
+  const taskGroupId = batchGroupId || task?.batch?.groupId || task?.batchGroupId || task?.groupId;
+
+  // Build schema động cho taskType = Measurement/Observation (lấy field từ MeasurementDefinition)
+  // Vì API /experiments/{id}/measurements trả về definitions của TẤT CẢ các nhóm (Control, Phân hữu cơ, Phân NPK...)
+  // → cần lọc để chỉ giữ definitions của 1 nhóm duy nhất (nhóm của task này), tránh form bị lặp.
+  const filteredDefinitions = useMemo(() => {
+    if (!Array.isArray(definitions) || definitions.length === 0) return [];
+    if (taskGroupId) {
+      const sameGroup = definitions.filter(d => d.groupId === taskGroupId);
+      if (sameGroup.length > 0) return sameGroup;
+    }
+    // Fallback: dedupe theo metricName (giữ bản ghi đầu tiên) — vì mỗi nhóm có cùng tên metric
+    const seen = new Set();
+    const deduped = [];
+    for (const d of definitions) {
+      const key = (d.metricName || '').trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(d);
+    }
+    return deduped;
+  }, [definitions, taskGroupId]);
+
+  const schema = useMemo(() => {
+    if (baseSchema.isDynamic) {
+      return {
+        ...baseSchema,
+        fields: filteredDefinitions.map(d => ({
+          key: `def_${d.id}`,
+          definitionId: d.id,
+          label: d.metricName,
+          type: 'number',
+          unit: d.unit || '',
+          targetValue: d.targetValue,
+          required: false,
+          description: d.description,
+          groupName: d.groupName
+        }))
+      };
+    }
+    return baseSchema;
+  }, [baseSchema, filteredDefinitions]);
+
   const colorCls = COLOR_CLASSES[schema.color] || COLOR_CLASSES.indigo;
+
+  // Fetch MeasurementDefinition khi task.experimentId thay đổi và taskType = Measurement
+  useEffect(() => {
+    if (baseSchema.isDynamic && task?.experimentId) {
+      const fetchDefs = async () => {
+        try {
+          setLoadingDefs(true);
+          const data = await measurementDefinitionsApi.getByExperiment(task.experimentId);
+          setDefinitions(Array.isArray(data) ? data : []);
+        } catch {
+          setDefinitions([]);
+        } finally {
+          setLoadingDefs(false);
+        }
+      };
+      fetchDefs();
+    }
+  }, [baseSchema.isDynamic, task?.experimentId]);
+
+  // Fetch batch để lấy groupId chính xác (dùng API GET /batches/{batchId})
+  // → đảm bảo form đo lường hiển thị đúng các chỉ số mục tiêu ứng với nhóm của batch
+  useEffect(() => {
+    const batchId = task?.batchId || task?.batch?.id;
+    if (!batchId) { setBatchGroupId(null); setBatchGroupName(''); return; }
+    let cancelled = false;
+    setLoadingBatch(true);
+    batchesApi.getById(batchId)
+      .then(b => {
+        if (cancelled) return;
+        // response shape: { id, groupId, groupName, batchCode, ... }
+        setBatchGroupId(b?.groupId || null);
+        setBatchGroupName(b?.groupName || '');
+      })
+      .catch(() => { if (!cancelled) { setBatchGroupId(null); setBatchGroupName(''); } })
+      .finally(() => { if (!cancelled) setLoadingBatch(false); });
+    return () => { cancelled = true; };
+  }, [task?.batchId, task?.batch?.id]);
 
   // Đồng bộ resultData khi schema thay đổi (khi đổi taskType)
   // Giữ lại các field đã có trong resultData, thêm field mới từ schema
@@ -196,6 +303,52 @@ const TaskReportForm = ({
     const value = getFieldValue(field.key);
     const baseInputCls = `w-full px-3 py-2 border border-${schema.color}-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-${schema.color}-500/20 focus:border-${schema.color}-400 disabled:bg-slate-50 disabled:text-slate-500`;
 
+    // Dynamic measurement field: có thêm icon + target + status indicator
+    if (field.definitionId) {
+      const def = definitions.find(d => d.id === field.definitionId);
+      const raw = value;
+      const error = raw !== '' ? localValidateValue(def, raw) : null;
+      const num = typeof raw === 'string' ? parseFloat(raw) : raw;
+      const target = parseFloat(field.targetValue);
+      const meetsTarget = !isNaN(target) && !isNaN(num) && num >= target;
+      const closeTarget = !isNaN(target) && !isNaN(num) && num < target && num >= target * 0.8;
+
+      return (
+        <div key={field.key} className={`space-y-1 p-2.5 rounded-lg border ${error ? 'border-rose-200 bg-rose-50/40' : 'border-teal-100 bg-white'}`}>
+          <div className="flex items-center justify-between gap-2">
+            <label className="block text-[10px] font-bold uppercase tracking-wider text-on-surface-variant flex-1 min-w-0">
+              <span className="mr-1">{baseSchema.icon}</span>
+              {field.label}
+              {field.groupName && (
+                <span className="ml-1.5 text-[9px] text-purple-600 font-normal bg-purple-50 px-1.5 py-0.5 rounded">📦 {field.groupName}</span>
+              )}
+              {field.targetValue != null && (
+                <span className="ml-1.5 text-[9px] text-slate-500 font-normal">🎯 {field.targetValue}{field.unit}</span>
+              )}
+            </label>
+            {raw !== '' && !isNaN(num) && (
+              <span className="text-[10px] shrink-0">
+                {meetsTarget && <span className="text-emerald-600 font-bold">✅</span>}
+                {closeTarget && <span className="text-amber-500 font-bold">⚡</span>}
+                {!meetsTarget && !closeTarget && <span className="text-rose-400 font-bold">⚠️</span>}
+              </span>
+            )}
+          </div>
+          {field.description && <p className="text-[9px] text-slate-500 italic">{field.description}</p>}
+          <div className="relative">
+            <input type="number" step="0.1" min="0" value={value} disabled={disabled}
+              placeholder="—"
+              onChange={e => updateField(field.key, e.target.value)}
+              className={`${baseInputCls} ${field.unit ? 'pr-12' : ''} font-bold text-right ${error ? 'border-rose-400' : ''}`} />
+            {field.unit && (
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-on-surface-variant font-semibold">{field.unit}</span>
+            )}
+          </div>
+          {error && <p className="text-[9px] text-rose-600">⚠️ {error}</p>}
+        </div>
+      );
+    }
+
     if (field.type === 'select') {
       return (
         <div key={field.key} className="space-y-1">
@@ -244,7 +397,7 @@ const TaskReportForm = ({
       </div>
 
       {/* Quick form theo taskType */}
-      {schema.fields.length > 0 && (
+      {(schema.fields.length > 0 || baseSchema.isDynamic) && (
         <div className={`rounded-xl p-4 border ${colorCls.bg} ${colorCls.border}`}>
           <div className="flex items-center gap-2 mb-3">
             <div className={`w-8 h-8 rounded-lg ${colorCls.icon} flex items-center justify-center text-base`}>{schema.icon}</div>
@@ -252,10 +405,48 @@ const TaskReportForm = ({
               <h4 className={`text-xs font-bold ${colorCls.text}`}>{schema.title}</h4>
               <p className="text-[10px] text-on-surface-variant mt-0.5">{schema.description}</p>
             </div>
+            {baseSchema.isDynamic && (
+              <span className="text-[9px] font-bold text-teal-700 bg-teal-100 px-2 py-0.5 rounded-full whitespace-nowrap">
+                📊 {filteredDefinitions.length} chỉ số
+                {taskGroupId && filteredDefinitions.length > 0 && definitions.length > filteredDefinitions.length && (
+                  <span className="text-[8px] text-teal-500 ml-1 font-normal">/ {definitions.length}</span>
+                )}
+                {batchGroupName && filteredDefinitions.length > 0 && (
+                  <span className="block text-[8px] text-teal-600 mt-0.5 font-bold">
+                    📦 {batchGroupName}
+                  </span>
+                )}
+                {!batchGroupName && taskGroupId && filteredDefinitions.length > 0 && (
+                  <span className="block text-[8px] text-teal-500 mt-0.5 font-normal">
+                    {filteredDefinitions[0]?.groupName || 'Nhóm của task'}
+                  </span>
+                )}
+                {loadingBatch && (
+                  <span className="block text-[8px] text-teal-400 mt-0.5 font-normal italic">
+                    ⏳ đang lấy nhóm...
+                  </span>
+                )}
+              </span>
+            )}
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {schema.fields.map(renderQuickField)}
-          </div>
+          {baseSchema.isDynamic && loadingDefs ? (
+            <div className="text-center text-xs text-on-surface-variant py-4">⏳ Đang tải danh sách chỉ số...</div>
+          ) : baseSchema.isDynamic && filteredDefinitions.length === 0 ? (
+            <div className="text-center text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
+              {definitions.length === 0
+                ? <>⚠️ Experiment này chưa có <strong>MeasurementDefinition</strong>. Liên hệ Researcher để tạo trước.</>
+                : <>⚠️ Không tìm thấy <strong>MeasurementDefinition</strong> phù hợp với nhóm của task này.</>}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {schema.fields.map(renderQuickField)}
+            </div>
+          )}
+          {baseSchema.isDynamic && !loadingDefs && filteredDefinitions.length > 0 && (
+            <p className="text-[10px] text-teal-700/70 mt-3 italic">
+              💡 Hệ thống sẽ tự động tạo <strong>MeasurementRecord</strong> cho từng chỉ số khi gửi báo cáo.
+            </p>
+          )}
         </div>
       )}
 
@@ -307,6 +498,18 @@ const TaskReportForm = ({
             <span className="text-[10px] text-on-surface-variant italic">Thêm cột tùy ý — Student/Tech có thể custom</span>
           )}
         </div>
+      )}
+
+      {/* Upload ảnh */}
+      {!disabled && setImages && (
+        <ImageUploader
+          value={images}
+          onChange={setImages}
+          experimentId={task?.experimentId}
+          batchId={task?.batchId}
+          taskId={task?.id}
+          disabled={disabled}
+        />
       )}
 
       {/* Submit */}
