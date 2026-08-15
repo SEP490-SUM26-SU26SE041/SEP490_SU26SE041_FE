@@ -1,6 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { userApi } from '../../api/userApi';
 import { useToast } from '../../context/ToastContext';
+import { validateForm, isValid, required, emailFormat, phoneFormat, passwordComplexity, maxLength, minLength, compose } from '../../utils/validation';
+import Pagination from '../../components/ui/Pagination';
+
+const userSchema = {
+  fullName: compose(required('Họ và tên là bắt buộc'), minLength(2), maxLength(100)),
+  email: compose(required('Email là bắt buộc'), emailFormat()),
+  password: compose(required('Mật khẩu là bắt buộc'), passwordComplexity()),
+  phone: phoneFormat(),
+  profileDescription: maxLength(500)
+};
 
 const UserManagement = () => {
   const { showToast } = useToast();
@@ -14,6 +24,24 @@ const UserManagement = () => {
   const [formData, setFormData] = useState({
     id: '', fullName: '', email: '', password: '', phone: '', profileDescription: '', role: 'Student', isActive: true
   });
+  const [formErrors, setFormErrors] = useState({});
+
+  // Search + pagination
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+
+  const filteredUsers = useMemo(() => {
+    if (!search.trim()) return users;
+    const q = search.trim().toLowerCase();
+    return users.filter(u =>
+      (u.fullName || '').toLowerCase().includes(q) ||
+      (u.email || '').toLowerCase().includes(q) ||
+      (u.role || '').toLowerCase().includes(q)
+    );
+  }, [users, search]);
+
+  useEffect(() => { setPage(1); }, [search, pageSize]);
 
   const fetchUsers = async () => {
     try {
@@ -65,8 +93,8 @@ const UserManagement = () => {
     if (user) {
       setIsEditing(true);
       setFormData({
-        id: user.id, fullName: user.fullName, email: user.email, password: '', 
-        phone: user.phone || '', profileDescription: user.profileDescription || '', 
+        id: user.id, fullName: user.fullName, email: user.email, password: '',
+        phone: user.phone || '', profileDescription: user.profileDescription || '',
         role: user.role, isActive: user.isActive
       });
     } else {
@@ -75,11 +103,29 @@ const UserManagement = () => {
         id: '', fullName: '', email: '', password: '', phone: '', profileDescription: '', role: 'Student', isActive: true
       });
     }
+    setFormErrors({});
     setIsModalOpen(true);
   };
 
   const handleSave = async (e) => {
     e.preventDefault();
+
+    // Validate
+    const schemaToUse = isEditing
+      ? {
+          fullName: userSchema.fullName,
+          phone: userSchema.phone,
+          profileDescription: userSchema.profileDescription
+        }
+      : userSchema;
+    const errors = validateForm(formData, schemaToUse);
+    if (!isValid(errors)) {
+      setFormErrors(errors);
+      showToast('Vui lòng kiểm tra lại các trường', 'error');
+      return;
+    }
+    setFormErrors({});
+
     try {
       if (isEditing) {
         await userApi.updateUser(formData.id, formData);
@@ -138,7 +184,13 @@ const UserManagement = () => {
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant">
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
             </span>
-            <input type="text" placeholder="Tìm kiếm người dùng..." className="pl-10 pr-4 py-2.5 bg-surface-container-low border border-outline-variant rounded-xl text-sm focus:outline-none focus:ring-4 focus:ring-primary/10 focus:border-primary transition-all w-full"/>
+            <input
+              type="text"
+              placeholder="Tìm kiếm người dùng..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="pl-10 pr-4 py-2.5 bg-surface-container-low border border-outline-variant rounded-xl text-sm focus:outline-none focus:ring-4 focus:ring-primary/10 focus:border-primary transition-all w-full"
+            />
           </div>
         </div>
       </header>
@@ -178,11 +230,15 @@ const UserManagement = () => {
               </thead>
               <tbody className="divide-y divide-outline-variant">
                 {loading ? (
-                  <tr><td colSpan="5" className="px-6 py-8 text-center text-on-surface-variant">Đang tải dữ liệu...</td></tr>
-                ) : users.length === 0 ? (
-                  <tr><td colSpan="5" className="px-6 py-8 text-center text-on-surface-variant">Không tìm thấy người dùng nào.</td></tr>
+                  <tr><td colSpan="5" className="px-6 py-8 text-center text-on-surface-variant">�ang tải dữ liệu...</td></tr>
+                ) : filteredUsers.length === 0 ? (
+                  <tr><td colSpan="5" className="px-6 py-8 text-center text-on-surface-variant">
+                    {search ? 'Không tìm thấy người dùng phù hợp.' : 'Không có người dùng nào.'}
+                  </td></tr>
                 ) : (
-                  users.map((user, idx) => (
+                  filteredUsers
+                    .slice((page - 1) * pageSize, page * pageSize)
+                    .map((user, idx) => (
                     <tr key={user.id} className="group hover:bg-surface-container/30 transition-colors">
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
@@ -224,6 +280,14 @@ const UserManagement = () => {
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={filteredUsers.length}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            className="px-6 border-t border-outline-variant"
+          />
         </div>
       </div>
 
@@ -239,22 +303,26 @@ const UserManagement = () => {
             </div>
             <form onSubmit={handleSave} className="p-6 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
               <div className="col-span-1">
-                <label className="block text-xs font-bold text-on-surface-variant mb-1">Họ và Tên</label>
-                <input required type="text" value={formData.fullName} onChange={e => setFormData({...formData, fullName: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-white text-on-surface transition-colors" />
+                <label className="block text-xs font-bold text-on-surface-variant mb-1">Họ và Tên <span className="text-rose-500">*</span></label>
+                <input type="text" value={formData.fullName} onChange={e => setFormData({...formData, fullName: e.target.value})} className={`w-full px-3 py-2 border rounded-lg focus:ring-2 outline-none bg-white text-on-surface transition-colors ${formErrors.fullName ? 'border-rose-400 focus:ring-rose-200 focus:border-rose-500' : 'border-outline-variant focus:ring-primary/20 focus:border-primary'}`} />
+                {formErrors.fullName && <p className="text-[10px] text-rose-600 mt-1">{formErrors.fullName}</p>}
               </div>
               <div className="col-span-1">
-                <label className="block text-xs font-bold text-on-surface-variant mb-1">Email</label>
-                <input required type="email" value={formData.email} disabled={isEditing} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-white text-on-surface disabled:bg-gray-100 transition-colors" />
+                <label className="block text-xs font-bold text-on-surface-variant mb-1">Email <span className="text-rose-500">*</span></label>
+                <input type="email" value={formData.email} disabled={isEditing} onChange={e => setFormData({...formData, email: e.target.value})} className={`w-full px-3 py-2 border rounded-lg focus:ring-2 outline-none bg-white text-on-surface disabled:bg-gray-100 transition-colors ${formErrors.email ? 'border-rose-400 focus:ring-rose-200 focus:border-rose-500' : 'border-outline-variant focus:ring-primary/20 focus:border-primary'}`} />
+                {formErrors.email && <p className="text-[10px] text-rose-600 mt-1">{formErrors.email}</p>}
               </div>
               {!isEditing && (
                 <div className="col-span-1">
-                  <label className="block text-xs font-bold text-on-surface-variant mb-1">Mật Khẩu</label>
-                  <input required type="password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-white text-on-surface transition-colors" />
+                  <label className="block text-xs font-bold text-on-surface-variant mb-1">Mật Khẩu <span className="text-rose-500">*</span></label>
+                  <input type="password" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className={`w-full px-3 py-2 border rounded-lg focus:ring-2 outline-none bg-white text-on-surface transition-colors ${formErrors.password ? 'border-rose-400 focus:ring-rose-200 focus:border-rose-500' : 'border-outline-variant focus:ring-primary/20 focus:border-primary'}`} />
+                  {formErrors.password && <p className="text-[10px] text-rose-600 mt-1">{formErrors.password}</p>}
                 </div>
               )}
               <div className="col-span-1">
                 <label className="block text-xs font-bold text-on-surface-variant mb-1">Số Điện Thoại</label>
-                <input type="text" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-white text-on-surface transition-colors" />
+                <input type="text" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} className={`w-full px-3 py-2 border rounded-lg focus:ring-2 outline-none bg-white text-on-surface transition-colors ${formErrors.phone ? 'border-rose-400 focus:ring-rose-200 focus:border-rose-500' : 'border-outline-variant focus:ring-primary/20 focus:border-primary'}`} />
+                {formErrors.phone && <p className="text-[10px] text-rose-600 mt-1">{formErrors.phone}</p>}
               </div>
               <div className="col-span-1">
                 <label className="block text-xs font-bold text-on-surface-variant mb-1">Chức Vụ</label>
@@ -264,7 +332,8 @@ const UserManagement = () => {
               </div>
               <div className="col-span-1 md:col-span-2">
                 <label className="block text-xs font-bold text-on-surface-variant mb-1">Mô Tả Hồ Sơ</label>
-                <textarea rows="3" value={formData.profileDescription} onChange={e => setFormData({...formData, profileDescription: e.target.value})} className="w-full px-3 py-2 border border-outline-variant rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none bg-white text-on-surface transition-colors resize-none"></textarea>
+                <textarea rows="3" value={formData.profileDescription} onChange={e => setFormData({...formData, profileDescription: e.target.value})} className={`w-full px-3 py-2 border rounded-lg focus:ring-2 outline-none bg-white text-on-surface transition-colors resize-none ${formErrors.profileDescription ? 'border-rose-400 focus:ring-rose-200 focus:border-rose-500' : 'border-outline-variant focus:ring-primary/20 focus:border-primary'}`} />
+                {formErrors.profileDescription && <p className="text-[10px] text-rose-600 mt-1">{formErrors.profileDescription}</p>}
               </div>
               <div className="col-span-1 md:col-span-2 flex items-center gap-2 mt-1">
                 <input type="checkbox" id="isActive" checked={formData.isActive} onChange={e => setFormData({...formData, isActive: e.target.checked})} className="w-4 h-4 rounded text-primary focus:ring-primary/20 border-gray-300 cursor-pointer" />

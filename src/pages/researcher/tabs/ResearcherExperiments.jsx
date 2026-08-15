@@ -4,8 +4,10 @@ import { experimentsApi, tasksApi, experimentRequestsApi } from '../../../api/ex
 import { farmsApi, bedsApi } from '../../../api/managerResourcesApi';
 import { stagesApi, groupsApi, designApi, measurementsApi, schedulesApi, batchesApi, bedAssignmentsApi, userApi, areasApi } from '../../../api/researcherApi';
 import { cropsApi } from '../../../api/cropApi';
+import { skillsApi, tasksCountApi } from '../../../api/skillsApi';
 import { useToast } from '../../../context/ToastContext';
 import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
+import Pagination from '../../../components/ui/Pagination';
 import BatchEditModal from '../../../components/researcher/BatchEditModal';
 import StatisticsDashboard from '../../../components/researcher/StatisticsDashboard';
 
@@ -186,6 +188,8 @@ const ResearcherExperiments = ({ prefillData, onPrefillConsumed }) => {
   const [filterStatus, setFilterStatus] = useState('');
   const [filterFarm, setFilterFarm] = useState('');
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [detailOpen, setDetailOpen] = useState(false);
   const [activeExp, setActiveExp] = useState(null);
   const [showCreateExp, setShowCreateExp] = useState(false);
@@ -286,6 +290,15 @@ const ResearcherExperiments = ({ prefillData, onPrefillConsumed }) => {
   useEffect(() => { fetchFarms(); fetchCropVarieties(); }, []);
   useEffect(() => { fetchExperiments(); }, [filterFarm, filterStatus]);
 
+  // Load skills for requiredSkills multi-select trong form tạo task
+  useEffect(() => {
+    let cancelled = false;
+    skillsApi.getAll()
+      .then(data => { if (!cancelled) setAllSkills(Array.isArray(data) ? data : []); })
+      .catch(() => { if (!cancelled) setAllSkills([]); });
+    return () => { cancelled = true; };
+  }, []);
+
   // Xử lý prefill từ trang Requests
   useEffect(() => {
     if (prefillData) {
@@ -356,6 +369,9 @@ const ResearcherExperiments = ({ prefillData, onPrefillConsumed }) => {
     );
   });
 
+  // Reset page khi filter thay đổi
+  React.useEffect(() => { setPage(1); }, [filterStatus, filterFarm, search]);
+
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Filters */}
@@ -418,7 +434,7 @@ const ResearcherExperiments = ({ prefillData, onPrefillConsumed }) => {
                   <p className="text-xs text-on-surface-variant mt-1">Nhấn "Tạo TN" để tạo mới, hoặc "Tạo nhanh từ yêu cầu" để tạo từ request đã duyệt.</p>
                 </td></tr>
               ) : (
-                filtered.map(exp => (
+                filtered.slice((page - 1) * pageSize, page * pageSize).map(exp => (
                   <tr key={exp.id} className="border-b border-outline-variant hover:bg-surface-container-low/40 transition-colors">
                     <td className="px-6 py-4 text-xs font-mono font-bold text-on-surface">{exp.experimentCode || '—'}</td>
                     <td className="px-6 py-4">
@@ -447,13 +463,21 @@ const ResearcherExperiments = ({ prefillData, onPrefillConsumed }) => {
               )}
             </tbody>
           </table>
+          <Pagination
+            page={page}
+            pageSize={pageSize}
+            total={filtered.length}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+            className="px-6 border-t border-outline-variant"
+          />
         </div>
       </div>
 
       {/* Modal Tạo TN nhanh từ Approved Request */}
       {showQuickCreate && (
         <Portal>
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4 animate-fade-in">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10200] flex items-center justify-center p-4 animate-fade-in">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden max-h-[90vh] flex flex-col">
               <div className="px-6 py-4 border-b border-outline-variant flex items-center justify-between bg-emerald-50/50 shrink-0">
                 <div>
@@ -570,6 +594,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   // Task users
   const [users, setUsers] = useState([]);
   const [skillMatches, setSkillMatches] = useState([]);
+  const [userWorkload, setUserWorkload] = useState({}); // userId -> {totalTasks, pendingTasks, inProgressTasks, ...}
   const [selectedTaskForAssign, setSelectedTaskForAssign] = useState(null);
 
   // Edit state
@@ -619,8 +644,9 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   const [scheduleForm, setScheduleForm] = useState({ experimentStageId: '', batchId: '', title: '', instruction: '', frequencyDays: 1, taskType: 1, startDate: '', endDate: '' });
   const [batchForm, setBatchForm] = useState({ experimentBedAssignmentId: '', groupId: '', batchCode: '', plantingDate: '', expectedHarvestDate: '', plantCount: '', notes: '' });
   const [bedForm, setBedForm] = useState({ areaId: '', bedId: '' });
-  const [taskForm, setTaskForm] = useState({ experimentStageId: '', batchId: '', careScheduleId: '', taskType: 'Watering', title: '', description: '', requiredSkillDescription: '', dueDate: '' });
+  const [taskForm, setTaskForm] = useState({ experimentStageId: '', batchId: '', careScheduleId: '', taskType: 'Watering', title: '', description: '', requiredSkillDescription: '', dueDate: '', skillRequirements: [] });
   const [assignForm, setAssignForm] = useState({ assigneeId: '', reason: '' });
+  const [allSkills, setAllSkills] = useState([]);
 
   const fetchDetail = useCallback(async () => {
     try {
@@ -1042,20 +1068,54 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
       if (!payload.dueDate) delete payload.dueDate;
       if (!payload.description) delete payload.description;
       if (!payload.requiredSkillDescription) delete payload.requiredSkillDescription;
+      // skillRequirements: chỉ gửi mảng có item hợp lệ (skillId + requiredLevel >= 1)
+      if (Array.isArray(payload.skillRequirements)) {
+        payload.skillRequirements = payload.skillRequirements
+          .filter(sr => sr && sr.skillId && Number(sr.requiredLevel) >= 1)
+          .map(sr => ({ skillId: sr.skillId, requiredLevel: Number(sr.requiredLevel) }));
+        if (payload.skillRequirements.length === 0) delete payload.skillRequirements;
+      } else {
+        delete payload.skillRequirements;
+      }
       await tasksApi.create(payload);
       showToast('Đã tạo tác vụ', 'success');
-      setTaskForm({ experimentStageId: '', batchId: '', careScheduleId: '', taskType: 'Watering', title: '', description: '', requiredSkillDescription: '', dueDate: '' });
+      setTaskForm({ experimentStageId: '', batchId: '', careScheduleId: '', taskType: 'Watering', title: '', description: '', requiredSkillDescription: '', dueDate: '', skillRequirements: [] });
       fetchTabData('tasks');
     } catch (err) { showToast(err.message || 'Lỗi tạo tác vụ', 'error'); }
   };
   const handleDeleteTask = async (id) => { openConfirm('Xóa Tác Vụ', 'Bạn có chắc muốn xóa tác vụ này?', async () => { try { await tasksApi.remove(id); showToast('Đã xóa tác vụ', 'success'); fetchTabData('tasks'); } catch (err) { showToast(err.message, 'error'); } }); };
 
-  // Skill match
+  // Skill match — kèm workload của các user match trong ngày dueDate của task
   const handleSkillMatch = async (taskId) => {
     try {
       const matches = await tasksApi.getSkillMatches(taskId);
-      setSkillMatches(Array.isArray(matches) ? matches : []);
+      const matchList = Array.isArray(matches) ? matches : [];
+      setSkillMatches(matchList);
       setSelectedTaskForAssign(taskId);
+
+      // Tìm task để biết dueDate
+      const task = tasks.find(t => t.id === taskId);
+      const dateParam = task?.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : undefined;
+
+      // Chỉ fetch workload cho các user nằm trong match list
+      try {
+        const countRes = await tasksCountApi.countByUser(dateParam ? { date: dateParam } : {});
+        const userMap = {};
+        (countRes?.users || []).forEach(u => {
+          userMap[u.userId] = {
+            totalTasks: u.totalTasks,
+            pendingTasks: u.pendingTasks,
+            inProgressTasks: u.inProgressTasks,
+            completedTasks: u.completedTasks,
+            overdueTasks: u.overdueTasks,
+            roleName: u.roleName
+          };
+        });
+        // Giữ cache workload cũ cho user không có trong response mới
+        setUserWorkload(prev => ({ ...prev, ...userMap }));
+      } catch {
+        // Không block UI nếu /count-by-user fail (vd: không phải Researcher hoặc quyền)
+      }
     } catch (err) { showToast(err.message || 'Lỗi tìm người phù hợp', 'error'); }
   };
 
@@ -1085,7 +1145,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
 
   return (
     <Portal>
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[2000] flex items-center justify-center p-4 animate-fade-in">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10000] flex items-center justify-center p-4 animate-fade-in">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl overflow-hidden max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="px-6 py-4 border-b border-outline-variant flex justify-between items-center shrink-0 bg-indigo-50 min-h-[72px]">
@@ -1177,16 +1237,17 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
                 <BatchesTab batches={batches} bedAssignments={bedAssignments} groups={groups} form={batchForm} setForm={setBatchForm} onCreate={handleCreateBatch} onDelete={handleDeleteBatch} onEdit={openBatchEdit} onRandomizeBeds={handleRandomizeBeds} loading={tabLoading} />
               )}
               {activeTab === 'tasks' && (
-                <TasksTab
-                  tasks={tasks} stages={stages} batches={batches} schedules={schedules}
-                  form={taskForm} setForm={setTaskForm}
-                  users={users} assignForm={assignForm} setAssignForm={setAssignForm}
-                  skillMatches={skillMatches} selectedTaskForAssign={selectedTaskForAssign}
-                  onCreate={handleCreateTask} onDelete={handleDeleteTask}
-                  onGenerate={(type) => handleGenerateTasks(type)}
-                  onSkillMatch={handleSkillMatch} onAssign={handleAssignTask} onReassign={handleReassign}
-                  loading={tabLoading}
-                />
+<TasksTab
+                tasks={tasks} stages={stages} batches={batches} schedules={schedules}
+                form={taskForm} setForm={setTaskForm} allSkills={allSkills}
+                users={users} assignForm={assignForm} setAssignForm={setAssignForm}
+                skillMatches={skillMatches} userWorkload={userWorkload}
+                selectedTaskForAssign={selectedTaskForAssign}
+                onCreate={handleCreateTask} onDelete={handleDeleteTask}
+                onGenerate={(type) => handleGenerateTasks(type)}
+                onSkillMatch={handleSkillMatch} onAssign={handleAssignTask} onReassign={handleReassign}
+                loading={tabLoading}
+              />
               )}
             </>
           )}
@@ -2521,13 +2582,34 @@ const BedsTab = ({ bedAssignments, availableBeds, areas, form, setForm, onAssign
 // ── Tasks Tab (Visual: grouped by dueDate, date filter, modal assign) ─────────
 
 const TasksTab = ({
-  tasks, stages, batches, schedules, form, setForm,
-  users, assignForm, setAssignForm, skillMatches, selectedTaskForAssign,
+  tasks, stages, batches, schedules, form, setForm, allSkills = [],
+  users, assignForm, setAssignForm, skillMatches, userWorkload = {},
+  selectedTaskForAssign,
   onCreate, onDelete, onGenerate, onSkillMatch, onAssign, onReassign, loading
 }) => {
   const [filterDate, setFilterDate] = useState('all');
   const [assignModalTask, setAssignModalTask] = useState(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [localSkills, setLocalSkills] = useState([]);
+  const [skillsLoading, setSkillsLoading] = useState(false);
+
+  // Load skills ngay khi TasksTab mount (defensive — nếu allSkills prop rỗng do chưa fetch xong)
+  useEffect(() => {
+    let cancelled = false;
+    setSkillsLoading(true);
+    skillsApi.getAll()
+      .then(data => {
+        if (cancelled) return;
+        const list = Array.isArray(data) ? data : (data?.items || (data?.data && Array.isArray(data.data) ? data.data : []));
+        setLocalSkills(list);
+      })
+      .catch(() => { if (!cancelled) setLocalSkills([]); })
+      .finally(() => { if (!cancelled) setSkillsLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Ưu tiên allSkills từ prop; nếu rỗng thì dùng localSkills
+  const skillCatalog = allSkills && allSkills.length > 0 ? allSkills : localSkills;
 
   // Group tasks by dueDate (YYYY-MM-DD)
   const tasksByDate = useMemo(() => {
@@ -2542,6 +2624,32 @@ const TasksTab = ({
       .sort(([a], [b]) => (a === 'no-date' ? 1 : b === 'no-date' ? -1 : a.localeCompare(b)));
     return ordered;
   }, [tasks]);
+
+  // Sort skill matches: ưu tiên matchScore cao + workload thấp
+  // Trọng số: score (0..1) - 0.04 * totalTasks (giảm 4% mỗi task đã có)
+  // Người có weightedScore cao nhất = match cao + ít việc → đánh dấu "Tối ưu nhất"
+  // Lọc: chỉ giữ user có role Technician hoặc Student
+  const rankedSkillMatches = useMemo(() => {
+    if (!Array.isArray(skillMatches) || skillMatches.length === 0) return [];
+    const enriched = skillMatches.map(m => {
+      const wl = userWorkload[m.userId];
+      const totalTasks = wl?.totalTasks ?? 0;
+      const overdue = wl?.overdueTasks ?? 0;
+      const pending = wl?.pendingTasks ?? 0;
+      const inProgress = wl?.inProgressTasks ?? 0;
+      const score = (m.matchScore || 0) / 100;
+      // Trừ workload: 4% mỗi pending+inProgress task, thêm penalty cho overdue
+      const workloadPenalty = 0.04 * (pending + inProgress) + 0.1 * overdue;
+      const weightedScore = Math.max(0, score - workloadPenalty);
+      const role = (m.roleName || wl?.roleName || '').toLowerCase();
+      const isAssignable = role === 'technician' || role === 'student';
+      return { ...m, totalTasks, pendingTasks: pending, inProgressTasks: inProgress, overdueTasks: overdue, weightedScore, isAssignable };
+    })
+    // Chỉ giữ user thuộc role Technician / Student (Researcher/Admin bị loại)
+    .filter(m => m.isAssignable);
+    enriched.sort((a, b) => b.weightedScore - a.weightedScore);
+    return enriched;
+  }, [skillMatches, userWorkload]);
 
   const dateKeys = tasksByDate.map(([k]) => k);
   const effectiveFilter = filterDate === 'all' ? dateKeys : (dateKeys.includes(filterDate) ? [filterDate] : []);
@@ -2702,11 +2810,110 @@ const TasksTab = ({
                 placeholder="Mô tả chi tiết tác vụ"
                 className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white" />
             </div>
-            <div className="col-span-2">
-              <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Yêu Cầu Kỹ Năng</label>
-              <input value={form.requiredSkillDescription} onChange={e => setForm({ ...form, requiredSkillDescription: e.target.value })}
-                placeholder="VD: Vận hành hệ thống tưới tự động"
-                className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white" />
+
+            {/* Yêu cầu kỹ năng (chọn từ list Skill do Admin tạo) */}
+            <div className="col-span-2 bg-indigo-50/40 border border-indigo-100 rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-bold uppercase text-indigo-700 flex items-center gap-1.5">
+                  🎯 Kỹ Năng Yêu Cầu (từ danh mục Skill)
+                </label>
+                <span className="text-[9px] text-indigo-500 italic">
+                  {form.skillRequirements?.length || 0} skill đã chọn
+                </span>
+              </div>
+
+              {/* List chip các skill đã chọn */}
+              {form.skillRequirements?.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {form.skillRequirements.map((sr, idx) => {
+                    const skill = skillCatalog.find(s => s.id === sr.skillId);
+                    return (
+                      <div key={`${sr.skillId}-${idx}`}
+                        className="inline-flex items-center gap-2 bg-white border border-indigo-200 rounded-full pl-2 pr-1 py-1 text-xs">
+                        <span className="font-semibold text-indigo-900">{skill?.skillName || sr.skillId}</span>
+                        <span className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-1.5 rounded-full">
+                          Lv {sr.requiredLevel}
+                        </span>
+                        <button type="button" onClick={() => {
+                          setForm({ ...form, skillRequirements: form.skillRequirements.filter((_, i) => i !== idx) });
+                        }} className="text-indigo-400 hover:text-rose-500 px-1 font-bold leading-none">✕</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Form thêm skill */}
+              {skillsLoading && skillCatalog.length === 0 ? (
+                <p className="text-[10px] text-indigo-600 italic">⏳ Đang tải danh sách skill...</p>
+              ) : skillCatalog.length === 0 ? (
+                <div className="space-y-2">
+                  <p className="text-[10px] text-amber-700 italic">
+                    ⚠️ Chưa có skill nào trong hệ thống. Vào Admin → Quản lý Kỹ Năng để tạo trước.
+                  </p>
+                  <button type="button"
+                    onClick={() => {
+                      setSkillsLoading(true);
+                      skillsApi.getAll()
+                        .then(data => {
+                          const list = Array.isArray(data) ? data : (data?.items || []);
+                          setLocalSkills(list);
+                        })
+                        .catch(() => setLocalSkills([]))
+                        .finally(() => setSkillsLoading(false));
+                    }}
+                    className="text-[10px] px-2 py-1 border border-indigo-300 text-indigo-700 rounded hover:bg-indigo-100">
+                    🔄 Thử lại
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-12 gap-2">
+                  <select
+                    value=""
+                    onChange={e => {
+                      const skillId = e.target.value;
+                      if (!skillId) return;
+                      if (form.skillRequirements?.some(sr => sr.skillId === skillId)) return; // đã có
+                      setForm({
+                        ...form,
+                        skillRequirements: [...(form.skillRequirements || []), { skillId, requiredLevel: 3 }]
+                      });
+                    }}
+                    className="col-span-7 px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white">
+                    <option value="">+ Chọn skill từ danh mục...</option>
+                    {skillCatalog
+                      .filter(s => !form.skillRequirements?.some(sr => sr.skillId === s.id))
+                      .map(s => (
+                        <option key={s.id} value={s.id}>{s.skillName}</option>
+                      ))
+                    }
+                  </select>
+                  <select
+                    value=""
+                    onChange={e => {
+                      const lv = Number(e.target.value);
+                      if (!lv) return;
+                      // Nếu vừa chọn level trước → áp dụng cho skill mới nhất chưa có level
+                      // Ở đây UX đơn giản: mỗi skill được chọn mặc định Lv 5, dùng dropdown này để đổi skill cuối
+                      const lastIdx = (form.skillRequirements?.length || 0) - 1;
+                      if (lastIdx < 0) return;
+                      const next = [...(form.skillRequirements || [])];
+                      next[lastIdx] = { ...next[lastIdx], requiredLevel: lv };
+                      setForm({ ...form, skillRequirements: next });
+                    }}
+                    className="col-span-5 px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white">
+                    <option value="">Đổi level (mặc định 3)</option>
+                    {[1,2,3,4,5].map(n => (
+                      <option key={n} value={n}>Level {n}{n >= 5 ? ' - Chuyên gia' : n >= 4 ? ' - Thành thạo' : n >= 3 ? ' - Khá' : n >= 2 ? ' - Cơ bản' : ' - Mới'}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <input value={form.requiredSkillDescription}
+                onChange={e => setForm({ ...form, requiredSkillDescription: e.target.value })}
+                placeholder="Mô tả thêm (optional): VD: Cần 2 người phối hợp"
+                className="w-full px-3 py-2 border border-outline-variant rounded-lg text-xs bg-white mt-1" />
             </div>
           </div>
           <div className="flex justify-end gap-2">
@@ -2825,7 +3032,7 @@ const TasksTab = ({
       {/* Modal Gán tác vụ */}
       {assignModalTask && (
         <Portal>
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[4000] flex items-center justify-center p-4 animate-fade-in">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10400] flex items-center justify-center p-4 animate-fade-in">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-scale-in">
               <div className="px-6 py-4 border-b border-outline-variant bg-gradient-to-r from-emerald-50 to-teal-50">
                 <div className="flex items-center justify-between">
@@ -2859,34 +3066,103 @@ const TasksTab = ({
                   )}
                 </div>
 
-                {/* Skill matches */}
+                {/* Skill matches — sort theo matchScore × workload */}
                 <div>
-                  <p className="text-[10px] font-bold uppercase text-on-surface-variant mb-2">Người phù hợp (skill match)</p>
-                  {skillMatches.length === 0 ? (
-                    <p className="text-xs text-on-surface-variant italic py-2">Đang tìm người phù hợp...</p>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-[10px] font-bold uppercase text-on-surface-variant">
+                      🎯 Người phù hợp (skill match × workload)
+                    </p>
+                    <span className="text-[9px] text-on-surface-variant italic">
+                      Sắp xếp: match cao + ít task
+                    </span>
+                  </div>
+                  {rankedSkillMatches.length === 0 ? (
+                    <div className="space-y-1">
+                      <p className="text-xs text-on-surface-variant italic py-2">Đang tìm người phù hợp...</p>
+                      <p className="text-[10px] text-amber-700 italic">
+                        ⚠️ Chỉ hiển thị user thuộc role <b>Technician</b> hoặc <b>Student</b>.
+                      </p>
+                    </div>
                   ) : (
                     <div className="space-y-2">
-                      {skillMatches.map(m => (
-                        <button key={m.userId} type="button"
-                          onClick={() => setAssignForm({ ...assignForm, assigneeId: m.userId })}
-                          className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-all text-left ${
-                            assignForm.assigneeId === m.userId
-                              ? 'border-emerald-500 bg-emerald-50 shadow-md'
-                              : 'border-outline-variant bg-white hover:border-emerald-200'
-                          }`}>
-                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white flex items-center justify-center text-sm font-bold shrink-0">
-                            {(m.fullName || m.userId || '?')[0]?.toUpperCase()}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-semibold text-on-surface truncate">{m.fullName || m.userId}</p>
-                            <p className="text-[10px] text-on-surface-variant">{m.roleName || '—'}</p>
-                          </div>
-                          <div className="shrink-0 text-right">
-                            <div className="text-xs font-bold text-emerald-700">{m.matchScore || 0}%</div>
-                            <div className="text-[10px] text-on-surface-variant">match</div>
-                          </div>
-                        </button>
-                      ))}
+                      {rankedSkillMatches.map((m, idx) => {
+                        const isTopPick = idx === 0 && m.weightedScore > 0;
+                        const wl = userWorkload[m.userId];
+                        const workloadBadge = (() => {
+                          if (wl === undefined) {
+                            return { label: '— workload', cls: 'bg-slate-100 text-slate-500' };
+                          }
+                          if (m.totalTasks === 0) {
+                            return { label: '✨ Rảnh', cls: 'bg-emerald-100 text-emerald-700' };
+                          }
+                          if (m.overdueTasks > 0) {
+                            return { label: `⚠️ ${m.totalTasks} task · ${m.overdueTasks} trễ`, cls: 'bg-rose-100 text-rose-700' };
+                          }
+                          if (m.pendingTasks + m.inProgressTasks >= 3) {
+                            return { label: `🔴 ${m.totalTasks} task · ${m.pendingTasks + m.inProgressTasks} dở`, cls: 'bg-rose-100 text-rose-700' };
+                          }
+                          if (m.pendingTasks + m.inProgressTasks >= 1) {
+                            return { label: `🟡 ${m.totalTasks} task · ${m.pendingTasks + m.inProgressTasks} dở`, cls: 'bg-amber-100 text-amber-700' };
+                          }
+                          return { label: `🟢 ${m.totalTasks} task`, cls: 'bg-emerald-100 text-emerald-700' };
+                        })();
+
+                        return (
+                          <button key={m.userId} type="button"
+                            onClick={() => setAssignForm({ ...assignForm, assigneeId: m.userId })}
+                            className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-all text-left ${
+                              assignForm.assigneeId === m.userId
+                                ? 'border-emerald-500 bg-emerald-50 shadow-md'
+                                : isTopPick
+                                  ? 'border-amber-300 bg-amber-50/40 hover:border-amber-400'
+                                  : 'border-outline-variant bg-white hover:border-emerald-200'
+                            }`}>
+                            <div className="relative">
+                              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white flex items-center justify-center text-sm font-bold shrink-0">
+                                {(m.fullName || m.userId || '?')[0]?.toUpperCase()}
+                              </div>
+                              {isTopPick && (
+                                <span className="absolute -top-1 -right-1 text-[8px] font-black bg-amber-500 text-white px-1.5 py-0.5 rounded-full shadow-sm">
+                                  ⭐ TOP
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-semibold text-on-surface truncate flex items-center gap-1.5">
+                                {m.fullName || m.userId}
+                                {isTopPick && <span className="text-[9px] text-amber-700 font-bold">TỐI ƯU</span>}
+                              </p>
+                              <p className="text-[10px] text-on-surface-variant">
+                                {m.roleName || '—'}
+                                {wl?.roleName && m.roleName !== wl.roleName ? ` · ${wl.roleName}` : ''}
+                              </p>
+                              <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${workloadBadge.cls}`}>
+                                  {workloadBadge.label}
+                                </span>
+                                {wl && (m.pendingTasks > 0 || m.inProgressTasks > 0) && (
+                                  <span className="text-[9px] text-on-surface-variant">
+                                    ({m.pendingTasks} chờ · {m.inProgressTasks} đang làm)
+                                  </span>
+                                )}
+                              </div>
+                              {assignModalTask?.dueDate && (
+                                <p className="text-[9px] text-on-surface-variant mt-1 italic">
+                                  📅 Trong ngày {new Date(assignModalTask.dueDate).toLocaleDateString('vi-VN')}: <b className={m.totalTasks > 0 ? 'text-amber-700' : 'text-emerald-700'}>{m.totalTasks} task</b>
+                                </p>
+                              )}
+                            </div>
+                            <div className="shrink-0 text-right space-y-1">
+                              <div className="text-xs font-bold text-emerald-700">{m.matchScore || 0}%</div>
+                              <div className="text-[9px] text-on-surface-variant">match</div>
+                              <div className={`text-[9px] font-bold ${isTopPick ? 'text-amber-700' : 'text-slate-500'}`}>
+                                {Math.round(m.weightedScore * 100)}%
+                              </div>
+                              <div className="text-[8px] text-on-surface-variant">điểm</div>
+                            </div>
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -2933,7 +3209,7 @@ const CreateExpModal = ({ open, onClose, farms, cropVarieties, form, setForm, er
   if (!open) return null;
   return (
     <Portal>
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[3000] flex items-center justify-center p-4 animate-fade-in">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10300] flex items-center justify-center p-4 animate-fade-in">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden max-h-[90vh] flex flex-col">
         <div className="px-6 py-4 border-b border-outline-variant flex justify-between items-center shrink-0 bg-indigo-50">
           <h3 className="font-hanken font-bold text-lg text-primary">+ Tạo Thí Nghiệm Mới</h3>

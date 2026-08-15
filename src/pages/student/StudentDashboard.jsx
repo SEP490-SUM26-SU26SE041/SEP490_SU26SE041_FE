@@ -3,10 +3,12 @@ import { createPortal } from 'react-dom';
 import { useToast } from '../../context/ToastContext';
 import { tasksApi, taskReportsApi, taskImagesApi, measurementRecordsApi } from '../../api/sharedTaskApi';
 import { experimentsApi } from '../../api/studentTechApi';
+import NotificationBell from '../../components/notifications/NotificationBell';
 import TaskReportForm, { buildReportPayload } from '../../components/tasks/TaskReportForm';
 import ImageUploader from '../../components/tasks/ImageUploader';
 import { extractMeasurementsFromReport, buildMeasurementPayloads, createMeasurementsFromTaskReport, previewMeasurements, extractBulkItemsFromResultData, createMeasurementsBulk, filterDefinitionsByTaskGroup } from '../../utils/measurementBridge';
 import { batchesApi, measurementDefinitionsApi } from '../../api/experimentApi';
+import { validateForm, isValid, required, nonNegativeNumber, pastOrTodayDate, minValue, maxValue, compose } from '../../utils/validation';
 
 const STU_TABS = [
   { id: 'overview', label: 'Tổng Quan', icon: '🏠' },
@@ -52,10 +54,13 @@ const StudentDashboard = () => {
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 font-sans text-slate-900 fixed inset-0 z-[1000]">
       <aside className="w-64 bg-white border-r border-slate-200 text-slate-900 flex flex-col fixed h-full z-50 shadow-sm">
-        <div className="px-6 py-6 border-b border-slate-100">
-          <h1 className="text-lg font-bold text-slate-900">Smart <span className="text-blue-600">Farm</span></h1>
-          <p className="text-[9px] text-slate-400 uppercase tracking-widest font-bold mt-0.5">Student Portal</p>
-          {(() => { try { const u = JSON.parse(localStorage.getItem('user') || '{}'); return u.fullName ? <p className="mt-2 text-xs text-slate-500 font-medium">{u.fullName}</p> : null; } catch { return null; } })()}
+        <div className="px-6 py-6 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-bold text-slate-900">Smart <span className="text-blue-600">Farm</span></h1>
+            <p className="text-[9px] text-slate-400 uppercase tracking-widest font-bold mt-0.5">Student Portal</p>
+            {(() => { try { const u = JSON.parse(localStorage.getItem('user') || '{}'); return u.fullName ? <p className="mt-2 text-xs text-slate-500 font-medium">{u.fullName}</p> : null; } catch { return null; } })()}
+          </div>
+          <NotificationBell />
         </div>
         <nav className="flex-1 px-3 py-4 space-y-1">
           {STU_TABS.map(tab => (
@@ -1334,6 +1339,7 @@ const MorphologyEntryModal = ({ onClose, onSaved }) => {
   const [definitions, setDefinitions] = useState([]);
   const [loadingInit, setLoadingInit] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState({});
 
   useEffect(() => {
     const load = async () => {
@@ -1391,9 +1397,47 @@ const MorphologyEntryModal = ({ onClose, onSaved }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.experimentId) return showToast('Vui lòng chọn thí nghiệm', 'error');
-    if (!form.batchId) return showToast('Vui lòng chọn batch', 'error');
-    if (!form.value && !form.textValue) return showToast('Vui lòng nhập giá trị đo', 'error');
+
+    // Xác định min/max từ measurementDefinition đã chọn
+    const def = definitions.find(d => d.id === form.measurementDefinitionId);
+    const defMin = def?.minValue !== undefined ? Number(def.minValue) : null;
+    const defMax = def?.maxValue !== undefined ? Number(def.maxValue) : null;
+
+    const valueValidators = [];
+    if (form.value !== '' && form.value !== null && form.value !== undefined) {
+      valueValidators.push(nonNegativeNumber('Giá trị đo phải ≥ 0'));
+      if (defMin !== null) valueValidators.push(minValue(defMin, `Giá trị tối thiểu ${defMin}`));
+      if (defMax !== null) valueValidators.push(maxValue(defMax, `Giá trị tối đa ${defMax}`));
+    }
+
+    const schema = {
+      experimentId: required('Vui lòng chọn thí nghiệm'),
+      batchId: required('Vui lòng chọn batch'),
+      measuredAt: pastOrTodayDate('Ngày đo không được ở tương lai'),
+      value: compose(...valueValidators)
+    };
+
+    // Validate value/textValue chỉ khi definition yêu cầu
+    const wantsNumeric = def?.dataType === 'Number' || def?.dataType === 'Decimal' || def?.dataType === 'Integer';
+    const wantsText = def?.dataType === 'Text' || def?.dataType === 'String';
+    if (wantsNumeric && (form.value === '' || form.value === null || form.value === undefined)) {
+      schema.value = (v) => v === '' || v === null || v === undefined ? 'Vui lòng nhập giá trị số' : null;
+    }
+    if (wantsText && !form.textValue.trim()) {
+      schema.textValue = required('Vui lòng nhập giá trị văn bản');
+    }
+    if (!wantsNumeric && !wantsText && !form.value && !form.textValue) {
+      schema.value = () => 'Vui lòng nhập giá trị đo';
+    }
+
+    const errs = validateForm(form, schema);
+    if (!isValid(errs)) {
+      setErrors(errs);
+      const firstKey = Object.keys(errs)[0];
+      showToast(errs[firstKey], 'error');
+      return;
+    }
+    setErrors({});
 
     try {
       setSaving(true);
@@ -1404,7 +1448,7 @@ const MorphologyEntryModal = ({ onClose, onSaved }) => {
         experimentStageId: form.experimentStageId || undefined,
         batchId: form.batchId,
         measurementDefinitionId: form.measurementDefinitionId || undefined,
-        value: form.value ? parseFloat(form.value) : undefined,
+        value: form.value !== '' && form.value !== null && form.value !== undefined ? parseFloat(form.value) : undefined,
         textValue: form.textValue || undefined,
         extraData: Object.keys(extraObj).length > 0 ? extraObj : undefined,
         measuredAt: form.measuredAt ? new Date(form.measuredAt).toISOString() : new Date().toISOString()
@@ -1438,14 +1482,15 @@ const MorphologyEntryModal = ({ onClose, onSaved }) => {
           <form onSubmit={handleSubmit} className="p-6 space-y-5">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Thí nghiệm *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Thí nghiệm <span className="text-rose-500">*</span></label>
                 <select name="experimentId" value={form.experimentId} onChange={handleChange}
-                  className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white">
+                  className={`w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 bg-white ${errors.experimentId ? 'border-rose-400 focus:ring-rose-200' : 'border-slate-300 focus:ring-indigo-500'}`}>
                   <option value="">— Chọn thí nghiệm —</option>
                   {experiments.map(e => (
                     <option key={e.id} value={e.id}>{e.title || e.name || e.id.slice(0, 8)}</option>
                   ))}
                 </select>
+                {errors.experimentId && <p className="text-[10px] text-rose-600 mt-1 font-semibold">{errors.experimentId}</p>}
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Giai đoạn</label>
@@ -1461,14 +1506,15 @@ const MorphologyEntryModal = ({ onClose, onSaved }) => {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Batch *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Batch <span className="text-rose-500">*</span></label>
                 <select name="batchId" value={form.batchId} onChange={handleChange} disabled={!form.experimentId}
-                  className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white disabled:bg-slate-50">
+                  className={`w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 bg-white disabled:bg-slate-50 ${errors.batchId ? 'border-rose-400 focus:ring-rose-200' : 'border-slate-300 focus:ring-indigo-500'}`}>
                   <option value="">— Chọn batch —</option>
                   {batches.map(b => (
                     <option key={b.id} value={b.id}>{b.code || b.batchCode || b.id.slice(0, 8)}</option>
                   ))}
                 </select>
+                {errors.batchId && <p className="text-[10px] text-rose-600 mt-1 font-semibold">{errors.batchId}</p>}
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Chỉ số đo</label>
@@ -1485,22 +1531,24 @@ const MorphologyEntryModal = ({ onClose, onSaved }) => {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-indigo-50 p-4 rounded-xl border border-indigo-100">
               <div>
                 <label className="block text-xs font-bold text-indigo-700 mb-1">Giá trị số</label>
-                <input type="number" step="0.01" name="value" value={form.value} onChange={handleChange}
+                <input type="number" step="0.01" min="0" name="value" value={form.value} onChange={handleChange}
                   placeholder="VD: 12.5"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white" />
+                  className={`w-full px-3 py-2 border rounded-xl text-sm focus:outline-none focus:ring-2 bg-white ${errors.value ? 'border-rose-400 focus:ring-rose-200' : 'border-slate-300 focus:ring-indigo-500'}`} />
+                {errors.value && <p className="text-[10px] text-rose-600 mt-1 font-semibold">{errors.value}</p>}
               </div>
               <div className="md:col-span-2">
                 <label className="block text-xs font-bold text-indigo-700 mb-1">Giá trị chữ</label>
                 <input type="text" name="textValue" value={form.textValue} onChange={handleChange}
                   placeholder="Hoặc nhập mô tả..."
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white" />
+                  className={`w-full px-3 py-2 border rounded-xl text-sm focus:outline-none focus:ring-2 bg-white ${errors.textValue ? 'border-rose-400 focus:ring-rose-200' : 'border-slate-300 focus:ring-indigo-500'}`} />
+                {errors.textValue && <p className="text-[10px] text-rose-600 mt-1 font-semibold">{errors.textValue}</p>}
               </div>
             </div>
 
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">Ngày đo</label>
               <input type="date" name="measuredAt" value={form.measuredAt} onChange={handleChange}
-                className="w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white" />
+                className={`w-full px-4 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 bg-white ${errors.measuredAt ? 'border-rose-400 focus:ring-rose-200' : 'border-slate-300 focus:ring-indigo-500'}`} />
             </div>
 
             <div className="border-t border-slate-200 pt-4">
