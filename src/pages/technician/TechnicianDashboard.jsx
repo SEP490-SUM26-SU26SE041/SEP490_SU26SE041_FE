@@ -6,6 +6,7 @@ import { measurementDefinitionsApi, batchesApi } from '../../api/experimentApi';
 import TaskReportForm, { buildReportPayload } from '../../components/tasks/TaskReportForm';
 import ImageUploader from '../../components/tasks/ImageUploader';
 import BulkMeasurementForm from '../../components/technician/BulkMeasurementForm';
+import NotificationBell from '../../components/notifications/NotificationBell';
 import {
   extractMeasurementsFromReport, buildMeasurementPayloads, createMeasurementsFromTaskReport,
   extractBulkItemsFromResultData, createMeasurementsBulk, filterDefinitionsByTaskGroup
@@ -53,9 +54,12 @@ const TechnicianDashboard = () => {
   return (
     <div className="flex min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 font-sans text-slate-900 fixed inset-0 z-[1000]">
       <aside className="w-64 bg-white border-r border-slate-200 text-slate-900 flex flex-col fixed h-full z-50 shadow-sm">
-        <div className="px-6 py-6 border-b border-slate-100">
-          <h1 className="text-lg font-bold text-slate-900">Smart <span className="text-blue-600">Farm</span></h1>
-          <p className="text-[9px] text-slate-400 uppercase tracking-widest font-bold mt-0.5">Technician Portal</p>
+        <div className="px-6 py-6 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-bold text-slate-900">Smart <span className="text-blue-600">Farm</span></h1>
+            <p className="text-[9px] text-slate-400 uppercase tracking-widest font-bold mt-0.5">Technician Portal</p>
+          </div>
+          <NotificationBell />
         </div>
         <nav className="flex-1 px-3 py-4 space-y-1">
           {TECH_TABS.map(tab => (

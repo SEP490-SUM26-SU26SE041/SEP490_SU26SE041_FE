@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { tasksApi, taskReportsApi, experimentsApi } from '../../../api/experimentApi';
+import { skillsApi } from '../../../api/skillsApi';
 import { useToast } from '../../../context/ToastContext';
 
 // ── Portal helper ─────────────────────────────────────────────────────────────
@@ -100,6 +101,7 @@ const ResearcherTasks = () => {
   const [selectedTask, setSelectedTask] = useState(null);
   const [reportsModal, setReportsModal] = useState({ open: false, task: null, reports: [], loading: false });
   const [weekAnchor, setWeekAnchor] = useState(new Date());
+  const [editModal, setEditModal] = useState({ open: false, task: null, saving: false });
 
   useEffect(() => {
     const loadExperiments = async () => {
@@ -245,16 +247,38 @@ const ResearcherTasks = () => {
           <p className="text-xs text-on-surface-variant mt-1">Hãy tạo tác vụ mới từ tab Thực Nghiệm để bắt đầu</p>
         </div>
       ) : view === 'kanban' ? (
-        <KanbanView tasks={filtered} onSelect={setSelectedTask} onOpenReports={openReports} onChange={fetchTasks} />
+        <KanbanView tasks={filtered} onSelect={setSelectedTask} onOpenReports={openReports} onChange={fetchTasks} onEdit={(t) => setEditModal({ open: true, task: t, saving: false })} />
       ) : view === 'calendar' ? (
         <CalendarView tasks={filtered} weekAnchor={weekAnchor} setWeekAnchor={setWeekAnchor} onSelect={setSelectedTask} />
       ) : (
-        <ListView tasks={filtered} onSelect={setSelectedTask} onOpenReports={openReports} onChange={fetchTasks} />
+        <ListView tasks={filtered} onSelect={setSelectedTask} onOpenReports={openReports} onChange={fetchTasks} onEdit={(t) => setEditModal({ open: true, task: t, saving: false })} />
       )}
 
       {/* ── Detail Drawer ─────────────────────────────────────────────────── */}
       {selectedTask && (
-        <TaskDetailDrawer task={selectedTask} onClose={() => setSelectedTask(null)} onOpenReports={openReports} onChange={() => { fetchTasks(); setSelectedTask(null); }} />
+        <TaskDetailDrawer task={selectedTask} onClose={() => setSelectedTask(null)} onOpenReports={openReports} onChange={() => { fetchTasks(); setSelectedTask(null); }} onEdit={(t) => setEditModal({ open: true, task: t, saving: false })} />
+      )}
+
+      {/* ── Edit Task Modal ───────────────────────────────────────────────── */}
+      {editModal.open && (
+        <TaskEditModal
+          task={editModal.task}
+          saving={editModal.saving}
+          onClose={() => setEditModal({ open: false, task: null, saving: false })}
+          onSubmit={async (payload) => {
+            try {
+              setEditModal(prev => ({ ...prev, saving: true }));
+              await tasksApi.update(editModal.task.id, payload);
+              showToast('Đã cập nhật tác vụ', 'success');
+              setEditModal({ open: false, task: null, saving: false });
+              fetchTasks();
+              setSelectedTask(null);
+            } catch (err) {
+              showToast(err.message || 'Lỗi cập nhật tác vụ', 'error');
+              setEditModal(prev => ({ ...prev, saving: false }));
+            }
+          }}
+        />
       )}
 
       {/* ── Reports Modal ─────────────────────────────────────────────────── */}
@@ -269,7 +293,7 @@ const ResearcherTasks = () => {
 // VIEW: Kanban
 // ────────────────────────────────────────────────────────────────────────────
 
-const KanbanView = ({ tasks, onSelect, onOpenReports, onChange }) => {
+const KanbanView = ({ tasks, onSelect, onOpenReports, onChange, onEdit }) => {
   const columns = useMemo(() => STATUS_ORDER.map(s => ({
     status: s,
     meta: STATUS_META[s],
@@ -293,7 +317,7 @@ const KanbanView = ({ tasks, onSelect, onOpenReports, onChange }) => {
             {col.items.length === 0 ? (
               <div className="text-center text-xs text-on-surface-variant italic py-8">Trống</div>
             ) : (
-              col.items.map(t => <KanbanCard key={t.id} task={t} onSelect={onSelect} />)
+              col.items.map(t => <KanbanCard key={t.id} task={t} onSelect={onSelect} onEdit={onEdit} />)
             )}
           </div>
         </div>
@@ -302,33 +326,46 @@ const KanbanView = ({ tasks, onSelect, onOpenReports, onChange }) => {
   );
 };
 
-const KanbanCard = ({ task, onSelect }) => {
+const KanbanCard = ({ task, onSelect, onEdit }) => {
   const tm = TASK_TYPE_META[task.taskType] || TASK_TYPE_META.Other;
   const sm = STATUS_META[task.status] || STATUS_META.Pending;
   const overdue = isTaskOverdue(task);
   const rel = task.dueDate ? relativeDay(task.dueDate) : null;
+  // Không cho edit khi đã hoàn thành/đã hủy/đã duyệt
+  const editable = !['Completed', 'Approved', 'Cancelled', 'Rejected'].includes(task.status);
 
   return (
-    <button type="button" onClick={() => onSelect(task)}
-      className={`w-full text-left p-3 bg-white rounded-xl border ${overdue ? 'border-rose-300 border-l-4 border-l-rose-500' : 'border-outline-variant'} hover:shadow-md hover:border-indigo-300 transition-all group`}>
-      <div className="flex items-start gap-2 mb-2">
-        <div className={`w-8 h-8 rounded-lg ${tm.color} flex items-center justify-center text-base shrink-0`}>{tm.icon}</div>
-        <div className="flex-1 min-w-0">
-          <p className={`text-sm font-bold line-clamp-2 ${task.status === 'Completed' ? 'line-through text-slate-400' : 'text-on-surface'}`}>{task.title || '—'}</p>
-          {task.experimentTitle && (
-            <p className="text-[10px] text-on-surface-variant mt-0.5 truncate">🧪 {task.experimentTitle}</p>
+    <div className={`relative bg-white rounded-xl border ${overdue ? 'border-rose-300 border-l-4 border-l-rose-500' : 'border-outline-variant'} hover:shadow-md hover:border-indigo-300 transition-all group`}>
+      <button type="button" onClick={() => onSelect(task)}
+        className="w-full text-left p-3">
+        <div className="flex items-start gap-2 mb-2">
+          <div className={`w-8 h-8 rounded-lg ${tm.color} flex items-center justify-center text-base shrink-0`}>{tm.icon}</div>
+          <div className="flex-1 min-w-0">
+            <p className={`text-sm font-bold line-clamp-2 ${task.status === 'Completed' ? 'line-through text-slate-400' : 'text-on-surface'}`}>{task.title || '—'}</p>
+            {task.experimentTitle && (
+              <p className="text-[10px] text-on-surface-variant mt-0.5 truncate">🧪 {task.experimentTitle}</p>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {rel && (
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${rel.cls}`}>{rel.text}</span>
+          )}
+          {task.assignedToName && (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">👤 {task.assignedToName}</span>
           )}
         </div>
-      </div>
-      <div className="flex items-center gap-1.5 flex-wrap">
-        {rel && (
-          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${rel.cls}`}>{rel.text}</span>
-        )}
-        {task.assignedToName && (
-          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">👤 {task.assignedToName}</span>
-        )}
-      </div>
-    </button>
+      </button>
+      {editable && onEdit && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onEdit(task); }}
+          className="absolute top-2 right-2 p-1 rounded-lg text-indigo-500 hover:bg-indigo-50 hover:text-indigo-700 opacity-0 group-hover:opacity-100 transition-all"
+          title="Sửa tác vụ">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z"/></svg>
+        </button>
+      )}
+    </div>
   );
 };
 
@@ -427,7 +464,7 @@ const CalendarView = ({ tasks, weekAnchor, setWeekAnchor, onSelect }) => {
 // VIEW: List (table)
 // ────────────────────────────────────────────────────────────────────────────
 
-const ListView = ({ tasks, onSelect, onOpenReports, onChange }) => (
+const ListView = ({ tasks, onSelect, onOpenReports, onChange, onEdit }) => (
   <div className="bg-white border border-outline-variant rounded-2xl overflow-hidden shadow-sm">
     <div className="overflow-x-auto">
       <table className="w-full">
@@ -446,6 +483,7 @@ const ListView = ({ tasks, onSelect, onOpenReports, onChange }) => (
             const tm = TASK_TYPE_META[t.taskType] || TASK_TYPE_META.Other;
             const sm = STATUS_META[t.status] || STATUS_META.Pending;
             const rel = t.dueDate ? relativeDay(t.dueDate) : null;
+            const editable = !['Completed', 'Approved', 'Cancelled', 'Rejected'].includes(t.status);
             return (
               <tr key={t.id} className="hover:bg-surface-container-low/30 transition-colors">
                 <td className="px-4 py-3">
@@ -481,10 +519,19 @@ const ListView = ({ tasks, onSelect, onOpenReports, onChange }) => (
                   </span>
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <button onClick={() => onSelect(t)}
-                    className="px-3 py-1.5 text-xs font-bold text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
-                    Chi tiết →
-                  </button>
+                  <div className="inline-flex items-center gap-1">
+                    {editable && onEdit && (
+                      <button onClick={(e) => { e.stopPropagation(); onEdit(t); }}
+                        className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                        title="Sửa tác vụ">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z"/></svg>
+                      </button>
+                    )}
+                    <button onClick={() => onSelect(t)}
+                      className="px-3 py-1.5 text-xs font-bold text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
+                      Chi tiết →
+                    </button>
+                  </div>
                 </td>
               </tr>
             );
@@ -499,7 +546,7 @@ const ListView = ({ tasks, onSelect, onOpenReports, onChange }) => (
 // TASK DETAIL DRAWER (slide from right)
 // ────────────────────────────────────────────────────────────────────────────
 
-const TaskDetailDrawer = ({ task, onClose, onOpenReports, onChange }) => {
+const TaskDetailDrawer = ({ task, onClose, onOpenReports, onChange, onEdit }) => {
   const { showToast } = useToast();
   const tm = TASK_TYPE_META[task.taskType] || TASK_TYPE_META.Other;
   const sm = STATUS_META[task.status] || STATUS_META.Pending;
@@ -514,7 +561,7 @@ const TaskDetailDrawer = ({ task, onClose, onOpenReports, onChange }) => {
 
   return (
     <Portal>
-      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[3000] animate-fade-in" onClick={onClose}>
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[10500] animate-fade-in" onClick={onClose}>
         <aside className="absolute right-0 top-0 bottom-0 w-full max-w-[520px] bg-white shadow-2xl flex flex-col animate-slide-in-right" onClick={e => e.stopPropagation()}>
           {/* Header */}
           <div className="px-6 py-5 border-b border-outline-variant bg-gradient-to-br from-indigo-50 via-white to-purple-50">
@@ -643,6 +690,13 @@ const TaskDetailDrawer = ({ task, onClose, onOpenReports, onChange }) => {
             )}
             {(task.status === 'Pending' || task.status === 'InProgress') && (
               <>
+                <button
+                  onClick={() => onEdit(task)}
+                  className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-amber-500/20 transition-all flex items-center gap-1.5"
+                  title="Sửa thông tin tác vụ">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z"/></svg>
+                  Sửa Tác Vụ
+                </button>
                 <div className="flex-1 px-4 py-2.5 bg-slate-100 text-slate-500 rounded-xl text-xs flex items-center gap-2">
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
                   Việc thực hiện do người được gán (Student/Tech) xử lý
@@ -703,7 +757,7 @@ const InfoBlock = ({ label, icon, value, sub, subCls }) => (
 
 const TaskReportsModal = ({ task, reports, loading, onClose }) => (
   <Portal>
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[3500] flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[10800] flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col animate-scale-in" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between p-5 border-b border-outline-variant">
           <div className="min-w-0 flex-1">
@@ -783,3 +837,305 @@ const TaskReportsModal = ({ task, reports, loading, onClose }) => (
 );
 
 export default ResearcherTasks;
+
+// ────────────────────────────────────────────────────────────────────────────
+// TASK EDIT MODAL
+// ────────────────────────────────────────────────────────────────────────────
+
+const TASK_TYPE_OPTIONS = [
+  { value: 'Planting', label: '🌱 Trồng' },
+  { value: 'Watering', label: '💧 Tưới nước' },
+  { value: 'Fertilizing', label: '🧪 Bón phân' },
+  { value: 'Observation', label: '👁️ Quan sát' },
+  { value: 'Inspection', label: '🔍 Kiểm tra' },
+  { value: 'Harvest', label: '🌾 Thu hoạch' },
+  { value: 'Other', label: '📋 Khác' },
+];
+
+const STATUS_OPTIONS = [
+  { value: 'Pending', label: '⏳ Chờ' },
+  { value: 'InProgress', label: '⚙️ Đang làm' },
+  { value: 'Cancelled', label: '🚫 Đã hủy' },
+];
+
+const toDateInput = (val) => {
+  if (!val) return '';
+  const d = new Date(val);
+  if (isNaN(d.getTime())) return '';
+  // YYYY-MM-DDTHH:mm cho input datetime-local
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+};
+
+const TaskEditModal = ({ task, saving, onClose, onSubmit }) => {
+  const initial = useMemo(() => ({
+    title: task.title || '',
+    description: task.description || '',
+    taskType: task.taskType || 'Other',
+    status: task.status || 'Pending',
+    dueDate: toDateInput(task.dueDate),
+    requiredSkillDescription: task.requiredSkillDescription || '',
+    // Map từ task.skillRequirements (object) → dạng mảng phẳng
+    skillRequirements: Array.isArray(task.skillRequirements)
+      ? task.skillRequirements.map(sr => ({ skillId: sr.skillId, requiredLevel: sr.requiredLevel || 1 }))
+      : [],
+  }), [task]);
+
+  const [form, setForm] = useState(initial);
+  const [error, setError] = useState('');
+  const [allSkills, setAllSkills] = useState([]);
+  const [skillLoading, setSkillLoading] = useState(false);
+
+  useEffect(() => { setForm(initial); setError(''); }, [initial]);
+
+  // Load danh sách skill từ BE
+  useEffect(() => {
+    let cancelled = false;
+    setSkillLoading(true);
+    skillsApi.getAll()
+      .then(data => { if (!cancelled) setAllSkills(Array.isArray(data) ? data : []); })
+      .catch(() => { if (!cancelled) setAllSkills([]); })
+      .finally(() => { if (!cancelled) setSkillLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const toggleSkill = (skillId) => {
+    setForm(prev => {
+      const exists = prev.skillRequirements.some(sr => sr.skillId === skillId);
+      return {
+        ...prev,
+        skillRequirements: exists
+          ? prev.skillRequirements.filter(sr => sr.skillId !== skillId)
+          : [...prev.skillRequirements, { skillId, requiredLevel: 1 }]
+      };
+    });
+  };
+
+  const setLevel = (skillId, level) => {
+    const lv = Math.max(1, Math.min(5, Number(level) || 1));
+    setForm(prev => ({
+      ...prev,
+      skillRequirements: prev.skillRequirements.map(sr =>
+        sr.skillId === skillId ? { ...sr, requiredLevel: lv } : sr)
+    }));
+  };
+
+  const handleSubmit = (e) => {
+    e?.preventDefault?.();
+    setError('');
+
+    if (!form.title.trim()) {
+      setError('Tiêu đề không được để trống');
+      return;
+    }
+    if (form.dueDate) {
+      const due = new Date(form.dueDate);
+      if (isNaN(due.getTime())) {
+        setError('Hạn chót không hợp lệ');
+        return;
+      }
+    }
+
+    // Lọc skillRequirements hợp lệ trước khi gửi
+    const cleanSkills = (form.skillRequirements || [])
+      .filter(sr => sr && sr.skillId && Number(sr.requiredLevel) >= 1)
+      .map(sr => ({ skillId: sr.skillId, requiredLevel: Number(sr.requiredLevel) }));
+
+    const payload = {
+      title: form.title.trim(),
+      description: form.description.trim() || null,
+      taskType: form.taskType,
+      status: form.status,
+      requiredSkillDescription: form.requiredSkillDescription.trim() || null,
+      dueDate: form.dueDate ? new Date(form.dueDate).toISOString() : null,
+      skillRequirements: cleanSkills.length > 0 ? cleanSkills : [],
+    };
+
+    onSubmit(payload);
+  };
+
+  return (
+    <Portal>
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[11000] flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+        <form
+          onSubmit={handleSubmit}
+          onClick={e => e.stopPropagation()}
+          className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[88vh] flex flex-col animate-scale-in">
+          {/* Header */}
+          <div className="px-6 py-4 border-b border-outline-variant flex items-center justify-between bg-gradient-to-br from-amber-50 via-white to-indigo-50 rounded-t-2xl">
+            <div className="min-w-0 flex-1">
+              <h3 className="font-hanken font-bold text-base text-on-surface flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-amber-600"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z"/></svg>
+                Sửa Tác Vụ
+              </h3>
+              <p className="text-xs text-on-surface-variant mt-0.5 truncate">🧪 {task.experimentTitle || '—'}</p>
+            </div>
+            <button type="button" onClick={onClose}
+              className="p-2 rounded-xl hover:bg-white/60 transition-colors shrink-0">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+
+          {/* Body */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant block mb-1">
+                Tiêu đề <span className="text-rose-500">*</span>
+              </label>
+              <input
+                value={form.title}
+                onChange={e => setForm({ ...form, title: e.target.value })}
+                placeholder="VD: Tưới nước buổi sáng"
+                className="w-full px-3 py-2 border border-outline-variant rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant block mb-1">Loại tác vụ</label>
+                <select
+                  value={form.taskType}
+                  onChange={e => setForm({ ...form, taskType: e.target.value })}
+                  className="w-full px-3 py-2 border border-outline-variant rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500">
+                  {TASK_TYPE_OPTIONS.map(o => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant block mb-1">Trạng thái</label>
+                <select
+                  value={form.status}
+                  onChange={e => setForm({ ...form, status: e.target.value })}
+                  className="w-full px-3 py-2 border border-outline-variant rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500">
+                  {STATUS_OPTIONS.map(o => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant block mb-1">Hạn chót</label>
+              <input
+                type="datetime-local"
+                value={form.dueDate}
+                onChange={e => setForm({ ...form, dueDate: e.target.value })}
+                className="w-full px-3 py-2 border border-outline-variant rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+              />
+            </div>
+
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant block mb-1">Kỹ năng yêu cầu</label>
+              <input
+                value={form.requiredSkillDescription}
+                onChange={e => setForm({ ...form, requiredSkillDescription: e.target.value })}
+                placeholder="VD: Biết cách đo pH, hiểu về dinh dưỡng cây trồng..."
+                className="w-full px-3 py-2 border border-outline-variant rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+              />
+            </div>
+
+            {/* Skill Requirements */}
+            <div className="p-3 bg-indigo-50/40 border border-indigo-100 rounded-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">
+                  🎯 Kỹ năng yêu cầu (theo danh mục skill)
+                </label>
+                <span className="text-[10px] font-bold text-indigo-600 bg-indigo-100 px-2 py-0.5 rounded-full">
+                  {form.skillRequirements.length} đã chọn
+                </span>
+              </div>
+
+              {form.skillRequirements.length > 0 && (
+                <div className="space-y-2">
+                  {form.skillRequirements.map((sr) => {
+                    const skill = allSkills.find(s => s.id === sr.skillId);
+                    return (
+                      <div key={sr.skillId}
+                        className="flex items-center gap-2 p-2 bg-white border border-indigo-200 rounded-lg">
+                        <span className="flex-1 min-w-0 text-sm font-semibold text-on-surface truncate">
+                          {skill?.skillName || sr.skillId}
+                        </span>
+                        <span className="text-[10px] font-bold text-indigo-600">Level</span>
+                        <input
+                          type="number" min={1} max={5}
+                          value={sr.requiredLevel}
+                          onChange={e => setLevel(sr.skillId, e.target.value)}
+                          className="w-16 px-2 py-1 border border-indigo-200 rounded-lg text-sm text-center bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                        />
+                        <button type="button"
+                          onClick={() => toggleSkill(sr.skillId)}
+                          className="p-1 text-indigo-400 hover:text-rose-500 hover:bg-rose-50 rounded transition-colors"
+                          title="B� chọn">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {skillLoading ? (
+                <p className="text-[10px] text-indigo-600 italic">Đang tải danh sách skill...</p>
+              ) : allSkills.length === 0 ? (
+                <p className="text-[10px] text-amber-700 italic">
+                  ⚠️ Chưa có skill nào trong hệ thống. Vào Admin → Quản lý Kỹ Năng để tạo trước.
+                </p>
+              ) : (
+                <select
+                  value=""
+                  onChange={e => { if (e.target.value) toggleSkill(e.target.value); e.target.value = ''; }}
+                  className="w-full px-3 py-2 border border-indigo-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500">
+                  <option value="">➕ Thêm skill yêu cầu...</option>
+                  {allSkills
+                    .filter(s => !form.skillRequirements.some(sr => sr.skillId === s.id))
+                    .map(s => (
+                      <option key={s.id} value={s.id}>{s.skillName}</option>
+                    ))}
+                </select>
+              )}
+            </div>
+
+            <div>
+              <label className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant block mb-1">Mô tả</label>
+              <textarea
+                value={form.description}
+                onChange={e => setForm({ ...form, description: e.target.value })}
+                rows={4}
+                placeholder="Mô tả chi tiết công việc cần làm..."
+                className="w-full px-3 py-2 border border-outline-variant rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 resize-none"
+              />
+            </div>
+
+            {error && (
+              <div className="px-3 py-2 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 font-semibold">
+                ⚠️ {error}
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="px-6 py-4 border-t border-outline-variant bg-surface-container-low/30 flex items-center gap-2 justify-end rounded-b-2xl">
+            <button type="button" onClick={onClose} disabled={saving}
+              className="px-4 py-2 border border-outline-variant rounded-xl text-sm font-semibold hover:bg-surface-container transition-colors disabled:opacity-50">
+              Hủy
+            </button>
+            <button type="submit" disabled={saving}
+              className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-amber-500/20 transition-all disabled:opacity-60 flex items-center gap-2">
+              {saving ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  Đang lưu...
+                </>
+              ) : 'Lưu thay đổi'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </Portal>
+  );
+};

@@ -1,4 +1,6 @@
-const API_BASE_URL = 'https://localhost:7048/api';
+import { API_BASE_URL, API_ORIGIN } from '../config';
+
+export { API_BASE_URL, API_ORIGIN };
 
 const getToken = () => localStorage.getItem('token');
 

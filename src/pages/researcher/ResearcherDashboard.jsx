@@ -9,6 +9,7 @@ import ResearcherKPIs from './tabs/ResearcherKPIs';
 import ResearcherComparison from './tabs/ResearcherComparison';
 import ResearcherReports from './tabs/ResearcherReports';
 import MonitoringDashboard from '../../components/dashboard/MonitoringDashboard';
+import NotificationBell from '../../components/notifications/NotificationBell';
 
 const TABS = [
   { id: 'overview', label: 'Tổng Quan', icon: '📊' },
@@ -42,12 +43,15 @@ const ResearcherDashboard = () => {
     <div className="flex min-h-screen bg-[#f1f5f9] font-sans text-slate-900 fixed inset-0 z-[1000]">
       {/* Sidebar */}
       <aside className="w-64 bg-indigo-950 text-white flex flex-col fixed h-full z-50 shadow-2xl">
-        <div className="px-6 py-7 border-b border-indigo-800/50">
-          <h1 className="text-xl font-bold tracking-tight">Smart <span className="text-indigo-400">Farm</span></h1>
-          <p className="text-[9px] text-indigo-400/60 mt-1 uppercase tracking-widest font-bold">Researcher Portal</p>
-          {user?.fullName && (
-            <p className="mt-2 text-xs text-indigo-300/70 font-medium">{user.fullName}</p>
-          )}
+        <div className="px-6 py-7 border-b border-indigo-800/50 flex items-center justify-between gap-2">
+          <div className="flex-1 min-w-0">
+            <h1 className="text-xl font-bold tracking-tight">Smart <span className="text-indigo-400">Farm</span></h1>
+            <p className="text-[9px] text-indigo-400/60 mt-1 uppercase tracking-widest font-bold">Researcher Portal</p>
+            {user?.fullName && (
+              <p className="mt-2 text-xs text-indigo-300/70 font-medium truncate">{user.fullName}</p>
+            )}
+          </div>
+          <NotificationBell variant="dark" />
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-1">
