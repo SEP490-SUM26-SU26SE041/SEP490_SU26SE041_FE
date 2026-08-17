@@ -15,7 +15,10 @@
 //     fetch lại unread-count qua REST sau khi reconnect.
 //   - Token hết hạn → server close (401) → cần refresh token rồi reconnect.
 
-const RECONNECT_DELAYS_MS = [1000, 2000, 5000, 10000, 30000]; // exponential-ish
+import { API_ORIGIN } from '../api/apiClient';
+
+const RECONNECT_DELAYS_MS = [3000, 5000, 15000, 30000, 60000, 120000, 300000]; // back-off: 3s → 5min
+const MAX_RECONNECT_ATTEMPTS = 10; // sau 10 lần thất bại → dừng hẳn, tránh spam server đang down
 
 class NotificationSocket {
   constructor() {
@@ -94,7 +97,7 @@ class NotificationSocket {
   _resolveUrl() {
     const token = this._getToken();
     if (!token) return null;
-    const base = (import.meta.env.VITE_API_BASE_URL) || 'https://localhost:7048';
+    const base = (import.meta.env.VITE_API_ORIGIN) || API_ORIGIN;
     const wsBase = base.replace(/^http/i, 'ws'); // http→ws, https→wss
     return `${wsBase}/ws?token=${encodeURIComponent(token)}`;
   }
@@ -162,6 +165,15 @@ class NotificationSocket {
   _scheduleReconnect() {
     if (!this.shouldRun) return;
     if (this.reconnectTimer) return;
+
+    // P0 fix: sau nhiều lần fail → dừng reconnect, tránh làm treo browser + spam server đang down
+    if (this.reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+      console.warn(`[WS] Đã thử reconnect ${MAX_RECONNECT_ATTEMPTS} lần — dừng. Reload trang hoặc đợi server để thử lại.`);
+      this.shouldRun = false;
+      this._setConnected(false);
+      return;
+    }
+
     const delay = RECONNECT_DELAYS_MS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)];
     this.reconnectAttempt++;
     this.reconnectTimer = setTimeout(() => {
@@ -173,4 +185,6 @@ class NotificationSocket {
 
 // Singleton — chỉ tạo 1 instance cho cả app
 const socket = new NotificationSocket();
+// Alias disconnect() = stop() cho helper authLogout dùng
+socket.disconnect = socket.stop.bind(socket);
 export default socket;

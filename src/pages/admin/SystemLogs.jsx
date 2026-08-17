@@ -93,13 +93,17 @@ const SystemLogs = () => {
           <p className="text-sm text-[#74796c] mt-1">Lịch sử thao tác, thay đổi dữ liệu và trạng thái hệ thống.</p>
         </div>
         <div className="flex gap-3">
-          <button 
-            onClick={handleGenerateMock}
-            disabled={isGenerating}
-            className="flex items-center gap-2 px-4 py-2.5 bg-white border border-[#c4c8ba] rounded-xl hover:bg-[#e8e8e7] text-xs font-bold uppercase tracking-wider text-[#1a1c1c] transition-colors disabled:opacity-50"
-          >
-            {isGenerating ? 'Đang Tạo...' : '+ Tạo Log Test'}
-          </button>
+          {/* P1-#29: chỉ hiện nút tạo log test trong DEV, tránh gây nhiễu log thật trên production */}
+          {import.meta.env.DEV && (
+            <button
+              onClick={handleGenerateMock}
+              disabled={isGenerating}
+              className="flex items-center gap-2 px-4 py-2.5 bg-white border border-[#c4c8ba] rounded-xl hover:bg-[#e8e8e7] text-xs font-bold uppercase tracking-wider text-[#1a1c1c] transition-colors disabled:opacity-50"
+              title="Chỉ hoạt động ở môi trường DEV — production sẽ ẩn nút này"
+            >
+              {isGenerating ? 'Đang Tạo...' : '+ Tạo Log Test'}
+            </button>
+          )}
         </div>
       </div>
 

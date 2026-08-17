@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useToast } from '../context/ToastContext';
 import { tasksApi, taskReportsApi, taskImagesApi, measurementRecordsApi } from '../api/sharedTaskApi';
 import { measurementDefinitionsApi, batchesApi } from '../api/experimentApi';
+import { authLogoutSync } from '../utils/authLogout';
 import TaskReportForm, { buildReportPayload } from '../components/tasks/TaskReportForm';
 import { extractMeasurementsFromReport, buildMeasurementPayloads, createMeasurementsFromTaskReport, MEASUREMENT_FIELD_MAP, getMeasurementNameVi, extractBulkItemsFromResultData, createMeasurementsBulk, filterDefinitionsByTaskGroup } from '../utils/measurementBridge';
 
@@ -368,9 +369,24 @@ const TaskReportModal = ({ task, mode = 'report', onClose, onSubmit }) => {
   const [resultData, setResultData] = useState([{ key: '', value: '' }]);
   const [images, setImages] = useState([]);
 
+  const isComplete = mode === 'complete';
+  const MIN_REPORT_LENGTH = 10;
+
+  const reportLength = reportText.trim().length;
+  const isReportEmpty = reportLength === 0;
+  const isReportTooShort = isReportEmpty ? false : reportLength < MIN_REPORT_LENGTH;
+  const canSubmit = !isReportEmpty && !isReportTooShort;
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!reportText.trim()) { showToast('Vui lòng nhập nội dung báo cáo', 'error'); return; }
+    if (isReportEmpty) {
+      showToast(`Vui lòng nhập nội dung báo cáo (tối thiểu ${MIN_REPORT_LENGTH} ký tự) trước khi gửi`, 'error');
+      return;
+    }
+    if (isReportTooShort) {
+      showToast(`Nội dung quá ngắn — cần tối thiểu ${MIN_REPORT_LENGTH} ký tự (hiện ${reportLength})`, 'error');
+      return;
+    }
     try {
       setSaving(true);
       await onSubmit({ reportText, resultData, images });
@@ -381,7 +397,6 @@ const TaskReportModal = ({ task, mode = 'report', onClose, onSubmit }) => {
 
   const updateResult = (idx, field, value) => setResultData(prev => prev.map((r, i) => i === idx ? { ...r, [field]: value } : r));
 
-  const isComplete = mode === 'complete';
   const titleText = isComplete ? 'Hoàn Thành & Báo Cáo' : 'Báo Cáo Tác Vụ';
   const headerBg = isComplete ? 'bg-gradient-to-r from-emerald-50 to-teal-50' : 'bg-white';
 
@@ -392,7 +407,7 @@ const TaskReportModal = ({ task, mode = 'report', onClose, onSubmit }) => {
         <div className={`px-6 py-4 border-b border-slate-200 flex justify-between items-center ${headerBg}`}>
           <div>
             <h3 className="font-hanken font-bold text-lg text-slate-900">{titleText}</h3>
-            {isComplete && <p className="text-xs text-emerald-700 mt-0.5">Báo cáo là bắt buộc trước khi hoàn thành</p>}
+            {isComplete && <p className="text-xs text-emerald-700 mt-0.5">Báo cáo là bắt buộc trước khi hoàn thành (tối thiểu {MIN_REPORT_LENGTH} ký tự)</p>}
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -413,7 +428,14 @@ const TaskReportModal = ({ task, mode = 'report', onClose, onSubmit }) => {
             images={images}
             setImages={setImages}
             saving={saving}
+            // P0 fix: disable nút submit dựa trên reportText (không phải prop disabled)
             disabled={false}
+            externalCanSubmit={canSubmit}
+            externalReportHint={isReportEmpty
+              ? `Vui lòng nhập nội dung (tối thiểu ${MIN_REPORT_LENGTH} ký tự)`
+              : isReportTooShort
+                ? `Còn thiếu ${MIN_REPORT_LENGTH - reportLength} ký tự`
+                : `${reportLength} ký tự — sẵn sàng gửi`}
             onSubmit={handleSubmit}
             color={isComplete ? 'emerald' : 'blue'}
             submitLabel={isComplete ? '✅ Hoàn Thành & Gửi Báo Cáo' : 'Gửi Báo Cáo'}
@@ -526,7 +548,7 @@ const SharedSidebar2 = ({ userRole, currentPage, navigateTo }) => {
         ))}
       </nav>
       <div className="p-3 border-t border-slate-100">
-        <button onClick={() => { localStorage.clear(); window.location.href = '/login'; }}
+        <button onClick={() => authLogoutSync()}
           className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-rose-500 hover:bg-rose-50 text-sm font-medium transition-all">
           <span className="text-base">🚪</span> Đăng Xuất
         </button>

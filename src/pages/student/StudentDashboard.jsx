@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { useToast } from '../../context/ToastContext';
 import { tasksApi, taskReportsApi, taskImagesApi, measurementRecordsApi } from '../../api/sharedTaskApi';
 import { experimentsApi } from '../../api/studentTechApi';
+import { canSubmitReport } from '../../utils/taskValidation';
+import { authLogoutSync } from '../../utils/authLogout';
 import NotificationBell from '../../components/notifications/NotificationBell';
 import TaskReportForm, { buildReportPayload } from '../../components/tasks/TaskReportForm';
 import ImageUploader from '../../components/tasks/ImageUploader';
@@ -76,7 +78,7 @@ const StudentDashboard = () => {
           ))}
         </nav>
         <div className="p-3 border-t border-slate-100">
-          <button onClick={() => { localStorage.clear(); window.location.href = '/login'; }}
+          <button onClick={() => authLogoutSync()}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-rose-500 hover:bg-rose-50 text-sm font-medium transition-all">
             <span className="text-base">🚪</span> Đăng Xuất
           </button>
@@ -463,6 +465,9 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
   const handleSubmitReport = async (e) => {
     e.preventDefault();
     if (!reportText.trim()) { showToast('Vui lòng nhập nội dung báo cáo', 'error'); return; }
+    // P0-#6: validate nghiệp vụ — chặn submit cho task đã Cancelled/Rejected
+    const reportCheck = canSubmitReport(task);
+    if (!reportCheck.allowed) { showToast(reportCheck.reason, 'error'); return; }
     try {
       setSaving(true);
       const dataObj = buildReportPayload(resultData);
@@ -527,6 +532,10 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
           })
         );
         imageOk = imageResults.filter(r => r.status === 'fulfilled' && r.value?.success !== false).length;
+        const imageFail = imageResults.length - imageOk;
+        if (imageFail > 0) {
+          showToast(`⚠️ ${imageFail} ảnh upload thất bại — báo cáo v�n được lưu`, 'warning');
+        }
       }
 
       const toastMsg = [];
@@ -545,6 +554,7 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
       const data = await taskReportsApi.getByTask(task.id);
       setReports(Array.isArray(data) ? data : []);
       if (onUpdated) onUpdated();
+      showToast('Đã gửi báo cáo', 'success');
     } catch (err) { showToast(err.message || 'Lỗi gửi báo cáo', 'error'); }
     finally { setSaving(false); }
   };
@@ -552,12 +562,16 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
   // Business rule: phải gửi báo cáo trước, sau đó mới được complete.
   // Cho phép complete nếu: có nội dung báo cáo HOẶC có ảnh mới HOẶC đã có lịch sử báo cáo
   const handleCompleteTask = async () => {
+    // P0 fix: bắt buộc có nội dung mới (không chỉ ảnh, không chỉ lịch sử)
     const hasNewContent = reportText.trim().length > 0;
-    const hasNewImages = reportImages.length > 0;
-    const hasReportHistory = reports.length > 0;
-    if (!hasNewContent && !hasNewImages && !hasReportHistory) {
-      showToast('Vui lòng nhập nội dung báo cáo hoặc đính kèm ảnh trước khi hoàn thành', 'error');
+    const minLength = 10;
+    if (!hasNewContent) {
+      showToast(`Vui lòng nhập nội dung báo cáo (tối thiểu ${minLength} ký tự) trước khi hoàn thành`, 'error');
       setActiveTab('report');
+      return;
+    }
+    if (reportText.trim().length < minLength) {
+      showToast(`Nội dung báo cáo quá ngắn — cần tối thiểu ${minLength} ký tự (hiện ${reportText.trim().length})`, 'error');
       return;
     }
     try {
@@ -816,11 +830,12 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
                   <div>
                     <p className="font-bold">{isInProgress ? 'Báo cáo là bắt buộc để hoàn thành' : 'Gửi báo cáo cho tác vụ'}</p>
                     <p className="text-xs mt-0.5 opacity-80">
-                      {isInProgress ? 'Sau khi bấm "Hoàn Thành", tác vụ sẽ chuyển sang trạng thái Hoàn Thành.' : 'Có thể gửi báo cáo bất kỳ lúc nào, tác vụ vẫn ở trạng thái Chờ.'}
+                      {isInProgress ? 'Nhập nội dung tối thiểu 10 ký tự rồi bấm "Hoàn Thành & Gửi Báo Cáo" — task sẽ tự động chuyển sang Hoàn Thành.' : 'Có thể gửi báo cáo bất kỳ lúc nào, tác vụ vẫn ở trạng thái Chờ.'}
                     </p>
                   </div>
                 </div>
               )}
+              {/* Truyền hideSubmitInternal=true để TaskReportForm KHÔNG render nút submit — nút sẽ được đặt dưới đây */}
               <TaskReportForm
                 task={task}
                 reportText={reportText}
@@ -829,12 +844,86 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
                 setResultData={setResultData}
                 images={reportImages}
                 setImages={setReportImages}
-                saving={saving}
+                saving={saving || completing}
                 disabled={isCompleted}
+                hideSubmit={true}
                 onSubmit={handleSubmitReport}
                 color="blue"
                 submitLabel="Gửi Báo Cáo"
               />
+
+              {/* Footer-action đặt trong form — giống UX Student popup */}
+              {!isCompleted && (
+                <div className="pt-4 border-t border-slate-200 flex items-center justify-between gap-3 sticky bottom-0 bg-white -mx-6 px-6 pb-2">
+                  {isInProgress ? (() => {
+                    const reportLength = reportText.trim().length;
+                    const minLength = 10;
+                    const hasContent = reportLength >= minLength;
+                    const hint = reportLength === 0
+                      ? 'Nhập nội dung báo cáo (≥10 ký tự) rồi bấm Hoàn Thành'
+                      : !hasContent
+                        ? `Còn thiếu ${minLength - reportLength} ký tự — bấm Hoàn Thành để gửi và đóng task`
+                        : 'Sẵn sàng — bấm Hoàn Thành để gửi báo cáo và chuyển task sang Hoàn Thành';
+                    return (
+                      <>
+                        <div className="text-xs text-slate-600 min-w-0">
+                          <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${
+                              hasContent ? 'bg-emerald-500' : 'bg-amber-500'
+                            }`} />
+                            {hasContent ? 'Sẵn sàng hoàn thành' : 'Cần nhập nội dung'}
+                          </p>
+                          <p className="text-[10px] text-slate-500 mt-0.5 truncate">{hint}</p>
+                        </div>
+                        <div className="flex gap-2 shrink-0">
+                          <button type="button" onClick={onClose}
+                            className="px-4 py-2 border border-slate-300 rounded-xl text-sm font-semibold hover:bg-slate-50 transition-colors">
+                            Đóng
+                          </button>
+                          <button type="button" onClick={handleCompleteTask} disabled={completing || !hasContent}
+                            className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2">
+                            <span>✅</span>
+                            {completing ? 'Đang hoàn thành...' : 'Hoàn Thành & Gửi Báo Cáo'}
+                          </button>
+                        </div>
+                      </>
+                    );
+                  })() : (
+                    // Task ở trạng thái Pending — vẫn cho gửi báo cáo nhưng KHÔNG complete
+                    <>
+                      <div className="text-xs text-slate-600">
+                        <p className="font-bold text-slate-800">Gửi báo cáo (chưa hoàn thành)</p>
+                        <p className="text-[10px] text-slate-500 mt-0.5">Task vẫn ở trạng thái Chờ cho đến khi bấm Bắt Đầu</p>
+                      </div>
+                      <div className="flex gap-2 shrink-0">
+                        <button type="button" onClick={onClose}
+                          className="px-4 py-2 border border-slate-300 rounded-xl text-sm font-semibold hover:bg-slate-50 transition-colors">
+                          Đóng
+                        </button>
+                        <button type="button" onClick={handleSubmitReport} disabled={saving || !reportText.trim()}
+                          className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2">
+                          <span>📨</span>
+                          {saving ? 'Đang gửi...' : 'Gửi Báo Cáo'}
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* Trạng thái Completed — chỉ có nút Đóng */}
+              {isCompleted && (
+                <div className="pt-4 border-t border-slate-200 flex items-center justify-between gap-3">
+                  <div className="text-xs text-slate-600">
+                    <p className="font-bold text-slate-800">Tác vụ đã hoàn thành</p>
+                    <p className="text-[10px] text-slate-500">Báo cáo đã được lưu — bạn có thể xem lại trong tab Lịch Sử</p>
+                  </div>
+                  <button type="button" onClick={onClose}
+                    className="px-5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-sm font-bold transition-colors">
+                    Đóng
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -976,76 +1065,44 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
           )}
         </div>
 
-        {/* Footer - STICKY với action phù hợp theo tab và status */}
-        <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 shrink-0">
-          {isInProgress ? (() => {
-            const hasNewContent = reportText.trim().length > 0;
-            const hasNewImages = reportImages.length > 0;
-            const hasReportHistory = reports.length > 0;
-            const canComplete = hasNewContent || hasNewImages || hasReportHistory;
-            const hint = !hasNewContent && !hasNewImages && !hasReportHistory
-              ? 'Cần nhập nội dung hoặc đính kèm ảnh trước khi hoàn thành'
-              : (hasNewContent || hasNewImages
-                  ? 'Có dữ liệu mới sẽ gửi kèm khi hoàn thành'
-                  : 'Sẽ hoàn thành dựa trên lịch sử báo cáo đã có');
-            return (
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 text-xs text-slate-600 min-w-0">
-                  <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-                    <span className="text-sm">⚠️</span>
-                  </div>
-                  <div className="min-w-0">
-                    <p className="font-bold text-slate-800 text-sm">Quy trình nghiệp vụ</p>
-                    <p className="text-[10px] text-slate-500 truncate">{hint}</p>
-                  </div>
-                </div>
-                <div className="flex gap-2 shrink-0">
-                  <button onClick={onClose}
-                    className="px-4 py-2 border border-slate-300 rounded-xl text-sm font-semibold hover:bg-white transition-colors">
-                    Đóng
-                  </button>
-                  <button onClick={handleCompleteTask} disabled={completing || !canComplete}
-                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2">
-                    <span>✅</span>
-                    {completing ? 'Đang hoàn thành...' : 'Hoàn Thành & Gửi Báo Cáo'}
-                  </button>
-                </div>
-              </div>
-            );
-          })() : isCompleted ? (
+        {/* Footer - STICKY với action phù hợp theo tab và status.
+            Yêu cầu nghiệp vụ (đồ án): bắt buộc nhập nội dung báo cáo mới cho bấm Hoàn Thành.
+            Lý do: Báo cáo rỗng = tác vụ hoàn thành "ảo", không audit được.
+            Ảnh chỉ là đính kèm minh chứng — không thay thế được text.
+            Lịch sử báo cáo cũng không đủ: cần có số liệu MỚI cho lần complete này. */}
+        {/* Footer cố định — chỉ hiện khi KHÔNG ở tab "report"
+            (tab "report" đã có sẵn 2 nút Đóng + Hoàn Thành & Gửi Báo Cáo bên trong form,
+            tránh trùng lặp UX). Khi ở tab "report" thì đóng bằng nút X trên header. */}
+        {activeTab !== 'report' && (
+          <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 shrink-0">
             <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-xs text-slate-600">
-                <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center">
-                  <span className="text-sm">✓</span>
-                </div>
-                <div>
-                  <p className="font-bold text-slate-800 text-sm">Tác vụ đã hoàn thành</p>
-                  <p className="text-[10px] text-slate-500">Báo cáo đã được lưu vào hệ thống</p>
-                </div>
-              </div>
-              <button onClick={onClose}
-                className="px-5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-sm font-bold transition-colors">
-                Đóng
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-xs text-slate-600">
-                <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center">
-                  <span className="text-sm">⏳</span>
-                </div>
-                <div>
-                  <p className="font-bold text-slate-800 text-sm">Tác vụ đang chờ</p>
-                  <p className="text-[10px] text-slate-500">Bấm "Bắt Đầu" ở danh sách để tiến hành</p>
-                </div>
+              <div className="text-xs text-slate-600">
+                {isInProgress && (
+                  <>
+                    <p className="font-bold text-slate-800 text-sm">Đang thực hiện</p>
+                    <p className="text-[10px] text-slate-500">Chuyển sang tab "Báo Cáo" để gửi báo cáo và hoàn thành</p>
+                  </>
+                )}
+                {isPending && (
+                  <>
+                    <p className="font-bold text-slate-800 text-sm">Tác vụ đang chờ</p>
+                    <p className="text-[10px] text-slate-500">Bấm "Bắt Đầu" ở danh sách để tiến hành</p>
+                  </>
+                )}
+                {isCompleted && (
+                  <>
+                    <p className="font-bold text-slate-800 text-sm">Tác vụ đã hoàn thành</p>
+                    <p className="text-[10px] text-slate-500">Báo cáo đã được lưu vào hệ thống</p>
+                  </>
+                )}
               </div>
               <button onClick={onClose}
                 className="px-5 py-2 border border-slate-300 rounded-xl text-sm font-semibold hover:bg-white transition-colors">
                 Đóng
               </button>
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
     </Portal>

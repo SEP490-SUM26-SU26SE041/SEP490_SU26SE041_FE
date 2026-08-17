@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useGoogleLogin } from '@react-oauth/google';
+import { API_BASE_URL } from '../api/apiClient';
 
 const SimpleToast = ({ message, type = 'info', onClose }) => {
   useEffect(() => {
@@ -40,10 +41,10 @@ const Login = () => {
   };
 
   const handleGoogleSuccess = async (tokenResponse) => {
-    const API_URL = 'https://localhost:7048/api/Auth';
+    const AUTH_URL = `${API_BASE_URL}/Auth`;
     try {
       // Gửi access_token về Backend
-      const response = await fetch(`${API_URL}/google-login`, {
+      const response = await fetch(`${AUTH_URL}/google-login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: tokenResponse.access_token }),
@@ -78,11 +79,11 @@ const Login = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const API_URL = 'https://localhost:7048/api/Auth';
+    const AUTH_URL = `${API_BASE_URL}/Auth`;
 
     try {
       if (view === 'login') {
-        const response = await fetch(`${API_URL}/login`, {
+        const response = await fetch(`${AUTH_URL}/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, password }),
@@ -110,7 +111,7 @@ const Login = () => {
           return;
         }
 
-        const response = await fetch(`${API_URL}/register`, {
+        const response = await fetch(`${AUTH_URL}/register`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ fullName: name, email, password, role: 'Student' }),
@@ -124,7 +125,7 @@ const Login = () => {
           showMsg(error.message || 'Registration failed!', 'error');
         }
       } else if (view === 'forgot') {
-        const response = await fetch(`${API_URL}/forgot-password`, {
+        const response = await fetch(`${AUTH_URL}/forgot-password`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email }),
@@ -137,7 +138,7 @@ const Login = () => {
           showMsg(error.message || 'Gửi mail thất bại!', 'error');
         }
       } else if (view === 'verify_code') {
-        const response = await fetch(`${API_URL}/verify-code`, {
+        const response = await fetch(`${AUTH_URL}/verify-code`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, code: otpCode }),
@@ -153,7 +154,7 @@ const Login = () => {
           showMsg('Mật khẩu không khớp!', 'warning');
           return;
         }
-        const response = await fetch(`${API_URL}/reset-password`, {
+        const response = await fetch(`${AUTH_URL}/reset-password`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, code: otpCode, newPassword: password }),

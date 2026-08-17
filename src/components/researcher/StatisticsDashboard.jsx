@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { statisticsApi, measurementDefinitionsApi } from '../../api/experimentApi';
 import {
   formatStat, formatRatio,
-  buildComparisonTable, formatGrowthDate, downloadBlob
+  buildComparisonTable, buildComparisonSummary, mergeGroupMetrics,
+  formatGrowthDate, downloadBlob
 } from '../../utils/measurement';
 
 /**
@@ -53,6 +54,11 @@ const StatisticsDashboard = ({ experimentId, stages = [], showToast }) => {
   }, [selectedStage, experimentId]);
 
   const comparisonRows = useMemo(() => buildComparisonTable(data?.crossGroupComparison), [data]);
+  // Tự tính lại summary trên tập rows đã gom (BE đếm theo definitionId → sai khi trùng metricName)
+  const computedSummary = useMemo(() => {
+    const allGroupNames = (data?.groups || []).map(g => g.groupName);
+    return buildComparisonSummary(comparisonRows, allGroupNames);
+  }, [comparisonRows, data]);
 
   const exportFile = async (format) => {
     if (selectedStage === 'overall') {
@@ -143,9 +149,9 @@ const StatisticsDashboard = ({ experimentId, stages = [], showToast }) => {
             {data.crossGroupComparison && (
               <div className="text-right">
                 <p className="text-[10px] text-indigo-700/70">Nhóm tốt nhất</p>
-                <p className="text-lg font-bold text-indigo-900">🏆 {data.crossGroupComparison.bestGroupName || '—'}</p>
-                {data.crossGroupComparison.summary && (
-                  <p className="text-[10px] text-indigo-700/70 mt-0.5">{data.crossGroupComparison.summary}</p>
+                <p className="text-lg font-bold text-indigo-900">🏆 {computedSummary.bestGroupName || data.crossGroupComparison.bestGroupName || '—'}</p>
+                {computedSummary.summary && (
+                  <p className="text-[10px] text-indigo-700/70 mt-0.5">{computedSummary.summary}</p>
                 )}
               </div>
             )}
@@ -185,8 +191,8 @@ const StatisticsDashboard = ({ experimentId, stages = [], showToast }) => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {group.metrics?.map(m => (
-                      <tr key={m.definitionId} className="hover:bg-slate-50">
+                    {mergeGroupMetrics(group.metrics).map(m => (
+                      <tr key={m.key || m.definitionId} className="hover:bg-slate-50">
                         <td className="px-3 py-2 font-bold text-slate-900">{m.metricName}</td>
                         <td className="px-3 py-2 font-mono text-slate-500">{m.unit || '—'}</td>
                         <td className="px-3 py-2 font-mono text-slate-700">{formatStat(m.targetValue)}</td>
@@ -259,7 +265,7 @@ const StatisticsDashboard = ({ experimentId, stages = [], showToast }) => {
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {comparisonRows.map(row => (
-                      <tr key={row.definitionId} className="hover:bg-slate-50">
+                      <tr key={row.key || row.definitionId} className="hover:bg-slate-50">
                         <td className="px-3 py-2 font-bold text-slate-900">{row.metricName}</td>
                         <td className="px-3 py-2 font-mono text-slate-500">{row.unit || '—'}</td>
                         {row.groups.map(g => (
