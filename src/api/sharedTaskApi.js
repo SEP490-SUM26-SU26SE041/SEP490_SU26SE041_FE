@@ -32,6 +32,8 @@ export const tasksApi = {
 
 export const taskReportsApi = {
   create: (payload) => apiClient.request('/task-reports', { method: 'POST', body: payload }),
+  getAll: (params = {}) =>
+    apiClient.request('/task-reports', { params }).then(u),
   getByTask: (taskId) =>
     apiClient.request(`/task-reports/task/${taskId}`).then(u),
   getByBatch: (batchId) =>

@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useToast } from '../context/ToastContext';
 import { taskReportsApi } from '../api/sharedTaskApi';
 import { tasksApi } from '../api/sharedTaskApi';
+import { canSubmitReport } from '../utils/taskValidation';
+import { authLogoutSync } from '../utils/authLogout';
 
 const CareCompletionForm = () => {
   const { showToast } = useToast();
@@ -31,14 +33,10 @@ const CareCompletionForm = () => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        // Fetch my tasks
         const tasks = await tasksApi.getMy();
         setMyTasks(Array.isArray(tasks) ? tasks : []);
-        // Fetch recent reports using /api/task-reports (paginated list)
-        const token = localStorage.getItem('token');
-        const repData = await fetch('/api/task-reports', {
-          headers: { Authorization: `Bearer ${token}` }
-        }).then(r => r.json()).then(d => d.data || []);
+        // Đi qua apiClient để hưởng auth + interceptor thống nhất
+        const repData = await taskReportsApi.getAll().catch(() => []);
         setReports(Array.isArray(repData) ? repData.slice(0, 10) : []);
       } catch { /* silent */ } finally { setLoading(false); }
     };
@@ -59,6 +57,18 @@ const CareCompletionForm = () => {
     if (!form.taskId.trim()) { showToast('Vui lòng chọn hoặc nhập Task ID', 'error'); return; }
     if (!form.reportText.trim()) { showToast('Vui lòng nhập nội dung báo cáo', 'error'); return; }
 
+    // P0-#6: Validate task còn active trước khi gửi report (chặn task Cancelled/Rejected)
+    const selectedTask = myTasks.find(t => t.id === form.taskId.trim());
+    if (!selectedTask) {
+      showToast('Không tìm thấy task — vui lòng chọn lại từ danh sách', 'error');
+      return;
+    }
+    const reportCheck = canSubmitReport(selectedTask);
+    if (!reportCheck.allowed) {
+      showToast(reportCheck.reason, 'error');
+      return;
+    }
+
     const selectedActions = Object.entries(careActions)
       .filter(([_, v]) => v).map(([k]) => k);
 
@@ -74,11 +84,8 @@ const CareCompletionForm = () => {
       setCareActions({ watering: false, fertilizing: false, pruning: false, pestControl: false, weeding: false, inspection: false });
       setResultItems([{ key: '', value: '' }]);
 
-      // Refresh reports
-      const token = localStorage.getItem('token');
-      const repData = await fetch('/api/task-reports', {
-        headers: { Authorization: `Bearer ${token}` }
-      }).then(r => r.json()).then(d => d.data || []);
+      // Refresh reports qua apiClient (chống race condition nhiều call đồng thời)
+      const repData = await taskReportsApi.getAll().catch(() => []);
       setReports(Array.isArray(repData) ? repData.slice(0, 10) : []);
     } catch (err) {
       showToast(err.message || 'Không thể gửi báo cáo', 'error');
@@ -294,7 +301,7 @@ const SharedSidebar3 = ({ userRole }) => {
         ))}
       </nav>
       <div className="p-3 border-t border-slate-100">
-        <button onClick={() => { localStorage.clear(); window.location.href = '/login'; }}
+        <button onClick={() => authLogoutSync()}
           className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-rose-500 hover:bg-rose-50 text-sm font-medium transition-all">
           <span className="text-base">🚪</span> Đăng Xuất
         </button>

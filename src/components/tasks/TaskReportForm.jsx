@@ -137,10 +137,20 @@ const TaskReportForm = ({
   setImages,
   saving = false,
   disabled = false,
+  // P0 fix: cho phép parent (TaskReportModal) kiểm soát nút submit
+  // dùng logic min-length chuẩn. Nếu không truyền, fallback về check nội bộ.
+  externalCanSubmit,
+  externalReportHint,
+  // P0 fix: ẩn nút submit nội bộ — parent sẽ tự render action phù hợp
+  // (ví dụ Student Dashboard đặt nút Hoàn Thành & Gửi Báo Cáo cuối form)
+  hideSubmit = false,
   onSubmit,
   color = 'indigo',
   submitLabel = 'Gửi Báo Cáo'
 }) => {
+  // Fallback nội bộ nếu parent không can thiệp
+  const internalCanSubmit = Boolean(reportText && reportText.trim());
+  const canSubmit = externalCanSubmit !== undefined ? externalCanSubmit : internalCanSubmit;
   const baseSchema = useMemo(() => QUICK_FORM_SCHEMA[task?.taskType] || QUICK_FORM_SCHEMA.Other, [task?.taskType]);
   const [definitions, setDefinitions] = useState([]);
   const [loadingDefs, setLoadingDefs] = useState(false);
@@ -512,13 +522,21 @@ const TaskReportForm = ({
         />
       )}
 
-      {/* Submit */}
-      {!disabled && (
-        <button type="submit" disabled={saving || !reportText.trim()}
-          className={`w-full py-2.5 ${color === 'blue' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/20'} text-white rounded-xl text-sm font-bold shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2`}>
-          <span>{saving ? '⏳' : '✉️'}</span>
-          {saving ? 'Đang gửi...' : submitLabel}
-        </button>
+      {/* Submit — chỉ render khi parent không tự xử lý (hideSubmit=false) */}
+      {!disabled && !hideSubmit && (
+        <>
+          {externalReportHint && (
+            <p className={`text-[11px] text-center ${canSubmit ? 'text-emerald-600' : 'text-amber-600'}`}>
+              {externalReportHint}
+            </p>
+          )}
+          <button type="submit" disabled={saving || !canSubmit}
+            title={!canSubmit ? 'Vui lòng nhập nội dung báo cáo (tối thiểu 10 ký tự)' : ''}
+            className={`w-full py-2.5 ${color === 'blue' ? 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20' : color === 'emerald' ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/20' : 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-600/20'} text-white rounded-xl text-sm font-bold shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2`}>
+            <span>{saving ? '⏳' : '✉️'}</span>
+            {saving ? 'Đang gửi...' : submitLabel}
+          </button>
+        </>
       )}
     </form>
   );

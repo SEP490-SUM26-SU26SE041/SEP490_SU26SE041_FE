@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { tasksApi, taskReportsApi, experimentsApi } from '../../../api/experimentApi';
 import { skillsApi } from '../../../api/skillsApi';
 import { useToast } from '../../../context/ToastContext';
+import { canCancelTask, canEditTask, canDeleteTask, canSubmitReport, canGenerateTasksFromStage, canCreateTaskOnStage } from '../../../utils/taskValidation';
 
 // ── Portal helper ─────────────────────────────────────────────────────────────
 
@@ -266,6 +267,9 @@ const ResearcherTasks = () => {
           saving={editModal.saving}
           onClose={() => setEditModal({ open: false, task: null, saving: false })}
           onSubmit={async (payload) => {
+            // P0-#3: validate nghiệp vụ trước khi gọi API
+            const check = canEditTask(editModal.task);
+            if (!check.allowed) { showToast(check.reason, 'error'); return; }
             try {
               setEditModal(prev => ({ ...prev, saving: true }));
               await tasksApi.update(editModal.task.id, payload);
@@ -554,7 +558,10 @@ const TaskDetailDrawer = ({ task, onClose, onOpenReports, onChange, onEdit }) =>
   const rel = task.dueDate ? relativeDay(task.dueDate) : null;
 
   const handleCancel = async () => {
-    if (!window.confirm('Hủy tác vụ này?')) return;
+    // P0-#2: validate nghiệp vụ trước khi gọi API
+    const check = canCancelTask(task);
+    if (!check.allowed) { showToast(check.reason, 'error'); return; }
+    if (!window.confirm(`Hủy tác vụ "${task.title || ''}"?`)) return;
     try { await tasksApi.cancel(task.id); showToast('Đã hủy tác vụ', 'success'); onChange(); }
     catch (err) { showToast(err.message, 'error'); }
   };

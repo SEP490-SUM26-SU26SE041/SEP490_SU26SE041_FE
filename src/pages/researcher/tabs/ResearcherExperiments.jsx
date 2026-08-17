@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { experimentsApi, tasksApi, experimentRequestsApi } from '../../../api/experimentApi';
 import { farmsApi, bedsApi } from '../../../api/managerResourcesApi';
 import { stagesApi, groupsApi, designApi, measurementsApi, schedulesApi, batchesApi, bedAssignmentsApi, userApi, areasApi } from '../../../api/researcherApi';
+import { canCreateTaskOnStage, canGenerateTasksFromStage, canCreateBatch } from '../../../utils/taskValidation';
 import { cropsApi } from '../../../api/cropApi';
 import { skillsApi, tasksCountApi } from '../../../api/skillsApi';
 import { useToast } from '../../../context/ToastContext';
@@ -45,6 +46,61 @@ const STATUS_COLORS = {
   Cancelled: 'bg-rose-100 text-rose-700',
   Pending: 'bg-amber-100 text-amber-700',
   Rejected: 'bg-rose-100 text-rose-700'
+};
+
+// ── Business Validation: Reassign ──────────────────────────────────────────────────
+// Nghiệp vụ: chỉ được chuyển giao task khi thoả 3 điều kiện đồng thời.
+// Lý do: đảm bảo audit trail, tránh race condition, tránh chuyển cho chính mình.
+//
+// 1. Task thuộc nhóm "active" — chưa kết thúc vòng đời.
+//    Loại trừ: Completed, Approved (đã duyệt), Cancelled, Rejected, Resigned,
+//    Reassigned (đang chuyển).
+// 2. Phải có người đang assigned — nếu chưa có, dùng chức năng "Gán" thay thế.
+// 3. Người đang assigned phải khác researcher đang thao tác — tự chuyển cho mình
+//    là vô nghĩa và phá audit trail.
+//
+// Trả về { allowed: boolean, reason: string } để UI hiển thị tooltip giải thích.
+
+const REASSIGN_ALLOWED_STATUSES = ['Pending', 'Assigned', 'InProgress', 'Overdue'];
+const REASSIGN_BLOCKED_STATUSES = ['Completed', 'Approved', 'Cancelled', 'Rejected', 'Resigned', 'Reassigned'];
+
+// ── Helper lấy assignee thật của task (BE có thể trả nhiều field khác nhau) ───
+// Phải đồng bộ với ResearcherKPIs.jsx (cùng fallback chain) để tránh logic lệch nhau
+export const getTaskAssignee = (task) => {
+  if (!task) return { id: null, name: null };
+  return {
+    id: task.assignedToId || task.assignedToUserId || task.assigneeId || null,
+    name: task.assignedToName || task.assignedToUserName || task.assigneeName || null
+  };
+};
+
+export const isTaskAssigned = (task) => {
+  const { id, name } = getTaskAssignee(task);
+  return Boolean(id || name);
+};
+
+export const canReassignTask = (task, currentUserId) => {
+  if (!task) return { allowed: false, reason: 'Không có tác vụ' };
+
+  if (!REASSIGN_ALLOWED_STATUSES.includes(task.status)) {
+    const reason = REASSIGN_BLOCKED_STATUSES.includes(task.status)
+      ? `Tác vụ đã ở trạng thái "${task.status}" — không thể chuyển giao`
+      : `Trạng thái "${task.status}" không cho phép chuyển giao`;
+    return { allowed: false, reason };
+  }
+
+  // P0 fix: chỉ cần 1 trong 2 trường (id hoặc name) là đủ chứng minh đã gán
+  // Tránh block nhầm khi BE chỉ trả 1 field (vd `assignedToId` nhưng không có `assignedToName`)
+  if (!isTaskAssigned(task)) {
+    return { allowed: false, reason: 'Tác vụ chưa được gán cho ai — dùng "Gán" để phân công' };
+  }
+
+  const { id: assigneeId } = getTaskAssignee(task);
+  if (currentUserId && assigneeId === currentUserId) {
+    return { allowed: false, reason: 'Bạn là người đang được gán — không thể tự chuyển cho mình' };
+  }
+
+  return { allowed: true, reason: 'Chuyển giao tác vụ sang người khác' };
 };
 
 // ExperimentStageType enum mới (BE cập nhật): Preparation | Planting | Growing | Harvesting | PostHarvest | Other
@@ -596,6 +652,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   const [skillMatches, setSkillMatches] = useState([]);
   const [userWorkload, setUserWorkload] = useState({}); // userId -> {totalTasks, pendingTasks, inProgressTasks, ...}
   const [selectedTaskForAssign, setSelectedTaskForAssign] = useState(null);
+  const [reassignModalTask, setReassignModalTask] = useState(null); // {task, saving, form}
 
   // Edit state
   const [editExp, setEditExp] = useState(null);
@@ -647,6 +704,16 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   const [taskForm, setTaskForm] = useState({ experimentStageId: '', batchId: '', careScheduleId: '', taskType: 'Watering', title: '', description: '', requiredSkillDescription: '', dueDate: '', skillRequirements: [] });
   const [assignForm, setAssignForm] = useState({ assigneeId: '', reason: '' });
   const [allSkills, setAllSkills] = useState([]);
+
+  // Lấy current user ID từ localStorage (JWT payload). Memo để tránh re-parse.
+  const currentUserId = useMemo(() => {
+    try {
+      const raw = localStorage.getItem('user');
+      if (!raw) return null;
+      const u = JSON.parse(raw);
+      return u?.id || u?.userId || u?.sub || null;
+    } catch { return null; }
+  }, []);
 
   const fetchDetail = useCallback(async () => {
     try {
@@ -972,6 +1039,13 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
 
   // Batch CRUD
   const handleCreateBatch = async () => {
+    // P0-#9: bắt buộc groupId + batchCode + experimentBedAssignmentId
+    const batchCheck = canCreateBatch({
+      experimentStageId: 'stub',
+      groupId: batchForm.groupId,
+      name: batchForm.batchCode
+    });
+    if (!batchCheck.allowed) { showToast(batchCheck.reason, 'error'); return; }
     if (!batchForm.batchCode.trim()) { showToast('Mã lô không được trống', 'error'); return; }
     if (!batchForm.experimentBedAssignmentId) { showToast('Vui lòng chọn luống đã gán', 'error'); return; }
     try {
@@ -1026,6 +1100,11 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
           showToast('Thí nghiệm chưa có nhóm nào. Vui lòng thêm nhóm trước.', 'error');
           return;
         }
+        // P0-#8: chặn generate nếu experiment không còn Active/Draft
+        if (experiment?.status && !['Active', 'Draft'].includes(experiment.status)) {
+          showToast(`Thí nghiệm đang ở trạng thái "${experiment.status}" — không thể generate tasks`, 'error');
+          return;
+        }
         await tasksApi.generateByExperiment(experiment.id);
         showToast('Đã tạo tác vụ tự động cho thí nghiệm', 'success');
       } else if (type === 'stage') {
@@ -1039,6 +1118,10 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
           showToast('Vui lòng chọn giai đoạn hoặc thêm giai đoạn trước', 'error');
           return;
         }
+        // P0-#8: validate stage còn active trước khi generate
+        const targetStage = stages.find(s => s.id === stageId);
+        const stageCheck = canGenerateTasksFromStage(targetStage);
+        if (!stageCheck.allowed) { showToast(stageCheck.reason, 'error'); return; }
         await tasksApi.generateByStage(stageId);
         showToast('Đã tạo tác vụ tự động cho giai đoạn', 'success');
       }
@@ -1049,6 +1132,10 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   // Task CRUD
   const handleCreateTask = async () => {
     if (!taskForm.title.trim()) { showToast('Tiêu đề tác vụ không được trống', 'error'); return; }
+    // P0-#10: validate stage còn active trước khi tạo task
+    const selectedStage = stages.find(s => s.id === taskForm.experimentStageId);
+    const stageCheck = canCreateTaskOnStage(selectedStage);
+    if (!stageCheck.allowed) { showToast(stageCheck.reason, 'error'); return; }
     // Validate dueDate: phải là hôm nay hoặc tương lai (>= 00:00 hôm nay)
     if (taskForm.dueDate) {
       const today = new Date();
@@ -1131,16 +1218,72 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
     } catch (err) { showToast(err.message || 'Lỗi gán tác vụ', 'error'); }
   };
 
-  // Reassign
-  const handleReassign = async (taskId) => {
-    const newId = prompt('Nhập ID người dùng mới để chuyển giao:');
-    if (!newId) return;
-    const reason = prompt('Lý do chuyển giao:') || '';
+  // Reassign — mở modal thay vì prompt()
+  const openReassign = async (task) => {
+    // Defense in depth: dù UI đã ẩn nút, vẫn validate lại ở handler
+    const check = canReassignTask(task, currentUserId);
+    if (!check.allowed) {
+      showToast(check.reason, 'error');
+      return;
+    }
+
+    // Khi mở, đồng thời fetch skill match + workload để hiển thị gợi ý
+    setReassignModalTask({ task, saving: false, form: { assigneeId: '', reason: '' }, skillMatches: [], userWorkload: {}, loading: true });
     try {
-      await tasksApi.reassign({ taskId, newAssigneeId: newId, reason });
+      const [matches, countRes] = await Promise.allSettled([
+        tasksApi.getSkillMatches(task.id),
+        tasksCountApi.countByUser({}).catch(() => ({ users: [] }))
+      ]);
+      const matchList = matches.status === 'fulfilled' ? (Array.isArray(matches.value) ? matches.value : []) : [];
+      const userMap = {};
+      (countRes.value?.users || []).forEach(u => {
+        userMap[u.userId] = {
+          totalTasks: u.totalTasks,
+          pendingTasks: u.pendingTasks,
+          inProgressTasks: u.inProgressTasks,
+          roleName: u.roleName
+        };
+      });
+      setReassignModalTask(prev => prev ? { ...prev, skillMatches: matchList, userWorkload: userMap, loading: false } : prev);
+    } catch {
+      setReassignModalTask(prev => prev ? { ...prev, loading: false } : prev);
+    }
+  };
+
+  const closeReassign = () => {
+    setReassignModalTask(null);
+  };
+
+  const handleConfirmReassign = async () => {
+    if (!reassignModalTask) return;
+    const { task, form } = reassignModalTask;
+
+    // Defense in depth: validate lại trước khi gọi API
+    const check = canReassignTask(task, currentUserId);
+    if (!check.allowed) {
+      showToast(check.reason, 'error');
+      setReassignModalTask(null);
+      return;
+    }
+
+    if (!form.assigneeId) {
+      showToast('Vui lòng chọn người được chuyển giao', 'error');
+      return;
+    }
+    if (form.assigneeId === getTaskAssignee(task).id) {
+      showToast('Không thể chuyển cho cùng người đang giữ task', 'error');
+      return;
+    }
+    setReassignModalTask(prev => prev ? { ...prev, saving: true } : prev);
+    try {
+      await tasksApi.reassign({ taskId: task.id, newAssigneeId: form.assigneeId, reason: form.reason });
       showToast('Đã chuyển giao tác vụ', 'success');
+      setReassignModalTask(null);
       fetchTabData('tasks');
-    } catch (err) { showToast(err.message || 'Lỗi chuyển giao', 'error'); }
+    } catch (err) {
+      showToast(err.message || 'Lỗi chuyển giao', 'error');
+      setReassignModalTask(prev => prev ? { ...prev, saving: false } : prev);
+    }
   };
 
   return (
@@ -1243,9 +1386,15 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
                 users={users} assignForm={assignForm} setAssignForm={setAssignForm}
                 skillMatches={skillMatches} userWorkload={userWorkload}
                 selectedTaskForAssign={selectedTaskForAssign}
+                currentUserId={currentUserId}
                 onCreate={handleCreateTask} onDelete={handleDeleteTask}
                 onGenerate={(type) => handleGenerateTasks(type)}
-                onSkillMatch={handleSkillMatch} onAssign={handleAssignTask} onReassign={handleReassign}
+                onSkillMatch={handleSkillMatch} onAssign={handleAssignTask}
+                onReassign={openReassign}
+                reassignModalTask={reassignModalTask}
+                onReassignFormChange={(patch) => setReassignModalTask(prev => prev ? { ...prev, form: { ...prev.form, ...patch } } : prev)}
+                onConfirmReassign={handleConfirmReassign}
+                onCloseReassign={closeReassign}
                 loading={tabLoading}
               />
               )}
@@ -2584,8 +2733,10 @@ const BedsTab = ({ bedAssignments, availableBeds, areas, form, setForm, onAssign
 const TasksTab = ({
   tasks, stages, batches, schedules, form, setForm, allSkills = [],
   users, assignForm, setAssignForm, skillMatches, userWorkload = {},
-  selectedTaskForAssign,
-  onCreate, onDelete, onGenerate, onSkillMatch, onAssign, onReassign, loading
+  selectedTaskForAssign, currentUserId,
+  onCreate, onDelete, onGenerate, onSkillMatch, onAssign, onReassign,
+  reassignModalTask, onReassignFormChange, onConfirmReassign, onCloseReassign,
+  loading
 }) => {
   const [filterDate, setFilterDate] = useState('all');
   const [assignModalTask, setAssignModalTask] = useState(null);
@@ -3000,21 +3151,39 @@ const TasksTab = ({
                           {[t.experimentStageName, t.batchCode].filter(Boolean).join(' · ') || 'Tác vụ thí nghiệm'}
                           {t.requiredSkillDescription ? ` · 🎯 ${t.requiredSkillDescription}` : ''}
                         </p>
-                        {t.assignedToName && (
-                          <p className="text-[10px] text-emerald-600 font-semibold mt-0.5">👤 {t.assignedToName}</p>
+                        {(getTaskAssignee(t).name || t.assignedToUserName) && (
+                          <p className="text-[10px] text-emerald-600 font-semibold mt-0.5">👤 {getTaskAssignee(t).name || t.assignedToUserName}</p>
                         )}
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
-                        {!t.assignedToName && t.status !== 'Completed' && (
+                        {!isTaskAssigned(t) && t.status !== 'Completed' && (
                           <button onClick={() => handleOpenAssign(t)}
                             className="px-3 py-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-700 rounded-lg text-[11px] font-bold">
                             🎯 Gán
                           </button>
                         )}
-                        <button onClick={() => onReassign(t.id)}
-                          className="px-2 py-1.5 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-[10px] font-bold">
-                          🔄
-                        </button>
+                        {(() => {
+                          // Validate nghiệp vụ: chỉ hiện nút Reassign khi hợp lệ
+                          // P0 fix: dùng isTaskAssigned() thay vì chỉ check t.assignedToName
+                          const reassignCheck = canReassignTask(t, currentUserId);
+                          if (!isTaskAssigned(t)) return null; // đã có nút "Gán" ở trên, không show 🔄
+                          if (reassignCheck.allowed) {
+                            return (
+                              <button onClick={() => onReassign(t)}
+                                className="px-2 py-1.5 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-[10px] font-bold"
+                                title="Chuyển giao tác vụ">
+                                🔄
+                              </button>
+                            );
+                          }
+                          return (
+                            <button disabled
+                              className="px-2 py-1.5 bg-slate-50 text-slate-300 rounded-lg text-[10px] font-bold cursor-not-allowed"
+                              title={`Không thể chuyển giao: ${reassignCheck.reason}`}>
+                              🔄
+                            </button>
+                          );
+                        })()}
                         <button onClick={() => onDelete(t.id)}
                           className="px-2 py-1.5 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg text-[10px] font-bold">
                           ✕
@@ -3199,7 +3368,348 @@ const TasksTab = ({
           </div>
         </Portal>
       )}
+
+      {/* Modal Chuyển giao tác vụ */}
+      {reassignModalTask && (
+        <ReassignModal
+          data={reassignModalTask}
+          users={users}
+          onFormChange={onReassignFormChange}
+          onConfirm={onConfirmReassign}
+          onClose={onCloseReassign}
+        />
+      )}
     </div>
+  );
+};
+
+// ── Reassign Modal ─────────────────────────────────────────────────────────────────────
+
+const ReassignModal = ({ data, users, onFormChange, onConfirm, onClose }) => {
+  if (!data) return null;
+  const { task, saving, form, skillMatches = [], userWorkload = {}, loading } = data;
+  const { assigneeId, reason } = form || {};
+
+  const currentUserId = getTaskAssignee(task).id;
+
+  // Resolve userId → user object từ danh sách users để lấy fullName
+  const resolveName = (userId) => {
+    if (!userId) return null;
+    return users.find(u => u.id === userId) || null;
+  };
+
+  const currentUser = resolveName(currentUserId);
+  const currentName = getTaskAssignee(task).name ||
+    (currentUser ? (currentUser.fullName || currentUser.email) : (currentUserId || ''));
+  const currentRole = currentUser?.role || currentUser?.roleName || task?.assignedToRole || '';
+  const initials = currentName ? currentName.charAt(0).toUpperCase() : '?';
+
+  // Validate trong modal: nếu user chọn lại đúng người hiện tại → disable nút Confirm
+  const isSameAssignee = !!(assigneeId && currentUserId && assigneeId === currentUserId);
+
+  // Resolve skill-match userId → user object
+  const resolveMatchUser = (m) => {
+    const u = resolveName(m.userId);
+    return {
+      ...m,
+      resolvedName: m.userName || m.assigneeName ||
+        (u ? (u.fullName || u.email) : m.userId),
+      resolvedRole: m.roleName || m.assigneeRole || (u?.role || u?.roleName || ''),
+      resolvedFullName: u ? (u.fullName || u.email) : (m.userName || m.assigneeName || m.userId),
+    };
+  };
+
+  const suggestUsers = skillMatches.map(resolveMatchUser);
+
+  return (
+    <Portal>
+      <div
+        className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10400] flex items-center justify-center p-4 animate-fade-in"
+        onClick={onClose}
+      >
+        <div
+          className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-scale-in"
+          onClick={e => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="px-6 py-4 border-b border-outline-variant bg-gradient-to-r from-blue-50 to-indigo-50">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center text-lg font-bold shadow-sm shrink-0">
+                  🔄
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-hanken font-bold text-base text-blue-900">Chuyển Giao Tác Vụ</h3>
+                  <p className="text-xs text-blue-700 mt-0.5 truncate">{task?.title || '—'}</p>
+                </div>
+              </div>
+              <button onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-white/60 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div className="p-6 space-y-5 max-h-[60vh] overflow-y-auto">
+            {/* Current assignee — nâng cấp: hiển thị badge + role + email */}
+            {currentUserId && (
+              <div className="relative overflow-hidden rounded-2xl border-2 border-rose-200 bg-rose-50/80">
+                <div className="absolute top-2 right-2">
+                  <span className="text-[9px] font-bold px-2 py-1 rounded-full bg-rose-200 text-rose-700 border border-rose-300 uppercase tracking-wider">
+                    Người Hiện Tại
+                  </span>
+                </div>
+                <div className="flex items-center gap-4 p-4">
+                  {/* Avatar */}
+                  <div className="relative shrink-0">
+                    <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-rose-400 to-red-500 text-white flex items-center justify-center text-xl font-bold shadow-md ring-4 ring-rose-200">
+                      {initials}
+                    </div>
+                    <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-red-600 text-white rounded-full flex items-center justify-center text-[9px] font-black border-2 border-white">
+                      ✕
+                    </div>
+                  </div>
+                  {/* Info */}
+                  <div className="flex-1 min-w-0 pr-12">
+                    <p className="text-sm font-bold text-rose-900 truncate">{currentName}</p>
+                    {currentRole && (
+                      <p className="text-[11px] text-rose-600 mt-0.5 truncate">
+                        <span className="inline-flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-400 inline-block" />
+                          {currentRole}
+                        </span>
+                      </p>
+                    )}
+                    {currentUser?.email && (
+                      <p className="text-[10px] text-rose-400 mt-0.5 truncate">{currentUser.email}</p>
+                    )}
+                  </div>
+                </div>
+                {/* Skill tags của người hiện tại */}
+                {task?.assignedToSkills && task.assignedToSkills.length > 0 && (
+                  <div className="px-4 pb-3 flex flex-wrap gap-1.5">
+                    {task.assignedToSkills.map((sk, i) => (
+                      <span key={i} className="text-[9px] px-2 py-1 bg-white border border-rose-200 text-rose-700 rounded-full font-medium">
+                        {sk.skillName || sk}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {/* Arrow chỉ sang phải */}
+                <div className="absolute right-0 top-0 bottom-0 w-8 flex items-center justify-center">
+                  <span className="text-rose-300 text-lg animate-pulse">→</span>
+                </div>
+              </div>
+            )}
+
+            {/* Task summary mini-card */}
+            <div className="flex items-center gap-2 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+              <span className="text-slate-400 text-sm">📋</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-slate-700 truncate">{task?.title || '—'}</p>
+                {task?.taskType && (
+                  <p className="text-[10px] text-slate-400">{task.taskType} · {task?.experimentTitle || task?.experimentName || ''}</p>
+                )}
+              </div>
+              {task?.dueDate && (
+                <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded-lg shrink-0">
+                  📅 {new Date(task.dueDate).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })}
+                </span>
+              )}
+            </div>
+
+            {/* Skill-matched suggestions */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700 flex items-center gap-1.5">
+                  ✨ Gợi Ý Theo Kỹ Năng
+                </p>
+                {loading && <span className="text-[10px] text-slate-400 italic animate-pulse">Đang tải…</span>}
+                {!loading && suggestUsers.length > 0 && (
+                  <span className="text-[10px] font-bold text-blue-600 bg-blue-100 px-2 py-0.5 rounded-full">{suggestUsers.length} người</span>
+                )}
+              </div>
+
+              {loading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map(i => (
+                    <div key={i} className="h-16 bg-slate-100 rounded-xl animate-pulse" />
+                  ))}
+                </div>
+              ) : suggestUsers.length === 0 ? (
+                <div className="text-center py-5 text-xs text-slate-500 italic bg-slate-50 rounded-xl border border-slate-200">
+                  Không có gợi ý phù hợp — hãy chọn người dùng thủ công bên dưới.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {suggestUsers.map(m => {
+                    const workload = userWorkload[m.userId] || {};
+                    const isSelected = assigneeId === m.userId;
+                    const wlLabel = workload.totalTasks === undefined
+                      ? ''
+                      : workload.totalTasks === 0
+                        ? '✨ Rảnh'
+                        : `${workload.totalTasks} việc${workload.inProgressTasks > 0 ? ` · ${workload.inProgressTasks} đang làm` : ''}`;
+                    const wlCls = workload.totalTasks === 0
+                      ? 'bg-emerald-100 text-emerald-700'
+                      : (workload.overdueTasks > 0 || (workload.pendingTasks + workload.inProgressTasks) >= 3)
+                        ? 'bg-rose-100 text-rose-700'
+                        : (workload.pendingTasks + workload.inProgressTasks) >= 1
+                          ? 'bg-amber-100 text-amber-700'
+                          : 'bg-emerald-100 text-emerald-700';
+                    const nameInitial = m.resolvedName ? m.resolvedName.charAt(0).toUpperCase() : '?';
+                    return (
+                      <button
+                        key={m.userId}
+                        type="button"
+                        onClick={() => onFormChange({ assigneeId: m.userId })}
+                        className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 text-left transition-all ${
+                          isSelected
+                            ? 'border-blue-500 bg-blue-50 shadow-md ring-2 ring-blue-200'
+                            : 'border-slate-200 bg-white hover:border-blue-300 hover:bg-blue-50/50'
+                        }`}
+                      >
+                        {/* Avatar */}
+                        <div className="relative shrink-0">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold shadow-sm ${
+                            isSelected
+                              ? 'bg-gradient-to-br from-blue-500 to-indigo-600 text-white'
+                              : 'bg-gradient-to-br from-slate-300 to-slate-400 text-white'
+                          }`}>
+                            {nameInitial}
+                          </div>
+                          {isSelected && (
+                            <span className="absolute -top-1 -right-1 w-4 h-4 bg-blue-500 text-white rounded-full flex items-center justify-center border-2 border-white">
+                              <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
+                            </span>
+                          )}
+                        </div>
+                        {/* Info */}
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-slate-900 truncate">{m.resolvedName}</p>
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            {m.resolvedRole && (
+                              <span className="text-[10px] text-slate-500">{m.resolvedRole}</span>
+                            )}
+                            {m.matchScore !== undefined && (
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                                m.matchScore >= 80 ? 'bg-emerald-100 text-emerald-700' :
+                                m.matchScore >= 50 ? 'bg-amber-100 text-amber-700' :
+                                'bg-slate-100 text-slate-600'
+                              }`}>
+                                {m.matchScore}% phù hợp
+                              </span>
+                            )}
+                            {wlLabel && (
+                              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${wlCls}`}>
+                                {wlLabel}
+                              </span>
+                            )}
+                          </div>
+                          {m.skills && m.skills.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1.5">
+                              {m.skills.slice(0, 3).map((sk, i) => (
+                                <span key={i} className="text-[9px] px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-full border border-emerald-200 font-medium">
+                                  {sk.skillName || sk.name || sk}
+                                </span>
+                              ))}
+                              {m.skills.length > 3 && (
+                                <span className="text-[9px] px-2 py-0.5 bg-slate-100 text-slate-500 rounded-full">
+                                  +{m.skills.length - 3}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Manual user select */}
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant mb-2">
+                Hoặc Chọn Người Dùng Thủ Công
+              </p>
+              <select
+                value={assigneeId || ''}
+                onChange={e => onFormChange({ assigneeId: e.target.value })}
+                className="w-full px-3 py-2.5 border border-outline-variant rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400"
+              >
+                <option value="">— Chọn người dùng —</option>
+                {users
+                  .filter(u => u.id !== currentUserId)
+                  .map(u => (
+                    <option key={u.id} value={u.id}>
+                      {u.fullName || u.email}{u.role ? ` (${u.role})` : ''}
+                    </option>
+                  ))}
+              </select>
+            </div>
+
+            {/* Reason */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">Lý Do Chuyển Giao</p>
+                <span className="text-[9px] text-slate-400 italic">Tùy chọn</span>
+              </div>
+              <textarea
+                value={reason || ''}
+                onChange={e => onFormChange({ reason: e.target.value })}
+                placeholder="VD: Người phụ trách trước không đủ kỹ năng, thay đổi phân công…"
+                rows={2}
+                className="w-full px-3 py-2 border border-outline-variant rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 resize-none"
+              />
+            </div>
+
+            {/* Inline validation: chọn cùng người hiện tại */}
+            {isSameAssignee && (
+              <div className="flex items-start gap-2 p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700">
+                <span className="text-rose-500 text-sm shrink-0 mt-0.5">⚠️</span>
+                <p>
+                  Bạn đã chọn <strong>chính người đang giữ</strong> tác vụ này.
+                  Vui lòng chọn người <strong>khác</strong> để chuyển giao.
+                </p>
+              </div>
+            )}
+
+            {/* Confirm warning */}
+            {assigneeId && !isSameAssignee && (
+              <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
+                <span className="text-amber-500 text-sm shrink-0 mt-0.5">⚠️</span>
+                <p>
+                  Bạn đang chuyển tác vụ <strong>"{task?.title}"</strong> sang người khác.
+                  Người được gán cũ sẽ <strong>không còn</strong> phụ trách tác vụ này.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="px-6 py-4 border-t border-outline-variant bg-slate-50 flex items-center justify-end gap-2">
+            <button onClick={onClose} disabled={saving}
+              className="px-5 py-2.5 border border-outline-variant rounded-xl text-sm font-bold hover:bg-white transition-colors disabled:opacity-50">
+              Hủy
+            </button>
+            <button
+              onClick={onConfirm}
+              disabled={!assigneeId || saving || isSameAssignee}
+              title={isSameAssignee ? 'Bạn đã chọn chính người đang giữ task' : ''}
+              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+              {saving ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  Đang chuyển giao…
+                </>
+              ) : (
+                <>🔄 Xác Nhận Chuyển Giao</>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Portal>
   );
 };
 

@@ -3,6 +3,7 @@ import { useToast } from '../../context/ToastContext';
 import { measurementRecordsApi, taskImagesApi } from '../../api/sharedTaskApi';
 import { experimentsApi, batchesApi } from '../../api/experimentApi';
 import { cropsApi } from '../../api/studentTechApi';
+import { authLogoutSync } from '../../utils/authLogout';
 
 const MorphologyDataEntry = () => {
   const { showToast } = useToast();
@@ -399,7 +400,7 @@ const SharedSidebarM3 = () => {
         ))}
       </nav>
       <div className="p-3 border-t border-slate-100">
-        <button onClick={() => { localStorage.clear(); window.location.href = '/login'; }}
+        <button onClick={() => authLogoutSync()}
           className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-rose-500 hover:bg-rose-50 text-sm font-medium transition-all">
           <span className="text-base">🚪</span> Đăng Xuất
         </button>
