@@ -241,6 +241,7 @@ const ResearcherExperiments = ({ prefillData, onPrefillConsumed }) => {
   const [experiments, setExperiments] = useState([]);
   const [farms, setFarms] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [allSkills, setAllSkills] = useState([]);
   const [filterStatus, setFilterStatus] = useState('');
   const [filterFarm, setFilterFarm] = useState('');
   const [search, setSearch] = useState('');
@@ -703,7 +704,6 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   const [bedForm, setBedForm] = useState({ areaId: '', bedId: '' });
   const [taskForm, setTaskForm] = useState({ experimentStageId: '', batchId: '', careScheduleId: '', taskType: 'Watering', title: '', description: '', requiredSkillDescription: '', dueDate: '', skillRequirements: [] });
   const [assignForm, setAssignForm] = useState({ assigneeId: '', reason: '' });
-  const [allSkills, setAllSkills] = useState([]);
 
   // Lấy current user ID từ localStorage (JWT payload). Memo để tránh re-parse.
   const currentUserId = useMemo(() => {
