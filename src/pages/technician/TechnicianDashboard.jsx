@@ -541,6 +541,8 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
   const handleCompleteTask = async () => {
     // P0 fix: bắt buộc có nội dung mới (không chỉ ảnh, không chỉ lịch sử)
     const hasNewContent = reportText.trim().length > 0;
+    // Có ảnh mới được upload (có file hoặc có url chưa gắn vào report)
+    const hasNewImages = reportImages.length > 0;
     const minLength = 10;
     if (!hasNewContent) {
       showToast(`Vui lòng nhập nội dung báo cáo (tối thiểu ${minLength} ký tự) trước khi hoàn thành`, 'error');
