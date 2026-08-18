@@ -3,6 +3,7 @@ import UserManagement from './UserManagement';
 import SystemOperations from './SystemOperations';
 import SystemLogs from './SystemLogs';
 import SkillManagement from './SkillManagement';
+import CropManagement from './CropManagement';
 
 const AdminDashboard = () => {
   const [activeTab, setActiveTab] = useState('users');
@@ -13,11 +14,11 @@ const AdminDashboard = () => {
     window.dispatchEvent(new Event('navigate'));
   };
 
-  const STATS = [
-    { label: 'Total Users', value: '142', color: 'text-primary' },
-    { label: 'Active Now', value: '18', color: 'text-primary' },
-    { label: 'Pending Tasks', value: '5', color: 'text-tertiary' },
-    { label: 'System Health', value: '99%', color: 'text-primary' },
+      const STATS = [
+    { label: 'Tổng Người Dùng', value: '142', color: 'text-primary' },
+    { label: 'Đang Hoạt Động', value: '18', color: 'text-primary' },
+    { label: 'Công Việc Chờ', value: '5', color: 'text-tertiary' },
+    { label: 'Tình Trạng Hệ Thống', value: '99%', color: 'text-primary' },
   ];
 
   return (
@@ -43,7 +44,7 @@ const AdminDashboard = () => {
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 20h10" /><path d="M10 20c5.5 0 5.5-18 0-18" /><path d="M14 20c-5.5 0-5.5-18 0-18" /><path d="M2 13c3.5 0 3.5 7 7 7" /><path d="M22 13c-3.5 0-3.5 7-7 7" /></svg>
               </div>
               <div>
-                <h1 className="font-hanken text-lg font-bold text-primary leading-tight">Smart Farm</h1>
+                <h1 className="font-hanken text-lg font-bold text-primary leading-tight">Vườn Ươm Thông Minh</h1>
                 <p className="text-[9px] text-on-surface-variant font-bold uppercase tracking-widest">QUẢN TRỊ</p>
               </div>
             </div>
@@ -63,6 +64,10 @@ const AdminDashboard = () => {
             <button onClick={() => { setActiveTab('skills'); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all group ${activeTab === 'skills' ? 'bg-secondary-container text-primary font-bold' : 'text-on-surface-variant hover:bg-secondary-container/50 hover:text-on-secondary-container'}`}>
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l2.4 7.4H22l-6.4 4.6 2.4 7.4L12 16.8 6 21.4l2.4-7.4L2 9.4h7.6z" /></svg>
               <span className="text-[11px] font-bold uppercase tracking-wider">Quản lý Kỹ Năng</span>
+            </button>
+            <button onClick={() => { setActiveTab('crops'); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all group ${activeTab === 'crops' ? 'bg-secondary-container text-primary font-bold' : 'text-on-surface-variant hover:bg-secondary-container/50 hover:text-on-secondary-container'}`}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 20h10" /><path d="M10 20c5.5 0 5.5-18 0-18" /><path d="M14 20c-5.5 0-5.5-18 0-18" /><path d="M2 13c3.5 0 3.5 7 7 7" /><path d="M22 13c-3.5 0-3.5 7-7 7" /></svg>
+              <span className="text-[11px] font-bold uppercase tracking-wider">Quản Lý Giống Cây Trồng</span>
             </button>
             <button onClick={() => { setActiveTab('ops'); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all group ${activeTab === 'ops' ? 'bg-secondary-container text-primary font-bold' : 'text-on-surface-variant hover:bg-secondary-container/50 hover:text-on-secondary-container'}`}>
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
@@ -94,7 +99,7 @@ const AdminDashboard = () => {
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="12" x2="20" y2="12" /><line x1="4" y1="6" x2="20" y2="6" /><line x1="4" y1="18" x2="20" y2="18" /></svg>
               </button>
               <h2 className="font-hanken text-lg font-bold text-primary tracking-tight capitalize">
-                {activeTab === 'users' ? 'Quản lý Người Dùng' : activeTab === 'skills' ? 'Quản lý Kỹ Năng' : activeTab === 'logs' ? 'Nhật Ký Hệ Thống' : 'Vận hành'}
+                {activeTab === 'users' ? 'Quản lý Người Dùng' : activeTab === 'skills' ? 'Quản lý Kỹ Năng' : activeTab === 'crops' ? 'Quản Lý Cây Trồng' : activeTab === 'logs' ? 'Nhật Ký Hệ Thống' : 'Vận hành'}
               </h2>
             </div>
             <div className="flex items-center gap-3">
@@ -109,6 +114,7 @@ const AdminDashboard = () => {
 
           {activeTab === 'users' && <UserManagement />}
           {activeTab === 'skills' && <SkillManagement />}
+          {activeTab === 'crops' && <CropManagement />}
           {activeTab === 'ops' && <SystemOperations />}
           {activeTab === 'logs' && <SystemLogs />}
         </main>
@@ -122,9 +128,9 @@ const AdminDashboard = () => {
               <div className="w-6 h-6 bg-primary/20 flex items-center justify-center rounded text-primary">
                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M7 20h10" /><path d="M10 20c5.5 0 5.5-18 0-18" /><path d="M14 20c-5.5 0-5.5-18 0-18" /><path d="M2 13c3.5 0 3.5 7 7 7" /><path d="M22 13c-3.5 0-3.5 7-7 7" /></svg>
               </div>
-              <span className="font-hanken font-bold text-primary text-sm tracking-tight">Smart Farm SEP490</span>
+              <span className="font-hanken font-bold text-primary text-sm tracking-tight">Vườn Ươm Thông Minh SEP490</span>
             </div>
-            <p className="text-[10px] text-on-surface-variant font-medium">© 2026 Intelligent Nursery Systems. Bản quyền đã được bảo hộ.</p>
+            <p className="text-[10px] text-on-surface-variant font-medium">© 2026 Vườn Ươm Thông Minh. Bản quyền đã được bảo hộ.</p>
           </div>
 
           <div className="flex items-center gap-8">

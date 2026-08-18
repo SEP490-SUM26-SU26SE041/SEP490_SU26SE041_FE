@@ -19,11 +19,11 @@ function ControlsPanel() {
     <div className="controls-panel">
       <div className="time-selector">
         {[
-          { key: 'morning',   icon: '🌅', label: 'Morning'   },
-          { key: 'noon',      icon: '☀️', label: 'Noon'      },
-          { key: 'afternoon', icon: '🌇', label: 'Afternoon' },
-          { key: 'evening',   icon: '🌙', label: 'Evening'   },
-          { key: 'night',     icon: '🌌', label: 'Night'     },
+          { key: 'morning',   icon: '🌅', label: 'Sáng'   },
+          { key: 'noon',      icon: '☀️', label: 'Trưa'     },
+          { key: 'afternoon', icon: '🌇', label: 'Chiều'   },
+          { key: 'evening',   icon: '🌙', label: 'Tối'    },
+          { key: 'night',     icon: '🌌', label: 'Đêm'    },
         ].map(t => (
           <button
             key={t.key}
@@ -40,11 +40,11 @@ function ControlsPanel() {
 
       <div className="weather-selector">
         {[
-          { key: 'clear',    icon: '☀️', label: 'Clear' },
-          { key: 'rain',     icon: '🌧️', label: 'Rain'  },
-          { key: 'thunder',  icon: '⚡',  label: 'Storm' },
-          { key: 'insects',  icon: '🐜',  label: 'Bugs'  },
-          { key: 'disease',  icon: '🦠',  label: 'Virus' },
+          { key: 'clear',    icon: '☀️', label: 'Nắng' },
+          { key: 'rain',     icon: '🌧️', label: 'Mưa'  },
+          { key: 'thunder',  icon: '⚡',  label: 'Bão' },
+          { key: 'insects',  icon: '🐜',  label: 'Sâu'  },
+          { key: 'disease',  icon: '🦠',  label: 'Bệnh' },
         ].map(w => (
           <button
             key={w.key}
@@ -66,42 +66,42 @@ function SensorGrid() {
   const sd = state.sensorData;
 
   const getAIStatus = (v) => {
-    if (v < 40) return 'Critical';
-    if (v < 70) return 'Warning';
-    if (v < 90) return 'Good';
-    return 'Excellent';
+    if (v < 40) return 'Nguy Cấp';
+    if (v < 70) return 'Cảnh Báo';
+    if (v < 90) return 'Tốt';
+    return 'Xuất Sắc';
   };
 
   return (
     <div className="sensor-grid">
       <div className="sensor-card">
         <div className="sensor-icon">💧</div>
-        <div className="sensor-label">Soil Moisture</div>
+        <div className="sensor-label">Độ Ẩm Đất</div>
         <div className="sensor-value">{sd.moisture.toFixed(0)}%</div>
         <div className="sensor-bar"><div className="sensor-fill" style={{ width: `${Math.min(sd.moisture, 100)}%`, background: '#3498db' }} /></div>
       </div>
       <div className="sensor-card">
         <div className="sensor-icon">🌡️</div>
-        <div className="sensor-label">Temperature</div>
+        <div className="sensor-label">Nhiệt Độ</div>
         <div className="sensor-value">{sd.temperature.toFixed(1)}°C</div>
         <div className="sensor-bar"><div className="sensor-fill" style={{ width: `${sd.temperature / 45 * 100}%`, background: '#e74c3c' }} /></div>
       </div>
       <div className="sensor-card">
         <div className="sensor-icon">☀️</div>
-        <div className="sensor-label">Light Level</div>
+        <div className="sensor-label">Cường Độ Ánh Sáng</div>
         <div className="sensor-value">{Math.round(sd.light)} lux</div>
         <div className="sensor-bar"><div className="sensor-fill" style={{ width: `${Math.min(sd.light / 1200 * 100, 100)}%`, background: '#f39c12' }} /></div>
       </div>
       <div className="sensor-card">
         <div className="sensor-icon">⚗️</div>
-        <div className="sensor-label">Soil pH</div>
+        <div className="sensor-label">Độ pH Đất</div>
         <div className="sensor-value">{sd.ph.toFixed(1)}</div>
         <div className="sensor-bar"><div className="sensor-fill" style={{ width: `${sd.ph / 14 * 100}%`, background: '#2ecc71' }} /></div>
       </div>
       <div className="sensor-card" style={{ gridColumn: 'span 2' }}>
         <div className="sensor-icon">📸</div>
-        <div className="sensor-label">AI Camera Vision</div>
-        <div className="sensor-value">Plant Status: {getAIStatus(sd.ai)} ({sd.ai.toFixed(0)}%)</div>
+        <div className="sensor-label">Camera AI</div>
+        <div className="sensor-value">Tình Trạng Cây: {getAIStatus(sd.ai)} ({sd.ai.toFixed(0)}%)</div>
         <div className="sensor-bar"><div className="sensor-fill" style={{ width: `${Math.max(sd.ai, 0)}%`, background: '#95a5a6' }} /></div>
         <button
           className={`view-cam-btn${state.isAiViewActive ? ' active-cam' : ''}`}
@@ -113,7 +113,7 @@ function SensorGrid() {
           }}
         >
           <span>{state.isAiViewActive ? '❌' : '👁️'}</span>
-          {state.isAiViewActive ? ' Close' : ' View Camera'}
+          <span>{state.isAiViewActive ? ' Đóng' : ' Xem Camera'}</span>
         </button>
       </div>
     </div>
@@ -175,9 +175,9 @@ function PlantingSection({ dispatch, state }) {
         )}
       </div>
       <div className="info-cards">
-        <div className="info-card"><div className="card-number">01</div><div><div className="card-title">Soil Preparation</div><div className="card-detail">Rich organic compost mixed at precise ratios</div></div></div>
-        <div className="info-card"><div className="card-number">02</div><div><div className="card-title">Seed Placement</div><div className="card-detail">Automated depth control at 2-3cm intervals</div></div></div>
-        <div className="info-card"><div className="card-number">03</div><div><div className="card-title">Initial Watering</div><div className="card-detail">Controlled moisture level for germination</div></div></div>
+        <div className="info-card"><div className="card-number">01</div><div><div className="card-title">Chuẩn Bị Đất</div><div className="card-detail">Phân hữu cơ giàu dinh dưỡng được trộn theo tỷ lệ chính xác</div></div></div>
+        <div className="info-card"><div className="card-number">02</div><div><div className="card-title">Đặt Hạt Giống</div><div className="card-detail">Kiểm soát độ sâu tự động ở khoảng 2-3cm</div></div></div>
+        <div className="info-card"><div className="card-number">03</div><div><div className="card-title">Tưới Nước Lần Đầu</div><div className="card-detail">Mức độ ẩm được kiểm soát để nảy mầm</div></div></div>
       </div>
     </>
   );
@@ -227,9 +227,9 @@ export default function FarmOverlay() {
     <div id="ui-overlay">
       {/* Header */}
       <header className="header">
-        <div className="logo">Smart Farm SEP490</div>
+        <div className="logo">Vườn Ươm Thông Minh SEP490</div>
         <nav className="nav">
-          {['Overview', 'Planting', 'Growing', 'Monitoring'].map((name, i) => (
+          {['Tổng Quan', 'Gieo Trồng', 'Phát Triển', 'Giám Sát'].map((name, i) => (
             <button
               key={i}
               className={`nav-link${state.currentSection === i ? ' active' : ''}`}
@@ -242,32 +242,32 @@ export default function FarmOverlay() {
         <button className="cart-btn" onClick={() => {
           window.history.pushState(null, '', '/login');
           window.dispatchEvent(new Event('navigate'));
-        }}>Login ↗</button>
+        }}>Đăng Nhập ↗</button>
       </header>
 
       {/* Section: Overview */}
       <div className={`section-content${state.currentSection !== 0 ? ' hidden' : ''}`}>
         <div className="section-label">(A)</div>
-        <h1 className="section-title">Seed to<br />Sensor</h1>
-        <p className="section-desc">A complete model for smart agriculture — from planting seeds to real-time IoT monitoring. Scroll to explore each stage.</p>
-        <div className="scroll-hint"><div className="scroll-arrow">↓</div><span>Scroll to explore</span></div>
+        <h1 className="section-title">Từ Hạt Giống<br />Đến Cảm Biến</h1>
+        <p className="section-desc">Mô hình hoàn chỉnh cho nông nghiệp thông minh — từ gieo trồng đến giám sát IoT thời gian thực. Cuộn xuống để khám phá từng giai đoạn.</p>
+        <div className="scroll-hint"><div className="scroll-arrow">↓</div><span>Cuộn xuống để khám phá</span></div>
       </div>
 
       {/* Section: Planting */}
       <div className={`section-content${state.currentSection !== 1 ? ' hidden' : ''}`}>
         <div className="section-label">(B)</div>
-        <h1 className="section-title">Planting</h1>
-        <p className="section-desc">Seeds are carefully placed in prepared soil beds with optimal spacing. Mỗi lần click chuột trái, hạt giống sẽ rơi từ túi xuống.</p>
+        <h1 className="section-title">Gieo Trồng</h1>
+        <p className="section-desc">Hạt giống được đặt cẩn thận trong luống đất đã chuẩn bị với khoảng cách tối ưu. Mỗi lần click chuột trái, hạt giống sẽ rơi từ túi xuống.</p>
         <PlantingSection dispatch={dispatch} state={state} />
       </div>
 
       {/* Section: Growing */}
       <div className={`section-content${state.currentSection !== 2 ? ' hidden' : ''}`}>
         <div className="section-label">(C)</div>
-        <h1 className="section-title">Growing</h1>
-        <p className="section-desc">Watch seeds transform into thriving plants. Each stage is tracked and optimized through continuous environmental monitoring.</p>
+        <h1 className="section-title">Phát Triển</h1>
+        <p className="section-desc">Quan sát hạt giống chuyển đổi thành cây phát triển mạnh. Mỗi giai đoạn được theo dõi và tối ưu hóa thông qua giám sát môi trường liên tục.</p>
         <div className="growth-timeline">
-          {['Week 1 — Germination', 'Week 3 — Sprout Stage', 'Week 6 — Vegetative Growth', 'Week 10 — Flowering'].map((t, i) => (
+          {['Tuần 1 — Nảy Mầm', 'Tuần 3 — Giai Đoạn Mầm', 'Tuần 6 — Sinh Trưởng Thực Vật', 'Tuần 10 — Ra Hoa'].map((t, i) => (
             <div key={i} className={`timeline-item${i === 0 ? ' active-tl' : ''}`}>
               <div className="timeline-dot" />
               <span>{t}</span>
@@ -279,8 +279,8 @@ export default function FarmOverlay() {
       {/* Section: Monitoring */}
       <div className={`section-content${state.currentSection !== 3 ? ' hidden' : ''}`}>
         <div className="section-label">(D)</div>
-        <h1 className="section-title">Monitoring</h1>
-        <p className="section-desc">IoT sensors collect real-time data and transmit to a central gateway. All metrics are accessible through a cloud dashboard.</p>
+        <h1 className="section-title">Giám Sát</h1>
+        <p className="section-desc">Cảm biến IoT thu thập dữ liệu thời gian thực và truyền đến cổng trung tâm. Tất cả chỉ số có thể truy cập qua bảng điều khiển đám mây.</p>
         <SensorGrid />
       </div>
 

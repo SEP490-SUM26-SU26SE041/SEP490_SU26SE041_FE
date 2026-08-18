@@ -5,16 +5,16 @@ const SharedSidebar = ({ userRole, currentPage, navigateTo }) => {
     switch (currentPage) {
       case '/student/task-list':
       case '/technician/task-list':
-        return { label: 'T16 - Task 4', title: 'Personal Task List', subtitle: "Today's assignments" };
+        return { label: 'T16 - Task 4', title: 'Danh Sách Việc', subtitle: 'Công việc hôm nay' };
       case '/student/morphology-entry':
-        return { label: 'T19 - Task 5', title: 'Morphology Entry', subtitle: 'Plant data collection' };
+        return { label: 'T19 - Task 5', title: 'Nhập Hình Thái', subtitle: 'Thu thập dữ liệu cây trồng' };
       case '/student/care-completion':
       case '/technician/care-completion':
-        return { label: 'T18 - Task 6', title: 'Care Completion', subtitle: 'Mark care actions as done' };
+        return { label: 'T18 - Task 6', title: 'Hoàn Thành Chăm Sóc', subtitle: 'Đánh dấu hành động chăm sóc đã hoàn thành' };
       case '/technician/emergency-report':
-        return { label: 'T5 - Task 5', title: 'Emergency Report', subtitle: 'Report urgent issues' };
+        return { label: 'T5 - Task 5', title: 'Báo Cáo Khẩn Cấp', subtitle: 'Báo cáo sự cố khẩn cấp' };
       default:
-        return { label: 'Dashboard', title: 'Home', subtitle: 'Your ' + (userRole === 'Technician' ? 'work' : 'learning') + ' hub' };
+        return { label: 'Dashboard', title: 'Trang Chủ', subtitle: 'Trung tâm ' + (userRole === 'Technician' ? 'công việc' : 'học tập') + ' của bạn' };
     }
   };
 
@@ -32,7 +32,7 @@ const SharedSidebar = ({ userRole, currentPage, navigateTo }) => {
   return (
     <aside className="w-64 bg-white border-r border-slate-200 flex flex-col fixed h-full z-50 overflow-y-auto">
       <div className="p-8">
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Smart <span className="text-blue-600">{userRole === 'Technician' ? 'Tech' : 'Farm'}</span></h1>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Vườn <span className="text-emerald-600">Ươm</span></h1>
         <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-widest font-bold">{userRole.toUpperCase()} PORTAL</p>
       </div>
 
@@ -50,72 +50,72 @@ const SharedSidebar = ({ userRole, currentPage, navigateTo }) => {
             onClick={() => navigateTo(userRole === 'Technician' ? '/technician' : '/student')}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900 transition"
           >
-            ← Back
+            ← Quay lại
           </button>
         )}
 
         {userRole === 'Student' && (
           <>
             {isDashboard ? (
-              <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 text-blue-700 font-bold border border-blue-200">📖 Lessons</button>
+              <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 text-blue-700 font-bold border border-blue-200">📖 Bài Học</button>
             ) : (
               <button
                 onClick={() => navigateTo('/student')}
                 className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900 transition"
               >
-                📖 Lessons
+                📖 Bài Học
               </button>
             )}
           </>
         )}
 
         {isTaskList ? (
-          <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 text-blue-700 font-bold border border-blue-200">📋 Task List</button>
+          <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 text-blue-700 font-bold border border-blue-200">📋 Danh Sách Việc</button>
         ) : (
           <button
             onClick={() => navigateTo(userRole === 'Technician' ? '/technician/task-list' : '/student/task-list')}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900 transition"
           >
-            📋 Task List
+            📋 Danh Sách Việc
           </button>
         )}
 
         {userRole === 'Student' && (
           <>
             {isMorphology ? (
-              <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 text-blue-700 font-bold border border-blue-200">🌿 Morphology Entry</button>
+              <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 text-blue-700 font-bold border border-blue-200">🌿 Nhập Hình Thái</button>
             ) : (
               <button
                 onClick={() => navigateTo('/student/morphology-entry')}
                 className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900 transition"
               >
-                🌿 Morphology Entry
+                🌿 Nhập Hình Thái
               </button>
             )}
           </>
         )}
 
         {isCareCompletion ? (
-          <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 text-blue-700 font-bold border border-blue-200">✅ Care Completion</button>
+          <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-blue-50 text-blue-700 font-bold border border-blue-200">✅ Hoàn Thành Chăm Sóc</button>
         ) : (
           <button
             onClick={() => navigateTo(userRole === 'Technician' ? '/technician/care-completion' : '/student/care-completion')}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900 transition"
           >
-            ✅ Care Completion
+            ✅ Hoàn Thành Chăm Sóc
           </button>
         )}
 
         {userRole === 'Technician' && (
           <>
             {isEmergencyReport ? (
-              <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-red-50 text-red-700 font-bold border border-red-200">🚨 Emergency Report</button>
+              <button className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-red-50 text-red-700 font-bold border border-red-200">🚨 Báo Cáo Khẩn Cấp</button>
             ) : (
               <button
                 onClick={() => navigateTo('/technician/emergency-report')}
                 className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-500 hover:bg-slate-50 hover:text-slate-900 transition"
               >
-                🚨 Emergency Report
+                🚨 Báo Cáo Khẩn Cấp
               </button>
             )}
           </>
@@ -137,7 +137,7 @@ const SharedSidebar = ({ userRole, currentPage, navigateTo }) => {
       </nav>
 
       <div className="p-4 border-t border-slate-100">
-        <button onClick={() => navigateTo('/login')} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-rose-500 hover:bg-rose-50 transition">🚪 Logout</button>
+        <button onClick={() => navigateTo('/login')} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-rose-500 hover:bg-rose-50 transition">🚪 Đăng Xuất</button>
       </div>
     </aside>
   );
