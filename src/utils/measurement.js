@@ -314,3 +314,127 @@ export function downloadBlob(blob, filename) {
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 100);
 }
+
+// ── Aggregate số cây thực tế từ TaskReport (FE-only, không cần BE) ─────────
+
+/**
+ * Parse `resultData` của 1 task report thành plain object.
+ * BE có thể trả về dạng JSON string hoặc đối tượng đã parse sẵn.
+ * @param {string|object|null|undefined} resultData
+ * @returns {object}
+ */
+function parseReportResultData(resultData) {
+  if (!resultData) return {};
+  if (typeof resultData === 'object') return resultData;
+  if (typeof resultData === 'string') {
+    try { return JSON.parse(resultData); } catch { return {}; }
+  }
+  return {};
+}
+
+/**
+ * Tính tổng `plantCount` THỰC TẾ đã trồng cho 1 batch từ các TaskReport.
+ *
+ * Quy tắc:
+ * - Chỉ tính các report có `taskType === 'Planting'` HOẶC `taskTitle` chứa 'trồng' hoặc 'ươm'/'uóm'.
+ * - CÓ plantCount là số dương trong resultData.
+ * - Cộng dồn (vì mỗi task Planting là 1 đợt trồng → có thể có nhiều đợt).
+ * - Nếu batch chưa có report Planting → trả về `null` (chưa có data).
+ *
+ * @param {string|number} batchId
+ * @param {Array<object>} taskReports - Tất cả taskReports của experiment
+ * @returns {{ total: number, reportCount: number } | null}
+ */
+export function aggregatePlantCountFromReports(batchId, taskReports) {
+  if (!batchId || !Array.isArray(taskReports) || taskReports.length === 0) return null;
+
+  let total = 0;
+  let reportCount = 0;
+
+  // Helper: kiểm tra xem report có phải là task trồng/ươm cây không
+  // Ưu tiên taskType, fallback sang taskTitle (phòng trường hợp BE không trả taskType)
+  /**
+ * Normalize Vietnamese string by removing diacritics for comparison.
+ * Converts 'ươm'/'uơm'/'Uơm'/'Ươm'/'UƠM'/'ƯƠM' → 'uom'
+ */
+function normalizeVietnamese(str) {
+  if (!str) return '';
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // Remove diacritics
+    .replace(/đ/g, 'd'); // Convert đ → d
+}
+
+const isPlantingTask = (r) => {
+    if (r.taskType === 'Planting') return true;
+    // Normalize title to compare without diacritics
+    const normTitle = normalizeVietnamese(r.taskTitle || '');
+    return normTitle.includes('uom') || normTitle.includes('trong');
+  };
+
+  // Helper: lấy batchId từ report (BE có thể đặt ở nhiều vị trí khác nhau)
+  const getBatchIdFromReport = (r) => {
+    // Ưu tiên: batchId trực tiếp
+    if (r.batchId) return r.batchId;
+    // Fallback: batch trong nested object
+    if (r.batch?.id) return r.batch.id;
+    // Fallback: batchId trong images array (BE thường đặt ở đây)
+    if (r.images && r.images.length > 0 && r.images[0].batchId) {
+      return r.images[0].batchId;
+    }
+    return null;
+  };
+
+  for (const r of taskReports) {
+    const rBatchId = getBatchIdFromReport(r);
+    if (rBatchId && rBatchId !== batchId) continue;
+
+    // Chỉ tính task Planting (hoặc có title chứa 'trồng'/'ươm')
+    if (!isPlantingTask(r)) continue;
+
+    const rd = parseReportResultData(r.resultData);
+    const raw = rd.plantCount;
+    const n = typeof raw === 'number' ? raw : parseFloat(raw);
+    if (!isNaN(n) && n > 0) {
+      total += n;
+      reportCount += 1;
+    }
+  }
+
+  if (reportCount === 0) return null;
+  return { total, reportCount };
+}
+
+/**
+ * So sánh số cây kế hoạch (`batch.plantCount`) với số cây thực tế từ task reports.
+ * Trả về trạng thái để render badge:
+ *   - 'empty'   : chưa có task report nào
+ *   - 'match'   : khớp (±0)
+ *   - 'less'    : thực tế < kế hoạch (thiếu cây, có thể do trồng chưa đủ)
+ *   - 'over'    : thực tế > kế hoạch (trồng vượt)
+ *   - 'no_plan' : có data thực tế nhưng không có kế hoạch
+ *
+ * @param {number|null|undefined} planned - batch.plantCount (kế hoạch)
+ * @param {{total, reportCount}|null} actual - output của aggregatePlantCountFromReports
+ * @returns {{ status, planned, actual, diff, ratio }}
+ */
+export function comparePlannedVsActual(planned, actual) {
+  const p = typeof planned === 'number' ? planned : parseFloat(planned);
+  const a = actual?.total ?? null;
+
+  if (a == null) {
+    return { status: 'empty', planned: isNaN(p) ? null : p, actual: null, diff: null, ratio: null };
+  }
+  if (isNaN(p)) {
+    return { status: 'no_plan', planned: null, actual: a, diff: null, ratio: null };
+  }
+  const diff = a - p;
+  let status;
+  if (diff === 0) status = 'match';
+  else if (diff > 0) status = 'over';
+  else status = 'less';
+
+  const ratio = p > 0 ? a / p : null;
+  return { status, planned: p, actual: a, diff, ratio };
+}

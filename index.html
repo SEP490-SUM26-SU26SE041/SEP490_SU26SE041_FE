@@ -13,6 +13,10 @@
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
+  <!-- MQTT.js (Browser bundle - dùng cho IoT Sensor tab). Loaded globally
+       để tránh polyfill Buffer/process khi import qua ESM bundle. -->
+  <script src="https://unpkg.com/mqtt@5.15.2/dist/mqtt.min.js"></script>
+
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
