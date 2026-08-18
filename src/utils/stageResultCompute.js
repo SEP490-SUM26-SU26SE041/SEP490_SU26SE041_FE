@@ -679,48 +679,75 @@ export function getAutoFillFieldKeys(stageType) {
  * Map taskType (string từ BE) → field key trong schema của stage Care.
  * Có thể mở rộng cho các stage khác sau.
  */
+// Mapping CHUẨN theo enum TaskType BE trả về:
+//   Planting | Watering | Fertilizing | Observation | Inspection | Harvest | Other
+// → Field key trong schema Care:
+//   Watering      → soLanTuoi (tưới nước)
+//   Fertilizing   → soLanBonPhan (bón phân)
+//   Spraying/Pest → soLanPhunThuoc (phun thuốc - BE chưa có enum chính thức, dùng Other + title check)
+//   Inspection    → BỎ QUA (là quan sát, KHÔNG phải phun thuốc - bug cũ đã map nhầm)
+//   Planting/Observation/Harvest/Other → BỎ QUA (không phải care)
 const TASK_TYPE_TO_CARE_FIELD = {
+  // ── Tưới nước ──
   Watering: 'soLanTuoi',
   watering: 'soLanTuoi',
+  Water: 'soLanTuoi',
   water: 'soLanTuoi',
+  Tuoi: 'soLanTuoi',
   tuoi: 'soLanTuoi',
   tuoiNuoc: 'soLanTuoi',
   '1': 'soLanTuoi',
   1: 'soLanTuoi',
+  // ── Bón phân ──
   Fertilizing: 'soLanBonPhan',
   fertilizing: 'soLanBonPhan',
-  bon: 'soLanBonPhan',
+  Fertilize: 'soLanBonPhan',
+  fertilize: 'soLanBonPhan',
+  BonPhan: 'soLanBonPhan',
   bonPhan: 'soLanBonPhan',
+  Bon: 'soLanBonPhan',
+  bon: 'soLanBonPhan',
   '2': 'soLanBonPhan',
   2: 'soLanBonPhan',
-  Inspection: 'soLanPhunThuoc',
-  inspection: 'soLanPhunThuoc',
+  // ── Phun thuốc (BE chưa có enum → chỉ chấp nhận các giá trị rõ ràng) ──
   Spraying: 'soLanPhunThuoc',
   spraying: 'soLanPhunThuoc',
-  phun: 'soLanPhunThuoc',
+  PestControl: 'soLanPhunThuoc',
+  pestControl: 'soLanPhunThuoc',
+  PhunThuoc: 'soLanPhunThuoc',
   phunThuoc: 'soLanPhunThuoc',
+  Phun: 'soLanPhunThuoc',
+  phun: 'soLanPhunThuoc',
   '3': 'soLanPhunThuoc',
   3: 'soLanPhunThuoc'
+  // ⚠️ KHÔNG MAP Inspection → Inspection là "Quan sát", không phải phun thuốc.
+  // ⚠️ KHÔNG MAP Planting/Observation/Harvest/Other → không phải care.
 };
 
 /**
- * Tính số lần thực tế theo kế hoạch của 1 CareSchedule.
- * Công thức: floor((endDate - startDate) / frequencyDays) + 1
- *  - Nếu thiếu startDate/endDate: fallback về 1
- *  - Nếu frequencyDays <= 0: 1
- *  - Nếu endDate < startDate: 0
+ * Tính số lần THỰC TẾ theo kế hoạch của 1 CareSchedule.
+ * Công thức chuẩn RCBD/agronomy:
+ *   occurrences = floor((endDate - startDate) / frequencyDays) + 1
+ *   - Nếu thiếu startDate/endDate: return 0 (không tính kế hoạch)
+ *   - Nếu frequencyDays <= 0 hoặc NaN: return 0 (lịch không hợp lệ)
+ *   - Nếu endDate < startDate: return 0
  * @param {Object} sc - schedule object có startDate, endDate, frequencyDays
- * @returns {number}
+ * @returns {number} - số lần KH (kế hoạch)
  */
 export function calcScheduledOccurrences(sc) {
   if (!sc) return 0;
-  const freq = Number(sc.frequencyDays || sc.frequencyDays === 0 ? sc.frequencyDays : 1);
-  if (!freq || freq <= 0) return 1;
-  if (!sc.startDate || !sc.endDate) return 1;
+  // Chỉ tính khi CÓ startDate + endDate + frequencyDays hợp lệ.
+  // Đây là điều kiện CẦN THIẾT để ra kế hoạch tưới nước/bón phân.
+  if (!sc.startDate || !sc.endDate) return 0;
   const start = new Date(sc.startDate);
   const end = new Date(sc.endDate);
-  if (isNaN(start.getTime()) || isNaN(end.getTime())) return 1;
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
   if (end < start) return 0;
+
+  // frequencyDays: mặc định 1 nếu không có; nếu <= 0 → không hợp lệ
+  const freq = Number(sc.frequencyDays);
+  if (!freq || freq <= 0 || isNaN(freq)) return 0;
+
   const days = Math.floor((end - start) / (1000 * 60 * 60 * 24));
   return Math.floor(days / freq) + 1;
 }
@@ -732,6 +759,10 @@ export function calcScheduledOccurrences(sc) {
  * @param {Array} params.batches
  * @param {Array} params.schedules
  * @param {Object} params.taskReportsByBatch - { [batchId]: Array<report> }
+ *   Mỗi report có sẵn: { taskId, taskTitle, taskType, reporterId, reporterName,
+ *                         reportText, resultData, reportedAt, images, batchId, ... }
+ *   → CHỈ CẦN đếm trực tiếp theo report.taskType (KHÔNG cần lookup task).
+ *   Vì BE chỉ trả report khi task đã hoàn thành (status implicit = xong).
  * @returns {{ perGroup: Object, overall: Object, byBatch: Object }}
  */
 export function computeResultsFromSchedulesAndReports({ stageId, groups = [], batches = [], schedules = [], taskReportsByBatch = {} }) {
@@ -774,25 +805,37 @@ export function computeResultsFromSchedulesAndReports({ stageId, groups = [], ba
   // Đếm SCHEDULES (kế hoạch) per batch × taskType
   //   Mỗi schedule có frequencyDays (khoảng cách giữa các lần) + startDate/endDate
   //   → số lần kế hoạch = floor((endDate - startDate) / frequencyDays) + 1
+  //   CHUẨN LOGIC: dùng calcScheduledOccurrences đã validate đầy đủ
+  //   - Nếu schedule không hợp lệ (thiếu start/end/freq) → plannedCount = 0 → bỏ qua
   stageSchedules.forEach(sc => {
-    const fk = TASK_TYPE_TO_CARE_FIELD[sc.taskType];
+    const fk = TASK_TYPE_TO_CARE_FIELD[sc.taskType || sc.TaskType];
     if (!fk) return;
     const plannedCount = calcScheduledOccurrences(sc);
+    if (plannedCount <= 0) return;
     for (let i = 0; i < plannedCount; i++) incBatch(sc.batchId, fk, 'planned');
   });
 
-  // Đếm TASK REPORTS thực tế (chỉ tính Approved/Completed) per batch × taskType
-  stageBatchIds.forEach(batchId => {
-    const reports = taskReportsByBatch[batchId] || [];
-    reports.forEach(r => {
-      // Chỉ tính report thuộc stage này (nếu có stageId) hoặc thuộc batch trong stage
-      if (r.stageId && r.stageId !== stageId) return;
-      const fk = TASK_TYPE_TO_CARE_FIELD[r.taskType];
-      if (!fk) return;
-      const statusOk = r.status === 'Approved' || r.status === 'Completed' || r.status === 'Done' || r.approved === true;
-      if (!statusOk) return;
-      incBatch(batchId, fk, 'actual');
-    });
+  // Chuẩn bị set các batch thuộc stage (lọc qua schedule trước, fallback qua report có stageId)
+  const stageScheduleBatchIds = new Set(stageSchedules.map(sc => sc.batchId).filter(Boolean));
+
+  // THỰC TẾ (TT) — đếm trực tiếp từ report.taskType
+  // CHUẨN LOGIC KHOA HỌC:
+  //   - BE chỉ trả report khi task đã hoàn thành → mỗi report = 1 lần thực hiện
+  //   - CHỈ đếm taskType thuộc nhóm chăm sóc (Watering, Fertilizing, Spraying/PestControl)
+  //   - Bỏ qua: Planting, Observation, Inspection, Harvest, ... (không phải care)
+  //   - Lọc theo batchId (key của taskReportsByBatch) → resolve sang groupId
+  Object.entries(taskReportsByBatch || {}).forEach(([bid, reports]) => {
+    if (!Array.isArray(reports)) return;
+    for (const r of reports) {
+      // Map taskType → field key (soLanTuoi, soLanBonPhan, soLanPhunThuoc)
+      const taskType = r.taskType || r.TaskType;
+      const fk = TASK_TYPE_TO_CARE_FIELD[taskType];
+      if (!fk) continue; // Bỏ qua Planting, Observation, Inspection, Harvest...
+      // Nếu có stageScheduleBatchIds → chỉ nhận batch thuộc lịch (tránh đếm nhầm batch của stage khác)
+      // Nếu không có schedule nào → fallback lấy tất cả batch có report
+      if (stageScheduleBatchIds.size > 0 && !stageScheduleBatchIds.has(bid)) continue;
+      incBatch(bid, fk, 'actual');
+    }
   });
 
   // Gom từ batch → group: KH và TT được cộng riêng (KH cộng KH, TT cộng TT)

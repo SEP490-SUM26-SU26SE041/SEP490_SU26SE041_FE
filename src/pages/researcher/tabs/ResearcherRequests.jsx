@@ -23,6 +23,13 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
   const [filterFarm, setFilterFarm] = useState('');
+  // Chỉ hiển thị các yêu cầu CH�A có thực nghiệm (tức: yêu cầu đã duyệt mà chưa tạo Experiment)
+  // Mặc định bật vì phần lớn thời gian user chỉ quan tâm yêu cầu cần tạo thực nghiệm.
+  // Filter theo `experimentId` của BE (nếu có) — fallback bỏ qua khi BE chưa trả field này.
+  const [hideAlreadyCreated, setHideAlreadyCreated] = useState(true);
+  // Set các requestId đã có thực nghiệm — build từ GET /api/experiments (response có field `requestId`)
+  // Dùng để ẩn nút "Tạo TN" ngay cả khi BE trả status vẫn là Approved.
+  const [requestsWithExperiment, setRequestsWithExperiment] = useState(new Set());
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [detailReq, setDetailReq] = useState(null); // chi tiết yêu cầu
@@ -114,6 +121,15 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
       const data = await experimentRequestsApi.getAll(params);
       let list = Array.isArray(data) ? data : [];
       if (filterFarm) list = list.filter(r => r.farmId === filterFarm);
+
+      // Filter: chỉ hiện yêu cầu CHƯA có thực nghiệm (nếu bật)
+      //   - Ưu tiên 1: req có field `experimentId` truthy → đã có TN → ẩn
+      //   - Ưu tiên 2: req có `experiment` object → đã có TN → ẩn
+      //   - Ưu tiên 3: req có `experimentCode` truthy → đã có TN → ẩn
+      //   Nếu BE không trả field nào → không lọc (giữ nguyên), vẫn hiển thị để tránh mất data.
+      if (hideAlreadyCreated) {
+        list = list.filter(r => !r.experimentId && !r.experiment && !r.experimentCode);
+      }
       setRequests(list);
     } catch (err) {
       showToast(err.message || 'Không thể tải danh sách yêu cầu', 'error');
@@ -122,8 +138,26 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
     }
   };
 
-  useEffect(() => { fetchFarms(); fetchCrops(); }, []);
+  // Lấy tất cả experiments để build Set các requestId đã có thực nghiệm.
+  // Dùng để ẩn nút "Tạo TN" trong bảng yêu cầu (BE status vẫn là Approved nhưng đã có TN).
+  const fetchExperimentsList = async () => {
+    try {
+      const data = await experimentsApi.getAll();
+      const list = Array.isArray(data) ? data : [];
+      const set = new Set();
+      for (const e of list) {
+        if (e.requestId) set.add(e.requestId);
+      }
+      setRequestsWithExperiment(set);
+    } catch {
+      // Không block UI nếu API lỗi
+      setRequestsWithExperiment(new Set());
+    }
+  };
+
+  useEffect(() => { fetchFarms(); fetchCrops(); fetchExperimentsList(); }, []);
   useEffect(() => { fetchRequests(); }, [filter]);
+  useEffect(() => { fetchRequests(); }, [hideAlreadyCreated, filterFarm]);
 
   const validateForm = () => {
     const errs = {};
@@ -230,6 +264,7 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
       const code = result?.experimentCode || result?.data?.experimentCode || 'thành công';
       showToast(`Đã tạo thực nghiệm: ${code}`, 'success');
       fetchRequests();
+      fetchExperimentsList();
     } catch (err) {
       showToast(err.message || 'Không thể tạo thực nghiệm', 'error');
     } finally {
@@ -270,6 +305,7 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
       showToast(`Đã tạo thực nghiệm: ${code}`, 'success');
       setCreateExperiment({ open: false, request: null, reservedBeds: [], loading: false, submitting: false, error: null });
       fetchRequests();
+      fetchExperimentsList();
     } catch (err) {
       setCreateExperiment(prev => ({ ...prev, submitting: false, error: err.message || 'Không thể tạo thực nghiệm' }));
       showToast(err.message || 'Không thể tạo thực nghiệm', 'error');
@@ -334,6 +370,7 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
       showToast(`Đã tạo thực nghiệm: ${code}`, 'success');
       setManualCreate({ open: false, request: null, submitting: false, error: null });
       fetchRequests();
+      fetchExperimentsList();
     } catch (err) {
       setManualCreate(prev => ({ ...prev, submitting: false, error: err.message || 'Không thể tạo thực nghiệm' }));
       showToast(err.message || 'Không thể tạo thực nghiệm', 'error');
@@ -389,6 +426,24 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
         </div>
       </div>
 
+      {/* Toggle: chỉ hiện yêu cầu chưa có thực nghiệm */}
+      <div className="flex items-center gap-2">
+        <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={hideAlreadyCreated}
+            onChange={e => setHideAlreadyCreated(e.target.checked)}
+            className="w-4 h-4 text-indigo-600 border-outline-variant rounded focus:ring-2 focus:ring-indigo-500/20"
+          />
+          <span className="text-xs font-bold text-on-surface-variant">
+            Chỉ hiển thị yêu cầu <span className="text-indigo-600">CHƯA CÓ</span> thực nghiệm
+          </span>
+        </label>
+        <span className="text-[10px] text-on-surface-variant italic">
+          (Bỏ chọn để xem cả yêu cầu đã tạo thực nghiệm)
+        </span>
+      </div>
+
       {/* Table */}
       <div className="bg-white border border-outline-variant rounded-2xl overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
@@ -407,12 +462,34 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
               {loading ? (
                 <tr><td colSpan="6" className="px-6 py-8 text-center text-sm text-on-surface-variant">Đang tải...</td></tr>
               ) : requests.length === 0 ? (
-                <tr><td colSpan="6" className="px-6 py-8 text-center text-sm text-on-surface-variant">Chưa có yêu cầu nào.</td></tr>
+                <tr>
+                  <td colSpan="6" className="px-6 py-8 text-center text-sm text-on-surface-variant">
+                    {hideAlreadyCreated
+                      ? 'Không có yêu cầu nào CHƯA có thực nghiệm. Bỏ tick "Chỉ hiển thị yêu cầu CHƯA CÓ thực nghiệm" để xem tất cả.'
+                      : 'Chưa có yêu cầu nào.'}
+                  </td>
+                </tr>
               ) : (
-                requests.map(req => (
+                requests.map(req => {
+                  // Check theo 3 nguồn:
+                  //  1. BE trả `experimentId` / `experiment` / `experimentCode` trực tiếp trong request
+                  //  2. requestsWithExperiment Set (build từ GET /api/experiments - response có field `requestId`)
+                  const alreadyCreated = Boolean(
+                    req.experimentId || req.experiment || req.experimentCode
+                    || requestsWithExperiment.has(req.id)
+                  );
+                  return (
                   <tr key={req.id} onClick={() => openDetail(req)} className={`cursor-pointer hover:bg-surface-container/30 transition-colors border-l-4 ${statusBg[req.status] || ''}`}>
                     <td className="px-6 py-4">
-                      <div className="font-semibold text-sm text-on-surface line-clamp-1">{req.title || '—'}</div>
+                      <div className="flex items-center gap-2">
+                        <div className="font-semibold text-sm text-on-surface line-clamp-1">{req.title || '—'}</div>
+                        {alreadyCreated && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[9px] font-bold whitespace-nowrap"
+                            title={`Đã có thực nghiệm${req.experimentCode ? `: ${req.experimentCode}` : ''}`}>
+                            ✓ ĐÃ CÓ TN
+                          </span>
+                        )}
+                      </div>
                       {req.objective && <div className="text-xs text-on-surface-variant mt-0.5 line-clamp-1">{req.objective}</div>}
                     </td>
                     <td className="px-6 py-4 text-sm text-on-surface-variant">{req.farmName || '—'}</td>
@@ -425,7 +502,7 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
                     <td className="px-6 py-4 text-xs font-mono text-on-surface-variant">{req.expectedEndDate || '—'}</td>
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end gap-2">
-                        {req.status === 'Approved' && (
+                        {req.status === 'Approved' && !alreadyCreated && (
                           <div className="flex items-center justify-end gap-2">
                             <button onClick={(e) => { e.stopPropagation(); openManualCreate(req); }}
                               className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[10px] font-bold uppercase shadow-sm transition-all whitespace-nowrap"
@@ -439,10 +516,17 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
                             </button>
                           </div>
                         )}
+                        {alreadyCreated && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-[10px] font-bold whitespace-nowrap"
+                            title={`Đã tạo thực nghiệm từ yêu cầu này${req.experimentCode ? `: ${req.experimentCode}` : ''}`}>
+                            ✓ Đã tạo thực nghiệm
+                          </span>
+                        )}
                       </div>
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

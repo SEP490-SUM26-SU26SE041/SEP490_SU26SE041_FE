@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, Fragment } from 'react';
 import { createPortal } from 'react-dom';
 import { experimentsApi, tasksApi, experimentRequestsApi, taskReportsApi, measurementRecordsApi } from '../../../api/experimentApi';
 import { farmsApi, bedsApi } from '../../../api/managerResourcesApi';
@@ -219,12 +219,43 @@ const GROUP_TYPES = [
 
 // DesignType enum mới (BE cập nhật): CRD | RCBD | LSD | Factorial | SplitPlot | Other
 const DESIGN_TYPES = [
-  { value: 'CRD', label: 'CRD - Completely Randomized' },
-  { value: 'RCBD', label: 'RCBD - Randomized Complete Block' },
-  { value: 'LSD', label: 'LSD - Latin Square Design' },
-  { value: 'Factorial', label: 'Factorial Design' },
-  { value: 'SplitPlot', label: 'Split-Plot Design' },
+  { value: 'CRD', label: 'CRD - Hoàn toàn ngẫu nhiên (Completely Randomized)' },
+  { value: 'RCBD', label: 'RCBD - Khối hoàn toàn ngẫu nhiên (Randomized Complete Block)' },
+  { value: 'LSD', label: 'LSD - Hình vuông La Tinh (Latin Square)' },
+  { value: 'Factorial', label: 'Thiết kế thừa số (Factorial)' },
+  { value: 'SplitPlot', label: 'Thiết kế ô phụ (Split-Plot)' },
   { value: 'Other', label: 'Khác (Other)' }
+];
+
+// Map DesignType/value giữa FE (viết tắt) ↔ BE (PascalCase)
+// BE trả về PascalCase như "RandomizedCompleteBlock", "CompletelyRandomized", "LatinSquare", "Factorial", "SplitPlot", "Other"
+const DESIGN_TYPE_BE_TO_FE = {
+  'CompletelyRandomized': 'CRD',
+  'RandomizedCompleteBlock': 'RCBD',
+  'LatinSquare': 'LSD',
+  'Factorial': 'Factorial',
+  'SplitPlot': 'SplitPlot',
+  'Other': 'Other',
+  // Fallback: nếu BE cũ trả về viết tắt
+  'CRD': 'CRD',
+  'RCBD': 'RCBD',
+  'LSD': 'LSD',
+};
+const DESIGN_TYPE_FE_TO_BE = {
+  'CRD': 'CompletelyRandomized',
+  'RCBD': 'RandomizedCompleteBlock',
+  'LSD': 'LatinSquare',
+  'Factorial': 'Factorial',
+  'SplitPlot': 'SplitPlot',
+  'Other': 'Other',
+};
+// Map randomizationMethod
+const RANDOMIZATION_METHODS = [
+  { value: 'Fisher-Yates', label: 'Fisher-Yates (Knuth shuffle)' },
+  { value: 'CompletelyRandomized', label: 'Hoàn toàn ngẫu nhiên' },
+  { value: 'RandomizedBlock', label: 'Khối ngẫu nhiên' },
+  { value: 'LatinSquare', label: 'Hình vuông La Tinh' },
+  { value: 'Systematic', label: 'Có hệ thống' },
 ];
 
 // TaskType giữ nguyên string enum (BE không đổi)
@@ -694,17 +725,114 @@ const ExperimentDetailModal = ({ experiment, allSkills: parentAllSkills = [], on
   const [editingStageId, setEditingStageId] = useState(null);
   const [showEditStage, setShowEditStage] = useState(false);
   const [groupForm, setGroupForm] = useState({ groupName: '', groupType: 'Control', treatmentDescription: '' });
-  const [designForm, setDesignForm] = useState({ designType: 'RCBD', replicationCount: 3, randomizationMethod: '', designParameters: '' });
+  const [designForm, setDesignForm] = useState({
+    designType: 'RCBD',
+    replicationCount: 3,
+    randomizationMethod: '',
+    designParameters: '',
+    // ===== Các trường chi tiết bổ sung (FE-extended, lưu chung vào designParameters JSON) =====
+    // Khoảng cách
+    rowSpacingCm: 50,
+    plantSpacingCm: 30,
+    plantsPerPlot: 25,
+    rowsPerPlot: 5,
+    bedsRequired: 0,
+    layoutType: 'RCBD',
+    // Cấu hình ô
+    plotLengthM: 5,
+    plotWidthM: 2,
+    plotAreaM2: 10,
+    bufferZoneM: 1,
+    bufferDistanceCm: 50,
+    borderRows: 1,
+    blockCount: 3,
+    totalPlots: 0,
+    // Phân bố ngẫu nhiên
+    randomSeed: 2026,
+    blockingVariable: '',
+    // Tưới nước
+    wateringAmountMlPerPlant: 500,
+    wateringFrequencyDays: 1,
+    wateringMethod: 'Drip',
+    // Bón phân
+    fertilizerType: 'NPK',
+    fertilizerAmountGPerPlant: 10,
+    fertilizerFrequencyDays: 14,
+    // Điều kiện môi trường
+    temperatureMinC: 20,
+    temperatureMaxC: 30,
+    humidityMinPct: 60,
+    humidityMaxPct: 80,
+    phMin: 6.0,
+    phMax: 6.5,
+    lightLux: 10000,
+    notes: '',
+  });
 
   // Populate designForm when design data loads
+  // Map đầy đủ từ API response:
+  //   { id, designType, replicationCount, randomizationMethod, designParameters (JSON string) }
+  // BE có thể trả designType dạng PascalCase (RandomizedCompleteBlock) → map về FE value (RCBD)
+  // designParameters là JSON string chứa: treatments, designType, replicationCount, randomizationMethod, ...
+  // → Parse & merge vào form để hiển thị
   useEffect(() => {
     if (design) {
-      setDesignForm({
-        designType: design.designType || 'RCBD',
-        replicationCount: design.replicationCount || 3,
-        randomizationMethod: design.randomizationMethod || '',
-        designParameters: typeof design.designParameters === 'string' ? design.designParameters : JSON.stringify(design.designParameters || {}),
-      });
+      // Parse designParameters JSON string để lấy các trường bổ sung
+      let parsedParams = {};
+      try {
+        const raw = design.designParameters;
+        if (typeof raw === 'string') parsedParams = JSON.parse(raw);
+        else if (raw && typeof raw === 'object') parsedParams = raw;
+      } catch { parsedParams = {}; }
+
+      // Map designType từ BE (PascalCase) → FE (viết tắt)
+      const beDesignType = design.designType || parsedParams.designType || 'RCBD';
+      const feDesignType = DESIGN_TYPE_BE_TO_FE[beDesignType] || 'RCBD';
+
+      // Map randomizationMethod: ưu tiên từ design.randomizationMethod, fallback từ parsedParams
+      const beRandMethod = design.randomizationMethod || parsedParams.randomizationMethod || '';
+
+      setDesignForm(prev => ({
+        ...prev,
+        designType: feDesignType,
+        replicationCount: design.replicationCount ?? parsedParams.replicationCount ?? prev.replicationCount,
+        randomizationMethod: beRandMethod,
+        // Đồng bộ lại từ parsedParams (nếu BE lưu ở designParameters)
+        rowSpacingCm: parsedParams.rowSpacingCm ?? prev.rowSpacingCm,
+        plantSpacingCm: parsedParams.plantSpacingCm ?? prev.plantSpacingCm,
+        plantsPerPlot: parsedParams.plantsPerPlot ?? prev.plantsPerPlot,
+        rowsPerPlot: parsedParams.rowsPerPlot ?? prev.rowsPerPlot,
+        bedsRequired: parsedParams.bedsRequired ?? prev.bedsRequired,
+        layoutType: parsedParams.layoutType ?? prev.layoutType,
+        plotLengthM: parsedParams.plotLengthM ?? prev.plotLengthM,
+        plotWidthM: parsedParams.plotWidthM ?? prev.plotWidthM,
+        plotAreaM2: parsedParams.plotAreaM2 ?? prev.plotAreaM2,
+        bufferZoneM: parsedParams.bufferZoneM ?? prev.bufferZoneM,
+        bufferDistanceCm: parsedParams.bufferDistanceCm ?? prev.bufferDistanceCm,
+        borderRows: parsedParams.borderRows ?? prev.borderRows,
+        blockCount: parsedParams.blockCount ?? prev.blockCount,
+        totalPlots: parsedParams.totalPlots ?? prev.totalPlots,
+        randomSeed: parsedParams.randomSeed ?? prev.randomSeed,
+        blockingVariable: parsedParams.blockingVariable ?? prev.blockingVariable,
+        wateringAmountMlPerPlant: parsedParams.wateringAmountMlPerPlant ?? prev.wateringAmountMlPerPlant,
+        wateringFrequencyDays: parsedParams.wateringFrequencyDays ?? prev.wateringFrequencyDays,
+        wateringMethod: parsedParams.wateringMethod ?? prev.wateringMethod,
+        fertilizerType: parsedParams.fertilizerType ?? prev.fertilizerType,
+        fertilizerAmountGPerPlant: parsedParams.fertilizerAmountGPerPlant ?? prev.fertilizerAmountGPerPlant,
+        fertilizerFrequencyDays: parsedParams.fertilizerFrequencyDays ?? prev.fertilizerFrequencyDays,
+        temperatureMinC: parsedParams.temperatureMinC ?? prev.temperatureMinC,
+        temperatureMaxC: parsedParams.temperatureMaxC ?? prev.temperatureMaxC,
+        humidityMinPct: parsedParams.humidityMinPct ?? prev.humidityMinPct,
+        humidityMaxPct: parsedParams.humidityMaxPct ?? prev.humidityMaxPct,
+        phMin: parsedParams.phMin ?? prev.phMin,
+        phMax: parsedParams.phMax ?? prev.phMax,
+        lightLux: parsedParams.lightLux ?? prev.lightLux,
+        notes: parsedParams.notes ?? prev.notes,
+        // Lưu nguyên designParameters (string) để submit nguyên xi
+        designParameters: typeof design.designParameters === 'string'
+          ? design.designParameters
+          : JSON.stringify(design.designParameters || parsedParams),
+      }));
     }
   }, [design]);
 
@@ -768,7 +896,8 @@ const ExperimentDetailModal = ({ experiment, allSkills: parentAllSkills = [], on
         // Load groups for batch-group mapping
         const groupData = await groupsApi.getByExperiment(experiment.id);
         setGroups(Array.isArray(groupData) ? groupData : []);
-        // Load task reports for all batches
+        // Load task reports for all batches (BE trả sẵn taskType trong mỗi report
+        // → đếm trực tiếp theo report.taskType, không cần lookup task riêng)
         const batchList = batchData || [];
         if (batchList.length > 0) {
           const reports = await Promise.allSettled(
@@ -1002,10 +1131,79 @@ const ExperimentDetailModal = ({ experiment, allSkills: parentAllSkills = [], on
   // Design CRUD
   const handleSaveDesign = async () => {
     try {
+      // Map designType FE → BE (PascalCase) trước khi submit
+      const designTypeForBE = DESIGN_TYPE_FE_TO_BE[designForm.designType] || designForm.designType;
+
+      // Build designParameters JSON: gộp tất cả field mở rộng (tưới nước, phân bón, môi trường, layout, ...)
+      // cùng các trường top-level (treatments, designType, replicationCount, randomizationMethod) để BE dễ parse.
+      let parsedParams = {};
+      try {
+        if (designForm.designParameters) {
+          parsedParams = typeof designForm.designParameters === 'string'
+            ? JSON.parse(designForm.designParameters)
+            : designForm.designParameters;
+        }
+      } catch { parsedParams = {}; }
+
+      // Suy ra tổng số ô nếu chưa có
+      const totalPlotsCalc = (designForm.totalPlots > 0)
+        ? designForm.totalPlots
+        : (designForm.plantsPerPlot * designForm.rowsPerPlot * (designForm.blockCount || 1) * (designForm.replicationCount || 1));
+
+      const mergedParams = {
+        ...parsedParams,
+        designType: designTypeForBE,
+        replicationCount: parseInt(designForm.replicationCount) || 1,
+        randomizationMethod: designForm.randomizationMethod || '',
+        // Layout
+        rowSpacingCm: parseFloat(designForm.rowSpacingCm) || 0,
+        plantSpacingCm: parseFloat(designForm.plantSpacingCm) || 0,
+        plantsPerPlot: parseInt(designForm.plantsPerPlot) || 0,
+        rowsPerPlot: parseInt(designForm.rowsPerPlot) || 0,
+        bedsRequired: parseInt(designForm.bedsRequired) || 0,
+        layoutType: designForm.layoutType || designTypeForBE,
+        // Plot
+        plotLengthM: parseFloat(designForm.plotLengthM) || 0,
+        plotWidthM: parseFloat(designForm.plotWidthM) || 0,
+        plotAreaM2: parseFloat(designForm.plotAreaM2) || 0,
+        bufferZoneM: parseFloat(designForm.bufferZoneM) || 0,
+        bufferDistanceCm: parseInt(designForm.bufferDistanceCm) || 0,
+        borderRows: parseInt(designForm.borderRows) || 0,
+        blockCount: parseInt(designForm.blockCount) || 0,
+        totalPlots: parseInt(totalPlotsCalc) || 0,
+        // Randomization
+        randomSeed: parseInt(designForm.randomSeed) || 0,
+        blockingVariable: designForm.blockingVariable || '',
+        // Watering
+        wateringAmountMlPerPlant: parseFloat(designForm.wateringAmountMlPerPlant) || 0,
+        wateringFrequencyDays: parseInt(designForm.wateringFrequencyDays) || 0,
+        wateringMethod: designForm.wateringMethod || 'Drip',
+        // Fertilizing
+        fertilizerType: designForm.fertilizerType || 'NPK',
+        fertilizerAmountGPerPlant: parseFloat(designForm.fertilizerAmountGPerPlant) || 0,
+        fertilizerFrequencyDays: parseInt(designForm.fertilizerFrequencyDays) || 0,
+        // Environment
+        temperatureMinC: parseFloat(designForm.temperatureMinC) || 0,
+        temperatureMaxC: parseFloat(designForm.temperatureMaxC) || 0,
+        humidityMinPct: parseFloat(designForm.humidityMinPct) || 0,
+        humidityMaxPct: parseFloat(designForm.humidityMaxPct) || 0,
+        phMin: parseFloat(designForm.phMin) || 0,
+        phMax: parseFloat(designForm.phMax) || 0,
+        lightLux: parseInt(designForm.lightLux) || 0,
+        notes: designForm.notes || '',
+      };
+
+      const payload = {
+        designType: designTypeForBE,
+        replicationCount: parseInt(designForm.replicationCount) || 1,
+        randomizationMethod: designForm.randomizationMethod || '',
+        designParameters: JSON.stringify(mergedParams),
+      };
+
       if (design) {
-        await designApi.update(experiment.id, { designType: designForm.designType, replicationCount: parseInt(designForm.replicationCount), randomizationMethod: designForm.randomizationMethod, designParameters: designForm.designParameters });
+        await designApi.update(experiment.id, payload);
       } else {
-        await designApi.create(experiment.id, { designType: designForm.designType, replicationCount: parseInt(designForm.replicationCount), randomizationMethod: designForm.randomizationMethod, designParameters: designForm.designParameters });
+        await designApi.create(experiment.id, payload);
       }
       showToast('Đã lưu thiết kế', 'success');
       fetchTabData('design');
@@ -1435,7 +1633,7 @@ const ExperimentDetailModal = ({ experiment, allSkills: parentAllSkills = [], on
                 <SchedulesTab schedules={schedules} stages={stages} batches={batches} form={scheduleForm} setForm={setScheduleForm} onCreate={handleCreateSchedule} onDelete={handleDeleteSchedule} loading={tabLoading} />
               )}
               {activeTab === 'batches' && (
-                <BatchesTab batches={batches} bedAssignments={bedAssignments} groups={groups} form={batchForm} setForm={setBatchForm} onCreate={handleCreateBatch} onDelete={handleDeleteBatch} onEdit={openBatchEdit} onRandomizeBeds={handleRandomizeBeds} loading={tabLoading} taskReportsByBatch={taskReportsByBatch} />
+                <BatchesTab batches={batches} bedAssignments={bedAssignments} groups={groups} form={batchForm} setForm={setBatchForm} onCreate={handleCreateBatch} onDelete={handleDeleteBatch} onEdit={openBatchEdit} loading={tabLoading} taskReportsByBatch={taskReportsByBatch} />
               )}
               {activeTab === 'tasks' && (
 <TasksTab
@@ -2346,43 +2544,64 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
                                 <span className="text-base shrink-0">{dynamicCount > 0 ? '📊' : '⚠️'}</span>
                                 <div className="flex-1">
                                   {dynamicCount > 0 ? (
-                                    <>
-                                      <strong className="font-extrabold">Form động từ MeasurementDefinition:</strong> Đã fetch <strong>{dynamicCount}</strong> chỉ số sinh trưởng (đã gom trùng theo tên + đơn vị) từ API:
+                                    <span>
+                                      Đã fetch <strong>{dynamicCount}</strong> chỉ số sinh trưởng (đã gom trùng theo tên + đơn vị) từ API:
                                       <span className="ml-1">{uniqFields.map(f => `${f.label}${f.unit ? ` (${f.unit})` : ''}`).join(', ')}</span>.
-                                      <div className="mt-1">Mỗi nhóm chỉ thấy chỉ số của nhóm mình. Báo cáo được tách riêng theo từng nhóm bên dưới.</div>
-                                      {dynamicFields.length === 0 && dynamicFromRaw > 0 && (
-                                        <div className="mt-1 text-amber-700">
-                                          (debug: schema={dynamicFields.length} nhưng measurements={dynamicFromRaw} — schema rỗng do measurements thiếu group/groupId)
-                                        </div>
-                                      )}
-                                    </>
+                                      Mỗi nhóm chỉ thấy chỉ số của nhóm mình. Báo cáo được tách riêng theo từng nhóm bên dưới.
+                                    </span>
                                   ) : (
-                                    <>
+                                    <span>
                                       <strong className="font-extrabold">Chưa có chỉ số đo lường nào:</strong> giai đoạn <em>{s.stageName}</em> hiện chưa có <em>MeasurementDefinition</em> nào.
                                       Vào tab <em>Đo Lường</em> → bấm <code>+ Tạo Đo Lường</code> để thêm chỉ số sinh trưởng → form báo cáo sẽ tự động cập nhật.
-                                    </>
+                                    </span>
                                   )}
                                 </div>
                               </div>
                             );
                           })()}
 
-                          {/* Bảng tham khảo: Lịch chăm sóc + Báo cáo thực tế (chỉ cho stage Care) */}
-                          {editData._isPerGroup && s.stageType === 'Care' && (() => {
+                          {/* Bảng tham khảo: Lịch chăm sóc + Báo cáo thực tế (cho stage Care/Growing/Growth/Harvest/Harvesting) */}
+                          {editData._isPerGroup && (() => {
+                            const stageTypeName = s.stageType || s.stageTypeName || '';
+                            const SHOW_REF_STAGES = ['Care', 'Growing', 'Growth', 'Harvest', 'Harvesting'];
+                            if (!SHOW_REF_STAGES.includes(stageTypeName)) return null;
                             const ref = computeResultsFromSchedulesAndReports({
                               stageId: s.id, groups, batches, schedules, taskReportsByBatch
                             });
                             const batchIds = Object.keys(ref.byBatch);
-                            if (batchIds.length === 0) return null;
-                            // Chỉ hiển thị các field có thể đếm được từ Schedules/Reports (soLanTuoi, soLanBonPhan, soLanPhunThuoc)
-                            // Bỏ field text như ghiChu, loaiPhanBon và field đo lường như luongNuocTong (cần đo thực tế)
-                            const COUNTABLE_FIELD_KEYS = new Set(['soLanTuoi', 'soLanBonPhan', 'soLanPhunThuoc']);
-                            const careFields = schema.filter(f => f.type === 'number' && COUNTABLE_FIELD_KEYS.has(f.key));
+                            const isHarvestStage = stageTypeName === 'Harvesting' || stageTypeName === 'Harvest';
+                            if (batchIds.length === 0) {
+                              // Fallback cho Harvest stage: lấy batch qua taskReportsByBatch (vì stageResultCompute bỏ qua Harvest)
+                              const hasHarvestReports = Object.values(taskReportsByBatch || {}).some(rs =>
+                                Array.isArray(rs) && rs.some(r => {
+                                  const t = r.taskType || r.TaskType;
+                                  return t === 'Harvest' || t === 'Harvesting';
+                                })
+                              );
+                              if (!(isHarvestStage && hasHarvestReports)) {
+                                // stage thường mà không có batch nào → return null
+                                return null;
+                              }
+                              // Harvest có reports nhưng ref rỗng → vẫn render bảng (các field tính trực tiếp trong body)
+                            }
+                            // Chọn fields hiển thị theo stage type:
+                            //  - Care/Growing → KH/TT cho Tưới, Bón, Phun (đếm từ schedules + reports)
+                            //  - Harvest/Harvesting → TT cho Số cây thu hoạch + Sản lượng kg (đếm từ reports)
+                            //  - Các stage khác → fallback 3 field Care
+                            let careFields = [];
+                            if (isHarvestStage) {
+                              careFields.push({ key: 'soCayThuHoach', label: 'Số cây thu hoạch', icon: '🌱', unit: 'cây' });
+                              careFields.push({ key: 'sanLuongKg', label: 'Sản lượng', icon: '⚖️', unit: 'kg' });
+                            } else {
+                              careFields.push({ key: 'soLanTuoi', label: 'Số lần tưới', icon: '💧' });
+                              careFields.push({ key: 'soLanBonPhan', label: 'Số lần bón', icon: '🧪' });
+                              careFields.push({ key: 'soLanPhunThuoc', label: 'Số lần phun', icon: '�️' });
+                            }
                             return (
-                              <div className="mb-4 bg-gradient-to-br from-cyan-50 to-blue-50 rounded-lg p-3 border-2 border-cyan-300">
+                              <div className={`mb-4 ${isHarvestStage ? 'bg-gradient-to-br from-amber-50 to-orange-50 border-amber-300' : 'bg-gradient-to-br from-cyan-50 to-blue-50 border-cyan-300'} rounded-lg p-3 border-2`}>
                                 <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-                                  <p className="text-[11px] font-extrabold text-cyan-800 uppercase tracking-wider flex items-center gap-1.5">
-                                    🔍 Bảng tham khảo — Số liệu THỰC TẾ vs KẾ HOẠCH (theo từng batch → nhóm)
+                                  <p className={`text-[11px] font-extrabold uppercase tracking-wider flex items-center gap-1.5 ${isHarvestStage ? 'text-amber-800' : 'text-cyan-800'}`}>
+                                    {isHarvestStage ? '🌾' : '🔍'} {isHarvestStage ? 'Bảng tham khảo — SẢN LƯỢNG THỰC TẾ theo task report Thu hoạch (theo từng batch → nhóm)' : 'Bảng tham khảo — Số lần THỰC TẾ theo task report (theo từng batch → nhóm)'}
                                   </p>
                                   <button
                                     type="button"
@@ -2391,25 +2610,100 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
                                       setEditData(prev => {
                                         const newOverall = { ...(prev.resultData?.overall || {}) };
                                         const newByGroup = { ...(prev.resultData?.byGroup || {}) };
-                                        // Overall: lấy actual (số liệu thực tế)
-                                        Object.entries(ref.overall).forEach(([k, v]) => {
-                                          const actual = (typeof v === 'object' && v !== null) ? v.actual : v;
-                                          if (newOverall[k] === '' || newOverall[k] == null) newOverall[k] = actual;
-                                        });
-                                        // Per-group: lấy actual
-                                        Object.entries(ref.perGroup).forEach(([gid, vals]) => {
-                                          if (!newByGroup[gid]) newByGroup[gid] = {};
-                                          Object.entries(vals).forEach(([fk, v]) => {
-                                            if (fk === '_meta') return;
-                                            const actual = (typeof v === 'object' && v !== null) ? v.actual : v;
-                                            if (newByGroup[gid][fk] === '' || newByGroup[gid][fk] == null) newByGroup[gid][fk] = actual;
+                                        if (isHarvestStage) {
+                                          // Tính trực tiếp từ taskReportsByBatch (vì ref bỏ qua Harvest)
+                                          let totalSoCay = 0;
+                                          let totalSanLuong = 0;
+                                          // Per-group: tổng field từ report của các batch trong group
+                                          const groupBatchIds = new Map(); // gid -> [batchIds]
+                                          batches.forEach(b => {
+                                            const reports = (taskReportsByBatch || {})[b.id] || [];
+                                            const harvestReports = reports.filter(r => {
+                                              const t = r.taskType || r.TaskType;
+                                              return t === 'Harvest' || t === 'Harvesting';
+                                            });
+                                            if (harvestReports.length === 0) return;
+                                            const gid = b.groupId || b.group?.id;
+                                            if (gid && !groupBatchIds.has(gid)) groupBatchIds.set(gid, []);
+                                            if (gid) groupBatchIds.get(gid).push(b.id);
+                                            // Tổng số cây = tổng plantCount/soLuongCayThuHoach
+                                            let batchCay = harvestReports.reduce((acc, r) => {
+                                              const rd = r.resultData || {};
+                                              const v = rd.plantCount ?? rd.soLuongCayThuHoach ?? rd.overall?.plantCount ?? rd.overall?.soLuongCayThuHoach ?? r.plantCount ?? r.soLuongCayThuHoach;
+                                              return acc + (Number(v) || 0);
+                                            }, 0);
+                                            if (batchCay === 0 && b.plantCount) batchCay = Number(b.plantCount);
+                                            totalSoCay += batchCay;
+                                            // Tổng sản lượng kg
+                                            let batchKg = harvestReports.reduce((acc, r) => {
+                                              const rd = r.resultData || {};
+                                              let v = rd.harvestWeight ?? rd.sanLuongKg ?? rd.overall?.harvestWeight ?? rd.overall?.sanLuongKg ?? r.harvestWeight ?? r.sanLuongKg;
+                                              let n = Number(v) || 0;
+                                              if (n === 0) {
+                                                const tan = rd.sanLuongTan ?? rd.overall?.sanLuongTan ?? r.sanLuongTan;
+                                                n = (Number(tan) || 0) * 1000;
+                                              }
+                                              return acc + n;
+                                            }, 0);
+                                            totalSanLuong += batchKg;
                                           });
-                                        });
+                                          // Fill overall (chỉ điền ô trống)
+                                          if (newOverall.soCayThuHoach === '' || newOverall.soCayThuHoach == null) newOverall.soCayThuHoach = totalSoCay;
+                                          if (newOverall.sanLuongKg === '' || newOverall.sanLuongKg == null) newOverall.sanLuongKg = totalSanLuong;
+                                          // Fill per-group
+                                          groupBatchIds.forEach((bidList, gid) => {
+                                            if (!newByGroup[gid]) newByGroup[gid] = {};
+                                            const groupCay = bidList.reduce((acc, bid) => {
+                                              const reports = (taskReportsByBatch || {})[bid] || [];
+                                              const harvestReports = reports.filter(r => ['Harvest', 'Harvesting'].includes(r.taskType || r.TaskType));
+                                              let c = harvestReports.reduce((acc2, r) => {
+                                                const rd = r.resultData || {};
+                                                const v = rd.plantCount ?? rd.soLuongCayThuHoach ?? rd.overall?.plantCount ?? rd.overall?.soLuongCayThuHoach ?? r.plantCount ?? r.soLuongCayThuHoach;
+                                                return acc2 + (Number(v) || 0);
+                                              }, 0);
+                                              if (c === 0) {
+                                                const b = batches.find(x => x.id === bid);
+                                                if (b?.plantCount) c = Number(b.plantCount);
+                                              }
+                                              return acc + c;
+                                            }, 0);
+                                            const groupKg = bidList.reduce((acc, bid) => {
+                                              const reports = (taskReportsByBatch || {})[bid] || [];
+                                              const harvestReports = reports.filter(r => ['Harvest', 'Harvesting'].includes(r.taskType || r.TaskType));
+                                              return acc + harvestReports.reduce((acc2, r) => {
+                                                const rd = r.resultData || {};
+                                                let v = rd.harvestWeight ?? rd.sanLuongKg ?? rd.overall?.harvestWeight ?? rd.overall?.sanLuongKg ?? r.harvestWeight ?? r.sanLuongKg;
+                                                let n = Number(v) || 0;
+                                                if (n === 0) {
+                                                  const tan = rd.sanLuongTan ?? rd.overall?.sanLuongTan ?? r.sanLuongTan;
+                                                  n = (Number(tan) || 0) * 1000;
+                                                }
+                                                return acc2 + n;
+                                              }, 0);
+                                            }, 0);
+                                            if (newByGroup[gid].soCayThuHoach === '' || newByGroup[gid].soCayThuHoach == null) newByGroup[gid].soCayThuHoach = groupCay;
+                                            if (newByGroup[gid].sanLuongKg === '' || newByGroup[gid].sanLuongKg == null) newByGroup[gid].sanLuongKg = groupKg;
+                                          });
+                                        } else {
+                                          // Care/Growing: lấy từ ref (soLanTuoi, soLanBonPhan, soLanPhunThuoc)
+                                          Object.entries(ref.overall).forEach(([k, v]) => {
+                                            const actual = (typeof v === 'object' && v !== null) ? v.actual : v;
+                                            if (newOverall[k] === '' || newOverall[k] == null) newOverall[k] = actual;
+                                          });
+                                          Object.entries(ref.perGroup).forEach(([gid, vals]) => {
+                                            if (!newByGroup[gid]) newByGroup[gid] = {};
+                                            Object.entries(vals).forEach(([fk, v]) => {
+                                              if (fk === '_meta') return;
+                                              const actual = (typeof v === 'object' && v !== null) ? v.actual : v;
+                                              if (newByGroup[gid][fk] === '' || newByGroup[gid][fk] == null) newByGroup[gid][fk] = actual;
+                                            });
+                                          });
+                                        }
                                         return { ...prev, resultData: { overall: newOverall, byGroup: newByGroup } };
                                       });
                                       showToast && showToast('Đã điền số liệu THỰC TẾ từ task reports đã duyệt vào các ô trống. Vui lòng kiểm tra lại trước khi lưu.', 'success');
                                     }}
-                                    className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-[10px] font-bold shadow-sm transition-all"
+                                    className={`px-3 py-1.5 ${isHarvestStage ? 'bg-amber-600 hover:bg-amber-700' : 'bg-cyan-600 hover:bg-cyan-700'} text-white rounded-lg text-[10px] font-bold shadow-sm transition-all`}
                                     title="Điền số liệu THỰC TẾ (TT) từ task reports đã duyệt vào các ô trống. KHÔNG điền kế hoạch (KH)."
                                   >
                                     ⬇️ Điền thực tế vào form (chỉ ô trống)
@@ -2417,53 +2711,222 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
                                 </div>
 
                                 <p className="text-[9px] text-cyan-700 italic mb-2">
-                                  💡 <strong>KH</strong> (kế hoạch) = tổng số lần dự kiến theo lịch (tính bằng <code>floor((endDate - startDate) / frequencyDays) + 1</code>).
-                                  <strong>TT</strong> (thực tế) = số task report <em>đã duyệt</em> của batch.
-                                  <strong className="text-emerald-700">Nút "Điền vào form" chỉ điền số THỰC TẾ</strong> — researcher review rồi tự chỉnh thêm nếu cần.
+                                  💡 Bảng so sánh <strong className="text-blue-700">KH</strong> (kế hoạch) và <strong className="text-emerald-700">TT</strong> (thực tế) cho mỗi batch trong stage, theo <code>taskType</code>:
+                                  {stageTypeName === 'Harvesting' || stageTypeName === 'Harvest' ? (
+                                    <>
+                                      Với stage <strong>Thu hoạch</strong>, bảng hiển thị <strong>Số cây thu hoạch</strong> và <strong>Sản lượng (kg)</strong> tính từ <em>task report</em> của taskType <code>Harvest/Harvesting</code>:
+                                      <strong className="text-emerald-700">Số cây</strong> = tổng <code>resultData.soLuongCayThuHoach</code> hoặc fallback <code>batch.plantCount</code>;
+                                      <strong className="text-emerald-700">Sản lượng</strong> = tổng <code>resultData.sanLuongKg</code>.
+                                      Cột KH để trống (thu hoạch không lên lịch lặp).
+                                    </>
+                                  ) : (
+                                    <>
+                                      <code className="text-blue-700">Watering</code> → Số lần tưới,
+                                      <code className="text-blue-700">Fertilizing</code> → Số lần bón phân,
+                                      <code className="text-blue-700">Spraying/PestControl</code> → Số lần phun thuốc.
+                                      <strong className="text-blue-700">KH</strong> = số lần dự kiến theo lịch (<code>floor((endDate - startDate) / frequencyDays) + 1</code>).
+                                      <strong className="text-emerald-700">TT</strong> = số <em>task report</em> đã duyệt có <code>taskType</code> tương ứng.
+                                    </>
+                                  )}
+                                  Mỗi hàng = 1 batch → researcher xem batch nào đang tiến độ thế nào.
+                                  <strong className="text-emerald-700">Nút "Điền vào form" chỉ điền cột TT</strong> (kết quả thực tế) — researcher review rồi tự chỉnh thêm nếu cần.
                                 </p>
 
                                 <div className="overflow-x-auto bg-white rounded-lg border border-cyan-200">
                                   <table className="w-full text-[10px]">
                                     <thead>
                                       <tr className="bg-cyan-100 text-cyan-900">
-                                        <th className="px-2 py-2 text-left">Nhóm</th>
+                                        <th rowSpan={2} className="px-2 py-2 text-left align-middle border-r border-cyan-300">Batch</th>
+                                        <th rowSpan={2} className="px-2 py-2 text-left align-middle border-r border-cyan-300">Nhóm</th>
                                         {careFields.map(f => (
-                                          <th key={f.key} className="px-2 py-2 text-center border-l border-cyan-200" colSpan={2} title={`KH = tổng lần dự kiến theo lịch (startDate→endDate, frequencyDays). TT = số task report đã duyệt.`}>
-                                            <div className="flex items-center justify-center gap-1">{f.icon}<span>{f.label}</span></div>
-                                            <div className="text-[8px] font-normal text-cyan-700">(KH / TT)</div>
+                                          <th key={`h-${f.key}`} colSpan={2} className="px-2 py-1 text-center border-l border-cyan-300" title={`${f.label} — chia thành KH (kế hoạch) và TT (thực tế).`}>
+                                            <div className="flex items-center justify-center gap-1">{f.icon}<span>{f.label}{f.unit ? ` (${f.unit})` : ''}</span></div>
                                           </th>
                                         ))}
                                       </tr>
+                                      <tr className="bg-cyan-50 text-cyan-800">
+                                        {careFields.map(f => {
+                                          const isHarvest = stageTypeName === 'Harvesting' || stageTypeName === 'Harvest';
+                                          return (
+                                            <Fragment key={`h-sub-${f.key}`}>
+                                              <th className={`px-1 py-1 text-center text-[8px] font-bold border-l border-cyan-200 ${isHarvest ? 'text-slate-400' : 'text-blue-700'}`} title={isHarvest ? 'Thu hoạch không có lịch kế hoạch lặp' : 'KH = số schedule có taskType tương ứng trong stage này'}>
+                                                {isHarvest ? '—' : 'KH'}
+                                              </th>
+                                              <th className={`px-1 py-1 text-center text-[8px] font-bold ${isHarvest ? 'text-amber-700' : 'text-emerald-700'}`} title="TT = giá trị thực tế tính từ task report">
+                                                {isHarvest ? 'TT' : 'TT'}
+                                              </th>
+                                            </Fragment>
+                                          );
+                                        })}
+                                      </tr>
                                     </thead>
                                     <tbody>
-                                      {/* Chỉ hiển thị hàng tổng theo nhóm (gom các batch trong nhóm) */}
-                                      {groups.map(g => {
-                                        const perG = ref.perGroup[g.id] || {};
-                                        const metaG = perG._meta || {};
+                                      {/* Liệt kê theo từng BATCH (ứng với nhóm nào) → researcher dễ đối chiếu.
+                                          Cuối bảng thêm hàng "Tổng theo nhóm" để xem tổng các batch cùng nhóm. */}
+                                      {(() => {
+                                        // Lấy các batch thuộc stage hiện tại
+                                        const stageBatchIds = new Set();
+                                        schedules.forEach(sc => {
+                                          if ((sc.experimentStageId === s.id || sc.stageId === s.id) && sc.batchId) {
+                                            stageBatchIds.add(sc.batchId);
+                                          }
+                                        });
+                                        // Fallback: lấy batch có report
+                                        if (stageBatchIds.size === 0) {
+                                          Object.keys(taskReportsByBatch || {}).forEach(bid => stageBatchIds.add(bid));
+                                        }
+                                        // Nếu vẫn rỗng → lấy tất cả batches của experiment
+                                        const batchesToShow = stageBatchIds.size > 0
+                                          ? batches.filter(b => stageBatchIds.has(b.id))
+                                          : batches;
+
+                                        if (batchesToShow.length === 0) return null;
+
+                                        // Gom các batch theo nhóm để hiển thị hàng tổng cuối bảng
+                                        const batchesByGroup = new Map();
+                                        batchesToShow.forEach(b => {
+                                          const gid = b.groupId || b.group?.id;
+                                          if (!gid) return;
+                                          if (!batchesByGroup.has(gid)) batchesByGroup.set(gid, []);
+                                          batchesByGroup.get(gid).push(b);
+                                        });
+
+                                        // Chuẩn bị helper: tính tổng field (số cây, kg) từ TẤT CẢ report Harvest/Harvesting của batch
+                                        const FIELD_ALIASES = {
+                                          soLuongCayThuHoach: ['soLuongCayThuHoach', 'plantCount'],
+                                          sanLuongKg: ['sanLuongKg', 'harvestWeight'],
+                                          sanLuongTan: ['sanLuongTan'],
+                                        };
+                                        const sumReportField = (batchId, fieldName) => {
+                                          const reports = (taskReportsByBatch || {})[batchId] || [];
+                                          const aliases = FIELD_ALIASES[fieldName] || [fieldName];
+                                          return reports.reduce((acc, r) => {
+                                            const t = r.taskType || r.TaskType;
+                                            if (t !== 'Harvest' && t !== 'Harvesting') return acc;
+                                            const rd = r.resultData || {};
+                                            for (const key of aliases) {
+                                              let v = rd[key] ?? rd.overall?.[key] ?? r[key];
+                                              if (v !== undefined && v !== null && v !== '') {
+                                                const n = Number(v);
+                                                if (!isNaN(n)) return acc + n;
+                                              }
+                                            }
+                                            return acc;
+                                          }, 0);
+                                        };
+
                                         return (
-                                          <tr key={`g-${g.id}`} className="border-t border-cyan-100 hover:bg-cyan-50/50">
-                                            <td className="px-2 py-1.5 font-bold text-purple-900">
-                                              <span>🧪 {g.groupName || '—'}</span>
-                                              <span className="px-1 py-0.5 ml-1 bg-purple-100 text-purple-700 rounded text-[8px] font-bold">{g.groupType || 'Group'}</span>
-                                            </td>
-                                            {careFields.map(f => {
-                                              const m = metaG[f.key] || {};
+                                          <>
+                                            {batchesToShow.map(b => {
+                                              const gid = b.groupId || b.group?.id;
+                                              const group = groups.find(g => g.id === gid);
+                                              const batchVals = ref.byBatch[b.id] || {};
                                               return (
-                                                <td key={`g-${g.id}-${f.key}-kh`} className="px-2 py-1.5 text-center font-mono font-extrabold border-l border-cyan-100 text-blue-700" title="KH = tổng số lần dự kiến theo lịch (gom các batch trong nhóm)">
-                                                  {m.planned || 0}
-                                                </td>
+                                                <tr key={`b-${b.id}`} className="border-t border-cyan-100 hover:bg-cyan-50/50">
+                                                  <td className="px-2 py-1.5 font-mono font-bold text-slate-800 border-r border-cyan-200">
+                                                    <div className="flex flex-col">
+                                                      <span>{b.batchCode || `Batch ${b.id?.slice(0, 6)}`}</span>
+                                                      {b.plantingDate && <span className="text-[8px] text-slate-500 font-normal">{new Date(b.plantingDate).toLocaleDateString('vi-VN')}</span>}
+                                                    </div>
+                                                  </td>
+                                                  <td className="px-2 py-1.5 text-purple-900 font-bold border-r border-cyan-200">
+                                                    <span>🧪 {group?.groupName || '—'}</span>
+                                                  </td>
+                                                  {careFields.map(f => {
+                                                    if (isHarvestStage) {
+                                                      // Thu hoạch: KH = "—" (không có lịch), TT = tổng field từ report
+                                                      let tt = 0;
+                                                      if (f.key === 'soCayThuHoach') {
+                                                        // Tổng số cây thu hoạch = sumReportField(soLuongCayThuHoach) hoặc fallback batch.plantCount nếu có report nhưng thiếu field
+                                                        tt = sumReportField(b.id, 'soLuongCayThuHoach');
+                                                        if (tt === 0) {
+                                                          // fallback: nếu có ít nhất 1 report Harvest → dùng plantCount (số cây gieo)
+                                                          const hasHarvest = ((taskReportsByBatch || {})[b.id] || []).some(r => ['Harvest', 'Harvesting'].includes(r.taskType || r.TaskType));
+                                                          if (hasHarvest) tt = Number(b.plantCount || 0);
+                                                        }
+                                                      } else if (f.key === 'sanLuongKg') {
+                                                        tt = sumReportField(b.id, 'sanLuongKg');
+                                                        // fallback nếu BE trống sanLuongKg mà có sanLuongTan → *1000
+                                                        if (tt === 0) {
+                                                          const tan = sumReportField(b.id, 'sanLuongTan');
+                                                          if (tan > 0) tt = tan * 1000;
+                                                        }
+                                                      }
+                                                      return (
+                                                        <Fragment key={`b-${b.id}-${f.key}`}>
+                                                          <td className="px-1 py-1.5 text-center font-mono border-l border-cyan-100 text-slate-300" title="Thu hoạch không có lịch kế hoạch">—</td>
+                                                          <td className={`px-1 py-1.5 text-center font-mono font-bold ${tt > 0 ? 'text-amber-700' : 'text-slate-300'}`} title={`TT = tổng ${f.key} từ report Harvest/Harvesting của batch ${b.batchCode || b.id?.slice(0, 6)}`}>
+                                                            {tt > 0 ? (f.unit === 'kg' ? tt.toFixed(1) : Math.round(tt)) : '—'}
+                                                          </td>
+                                                        </Fragment>
+                                                      );
+                                                    }
+                                                    // Care/Growing/...: KH = planned, TT = actual
+                                                    const m = batchVals[f.key] || { planned: 0, actual: 0 };
+                                                    const kh = m.planned || 0;
+                                                    const tt = m.actual || 0;
+                                                    return (
+                                                      <Fragment key={`b-${b.id}-${f.key}`}>
+                                                        <td className={`px-1 py-1.5 text-center font-mono font-bold border-l border-cyan-100 ${kh > 0 ? 'text-blue-700' : 'text-slate-300'}`} title={`KH = số lần thực hiện theo lịch (startDate→endDate, frequencyDays) của batch ${b.batchCode || b.id?.slice(0, 6)}`}>
+                                                          {kh}
+                                                        </td>
+                                                        <td className={`px-1 py-1.5 text-center font-mono font-bold ${tt > 0 ? 'text-emerald-700' : 'text-slate-300'}`} title={`TT = số task report có taskType tương ứng của batch ${b.batchCode || b.id?.slice(0, 6)}`}>
+                                                          {tt}
+                                                        </td>
+                                                      </Fragment>
+                                                    );
+                                                  })}
+                                                </tr>
                                               );
-                                            }).concat(careFields.map(f => {
-                                              const m = metaG[f.key] || {};
+                                            })}
+
+                                            {/* Hàng tổng theo nhóm (nếu có ≥2 batch trong cùng nhóm) */}
+                                            {Array.from(batchesByGroup.entries()).map(([gid, bs]) => {
+                                              if (bs.length < 2) return null;
+                                              const group = groups.find(g => g.id === gid);
+                                              const perG = ref.perGroup[gid] || {};
                                               return (
-                                                <td key={`g-${g.id}-${f.key}-tt`} className="px-2 py-1.5 text-center font-mono font-extrabold text-emerald-700" title="TT = số task report đã duyệt (Approved/Completed/Done) của các batch trong nhóm">
-                                                  {m.actual || 0}
-                                                </td>
+                                                <tr key={`sum-${gid}`} className="border-t-2 border-cyan-300 bg-cyan-50/40 font-extrabold">
+                                                  <td colSpan={2} className="px-2 py-1.5 text-[9px] uppercase text-cyan-700 border-r border-cyan-200">
+                                                    📊 Tổng nhóm {group?.groupName || '—'} ({bs.length} batch)
+                                                  </td>
+                                                  {careFields.map(f => {
+                                                    if (isHarvestStage) {
+                                                      let tt = 0;
+                                                      if (f.key === 'soCayThuHoach') {
+                                                        tt = bs.reduce((acc, x) => acc + sumReportField(x.id, 'soLuongCayThuHoach'), 0);
+                                                      } else if (f.key === 'sanLuongKg') {
+                                                        tt = bs.reduce((acc, x) => acc + sumReportField(x.id, 'sanLuongKg'), 0);
+                                                      }
+                                                      return (
+                                                        <Fragment key={`sum-${gid}-${f.key}`}>
+                                                          <td className="px-1 py-1.5 text-center font-mono border-l border-cyan-200 text-slate-300">—</td>
+                                                          <td className={`px-1 py-1.5 text-center font-mono font-bold ${tt > 0 ? 'text-amber-800' : 'text-slate-300'}`}>
+                                                            {tt > 0 ? (f.unit === 'kg' ? tt.toFixed(1) : Math.round(tt)) : '—'}
+                                                          </td>
+                                                        </Fragment>
+                                                      );
+                                                    }
+                                                    const m = perG[f.key] || { planned: 0, actual: 0 };
+                                                    const kh = m.planned || 0;
+                                                    const tt = m.actual || 0;
+                                                    return (
+                                                      <Fragment key={`sum-${gid}-${f.key}`}>
+                                                        <td className={`px-1 py-1.5 text-center font-mono font-bold border-l border-cyan-200 ${kh > 0 ? 'text-blue-800' : 'text-slate-300'}`}>
+                                                          {kh}
+                                                        </td>
+                                                        <td className={`px-1 py-1.5 text-center font-mono font-bold ${tt > 0 ? 'text-emerald-800' : 'text-slate-300'}`}>
+                                                          {tt}
+                                                        </td>
+                                                      </Fragment>
+                                                    );
+                                                  })}
+                                                </tr>
                                               );
-                                            }))}
-                                          </tr>
+                                            })}
+                                          </>
                                         );
-                                      })}
+                                      })()}
                                     </tbody>
                                   </table>
                                 </div>
@@ -2927,20 +3390,29 @@ const SectionCard = ({ title, icon, children, color = 'purple' }) => {
   const colorMap = {
     purple: 'bg-purple-50 border-purple-100',
     blue: 'bg-blue-50 border-blue-100',
+    sky: 'bg-sky-50 border-sky-100',
     green: 'bg-green-50 border-green-100',
     amber: 'bg-amber-50 border-amber-100',
   };
   const iconColor = {
     purple: 'text-purple-600',
     blue: 'text-blue-600',
+    sky: 'text-sky-600',
     green: 'text-green-600',
     amber: 'text-amber-600',
   };
+  const titleColor = {
+    purple: 'text-purple-700',
+    blue: 'text-blue-700',
+    sky: 'text-sky-700',
+    green: 'text-green-700',
+    amber: 'text-amber-700',
+  };
   return (
-    <div className={`rounded-xl p-4 border ${colorMap[color]}`}>
+    <div className={`rounded-xl p-4 border ${colorMap[color] || colorMap.purple}`}>
       <div className="flex items-center gap-2 mb-3">
-        <span className={`text-lg ${iconColor[color]}`}>{icon}</span>
-        <h4 className={`text-xs font-bold ${color === 'purple' ? 'text-purple-700' : color === 'blue' ? 'text-blue-700' : color === 'green' ? 'text-green-700' : 'text-amber-700'}`}>{title}</h4>
+        <span className={`text-lg ${iconColor[color] || 'text-purple-600'}`}>{icon}</span>
+        <h4 className={`text-xs font-bold ${titleColor[color] || 'text-purple-700'}`}>{title}</h4>
       </div>
       {children}
     </div>
@@ -2966,16 +3438,28 @@ const DesignField = ({ label, value, onChange, type = 'text', unit, step, placeh
 );
 
 const DesignTab = ({ design, form, setForm, onSave, onDelete, loading }) => {
-  const params = parseDesignParams(form.designParameters);
+  // Parse designParameters (JSON string) để lấy treatments (mảng tên nhóm) từ BE
+  const parsedParams = parseDesignParams(form.designParameters);
+  const treatmentsList = Array.isArray(parsedParams.treatments) ? parsedParams.treatments : [];
 
-  const updateParam = (key, value) => {
-    const newParams = { ...params, [key]: value };
+  // Helper cập nhật nhanh 1 field trong form (không stringify JSON mỗi lần)
+  const updateField = (key, value) => setForm({ ...form, [key]: value });
+
+  // Helper cập nhật treatment (string) - ghi đè mảng treatments trong designParameters
+  const updateTreatments = (arr) => {
+    const newParams = { ...parsedParams, treatments: arr };
     setForm({ ...form, designParameters: JSON.stringify(newParams) });
   };
 
   const generateSeed = () => {
-    updateParam('randomSeed', Math.floor(Math.random() * 999999) + 1);
+    updateField('randomSeed', Math.floor(Math.random() * 999999) + 1);
   };
+
+  // Tính tổng số ô tự động (chỉ hiển thị, không lưu)
+  const totalPlotsAuto = (parseInt(form.plantsPerPlot) || 0)
+    * (parseInt(form.rowsPerPlot) || 0)
+    * (parseInt(form.blockCount) || 1)
+    * (parseInt(form.replicationCount) || 1);
 
   return (
     <div className="space-y-4">
@@ -2987,119 +3471,175 @@ const DesignTab = ({ design, form, setForm, onSave, onDelete, loading }) => {
         <div className="grid grid-cols-3 gap-3">
           <div>
             <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Loại Thiết Kế</label>
-            <select value={form.designType} onChange={e => setForm({ ...form, designType: e.target.value })}
+            <select value={form.designType} onChange={e => updateField('designType', e.target.value)}
               className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm bg-white">
               {DESIGN_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
           </div>
           <div>
-            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Số Lần Lặp</label>
-            <input type="number" value={form.replicationCount} onChange={e => setForm({ ...form, replicationCount: parseInt(e.target.value) || 1 })}
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Số Lần Lặp (Replication)</label>
+            <input type="number" value={form.replicationCount} onChange={e => updateField('replicationCount', parseInt(e.target.value) || 1)}
               min="1" max="10" className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm bg-white" />
           </div>
           <div>
-            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Số Nhóm Xử Lý</label>
-            <input type="number" value={params.treatments || ''} onChange={e => updateParam('treatments', parseInt(e.target.value) || 0)}
-              min="1" placeholder="VD: 4" className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm bg-white" />
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Số Nhóm Xử Lý (Treatments)</label>
+            <input type="number" value={treatmentsList.length || ''} readOnly
+              placeholder="Sửa bên dưới" className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm bg-purple-50/50 cursor-not-allowed" />
           </div>
+        </div>
+        {/* Treatments list */}
+        <div className="mt-3">
+          <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">
+            Tên các nhóm xử lý (Treatments) — mỗi nhóm 1 dòng
+          </label>
+          <textarea
+            value={treatmentsList.join('\n')}
+            onChange={e => updateTreatments(e.target.value.split('\n').map(s => s.trim()).filter(Boolean))}
+            rows={3}
+            placeholder="Control&#10;Treatment 1&#10;Treatment 2"
+            className="w-full px-3 py-2 border border-purple-200 rounded-lg text-sm bg-white resize-none font-mono"
+          />
+          <p className="text-[10px] text-on-surface-variant mt-1">
+            Mỗi dòng = 1 nhóm. Dữ liệu lưu vào <code>designParameters.treatments[]</code>.
+          </p>
         </div>
       </div>
 
-      {/* 1. Experimental Layout */}
-      <SectionCard title="1. Experimental Layout" icon="📏" color="purple">
+      {/* 1. Khoảng cách & Bố trí */}
+      <SectionCard title="1. Khoảng Cách & Bố Trí (Layout)" icon="📏" color="purple">
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          <DesignField label="Row Spacing" value={params.spacing?.row || ''} onChange={e => updateParam('spacing', { ...params.spacing, row: e.target.value })} unit="cm" placeholder="50" />
-          <DesignField label="Plant Spacing" value={params.spacing?.plant || ''} onChange={e => updateParam('spacing', { ...params.spacing, plant: e.target.value })} unit="cm" placeholder="30" />
-          <DesignField label="Plants per Plot" value={params.plantsPerPlot || ''} onChange={e => updateParam('plantsPerPlot', parseInt(e.target.value) || 0)} placeholder="25" />
-          <DesignField label="Rows per Plot" value={params.rowsPerPlot || ''} onChange={e => updateParam('rowsPerPlot', parseInt(e.target.value) || 0)} placeholder="5" />
-          <DesignField label="Beds Required" value={params.bedsRequired || ''} onChange={e => updateParam('bedsRequired', parseInt(e.target.value) || 0)} placeholder="Auto" readOnly />
-          <DesignField label="Layout Type" value={params.layout || ''} onChange={e => updateParam('layout', e.target.value)} placeholder="RCBD" />
+          <DesignField label="Khoảng cách hàng" value={form.rowSpacingCm} onChange={e => updateField('rowSpacingCm', parseFloat(e.target.value) || 0)} unit="cm" placeholder="50" />
+          <DesignField label="Khoảng cách cây" value={form.plantSpacingCm} onChange={e => updateField('plantSpacingCm', parseFloat(e.target.value) || 0)} unit="cm" placeholder="30" />
+          <DesignField label="Số cây / ô" value={form.plantsPerPlot} onChange={e => updateField('plantsPerPlot', parseInt(e.target.value) || 0)} placeholder="25" />
+          <DesignField label="Số hàng / ô" value={form.rowsPerPlot} onChange={e => updateField('rowsPerPlot', parseInt(e.target.value) || 0)} placeholder="5" />
+          <DesignField label="Số luống cần" value={form.bedsRequired} onChange={e => updateField('bedsRequired', parseInt(e.target.value) || 0)} placeholder="Tự động" />
+          <DesignField label="Loại bố trí" value={form.layoutType} onChange={e => updateField('layoutType', e.target.value)} placeholder="RCBD" />
         </div>
       </SectionCard>
 
-      {/* 2. Plot Configuration */}
-      <SectionCard title="2. Plot Configuration" icon="📐" color="blue">
+      {/* 2. Cấu hình ô */}
+      <SectionCard title="2. Cấu Hình Ô Thí Nghiệm (Plot)" icon="📊" color="blue">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <DesignField label="Plot Length" value={params.plotLength || ''} onChange={e => updateParam('plotLength', parseFloat(e.target.value) || 0)} unit="m" step="0.1" placeholder="5" />
-          <DesignField label="Plot Width" value={params.plotWidth || ''} onChange={e => updateParam('plotWidth', parseFloat(e.target.value) || 0)} unit="m" step="0.1" placeholder="2" />
-          <DesignField label="Plot Area" value={params.plotArea ? `${params.plotArea} m²` : ''} onChange={e => updateParam('plotArea', parseFloat(e.target.value) || 0)} unit="m²" step="0.1" placeholder="10" />
-          <DesignField label="Buffer Zone" value={params.bufferZone || ''} onChange={e => updateParam('bufferZone', e.target.value)} unit="m" placeholder="1" />
-          <DesignField label="Buffer Distance" value={params.bufferDistance || ''} onChange={e => updateParam('bufferDistance', parseInt(e.target.value) || 0)} unit="cm" placeholder="50" />
-          <DesignField label="Border Rows" value={params.borderRows || ''} onChange={e => updateParam('borderRows', parseInt(e.target.value) || 0)} placeholder="1" />
-          <DesignField label="Block Count" value={params.blockCount || ''} onChange={e => updateParam('blockCount', parseInt(e.target.value) || 0)} placeholder="3" />
-          <DesignField label="Total Plots" value={params.totalPlots || ''} onChange={e => updateParam('totalPlots', parseInt(e.target.value) || 0)} placeholder="Auto" readOnly />
+          <DesignField label="Chiều dài ô" value={form.plotLengthM} onChange={e => updateField('plotLengthM', parseFloat(e.target.value) || 0)} unit="m" step="0.1" placeholder="5" />
+          <DesignField label="Chiều rộng ô" value={form.plotWidthM} onChange={e => updateField('plotWidthM', parseFloat(e.target.value) || 0)} unit="m" step="0.1" placeholder="2" />
+          <DesignField label="Diện tích ô" value={form.plotAreaM2} onChange={e => updateField('plotAreaM2', parseFloat(e.target.value) || 0)} unit="m²" step="0.1" placeholder="10" />
+          <DesignField label="Vùng đệm" value={form.bufferZoneM} onChange={e => updateField('bufferZoneM', parseFloat(e.target.value) || 0)} unit="m" placeholder="1" />
+          <DesignField label="Khoảng cách đệm" value={form.bufferDistanceCm} onChange={e => updateField('bufferDistanceCm', parseInt(e.target.value) || 0)} unit="cm" placeholder="50" />
+          <DesignField label="Số hàng biên" value={form.borderRows} onChange={e => updateField('borderRows', parseInt(e.target.value) || 0)} placeholder="1" />
+          <DesignField label="Số khối (Block)" value={form.blockCount} onChange={e => updateField('blockCount', parseInt(e.target.value) || 0)} placeholder="3" />
+          <div>
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Tổng số ô (tự động)</label>
+            <div className="w-full px-3 py-2 border border-blue-100 rounded-lg text-sm bg-blue-50/50 text-blue-700 font-bold">
+              {totalPlotsAuto > 0 ? `${totalPlotsAuto} ô` : '—'}
+            </div>
+          </div>
         </div>
       </SectionCard>
 
       {/* 3. Randomization */}
-      <SectionCard title="3. Randomization" icon="🎲" color="green">
+      <SectionCard title="3. Phân Bố Ngẫu Nhiên (Randomization)" icon="🎲" color="green">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <DesignField label="Random Seed" value={params.randomSeed || ''} onChange={e => updateParam('randomSeed', parseInt(e.target.value) || 0)} placeholder="2026" />
+          <DesignField label="Hạt giống ngẫu nhiên (Random Seed)" value={form.randomSeed} onChange={e => updateField('randomSeed', parseInt(e.target.value) || 0)} placeholder="2026" />
           <div>
-            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Randomization Method</label>
-            <select value={form.randomizationMethod} onChange={e => setForm({ ...form, randomizationMethod: e.target.value })}
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Phương pháp phân bố ngẫu nhiên</label>
+            <select value={form.randomizationMethod} onChange={e => updateField('randomizationMethod', e.target.value)}
               className="w-full px-3 py-2 border border-green-200 rounded-lg text-sm bg-white">
-              <option value="CRD">CRD - Completely Randomized Design</option>
-              <option value="RCBD">RCBD - Randomized Complete Block Design</option>
-              <option value="RBCD">RBCD - Randomized Block Complete Design</option>
-              <option value="LSD">LSD - Latin Square Design</option>
-              <option value="Factorial">Factorial Design</option>
-              <option value="SplitPlot">Split-Plot Design</option>
+              <option value="">— Chọn phương pháp —</option>
+              {RANDOMIZATION_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
             </select>
           </div>
-          <DesignField label="Blocking Variable" value={params.blockingVariable || ''} onChange={e => updateParam('blockingVariable', e.target.value)} placeholder="Light, Soil, etc." />
+          <DesignField label="Biến phân khối" value={form.blockingVariable} onChange={e => updateField('blockingVariable', e.target.value)} placeholder="VD: Ánh sáng, Đất" />
         </div>
         <div className="mt-3">
           <button onClick={generateSeed} type="button"
             className="px-4 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-medium transition-colors">
-            🎲 Generate Random Seed
+            Tạo hạt giống ngẫu nhiên
           </button>
         </div>
       </SectionCard>
 
-      {/* 4. Environmental Conditions */}
-      <SectionCard title="4. Environmental Conditions" icon="🌡️" color="amber">
+      {/* 4. Tưới nước */}
+      <SectionCard title="4. Chế Độ Tưới Nước (Watering)" icon="💧" color="sky">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <DesignField label="Lượng nước / cây / lần" value={form.wateringAmountMlPerPlant} onChange={e => updateField('wateringAmountMlPerPlant', parseFloat(e.target.value) || 0)} unit="ml" step="50" placeholder="500" />
+          <DesignField label="Tần suất tưới" value={form.wateringFrequencyDays} onChange={e => updateField('wateringFrequencyDays', parseInt(e.target.value) || 0)} unit="ngày/lần" placeholder="1" />
+          <div>
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Phương pháp tưới</label>
+            <select value={form.wateringMethod} onChange={e => updateField('wateringMethod', e.target.value)}
+              className="w-full px-3 py-2 border border-blue-200 rounded-lg text-sm bg-white">
+              <option value="Drip">💧 Nhỏ giọt (Drip)</option>
+              <option value="Sprinkler">🌧️ Phun mưa (Sprinkler)</option>
+              <option value="Flood">🌊 Ngập (Flood)</option>
+              <option value="Manual">🚿 Thủ công (Manual)</option>
+            </select>
+          </div>
+        </div>
+      </SectionCard>
+
+      {/* 5. Bón phân */}
+      <SectionCard title="5. Chế Độ Bón Phân (Fertilizing)" icon="🌱" color="green">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <div>
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Loại phân</label>
+            <select value={form.fertilizerType} onChange={e => updateField('fertilizerType', e.target.value)}
+              className="w-full px-3 py-2 border border-green-200 rounded-lg text-sm bg-white">
+              <option value="NPK">NPK (tổng hợp)</option>
+              <option value="Urea">Urê (đạm)</option>
+              <option value="DAP">DAP (lân)</option>
+              <option value="KCl">KCl (kali)</option>
+              <option value="Organic">Phân hữu cơ</option>
+              <option value="Compost">Phân compost</option>
+              <option value="Other">Khác</option>
+            </select>
+          </div>
+          <DesignField label="Lượng phân / cây / lần" value={form.fertilizerAmountGPerPlant} onChange={e => updateField('fertilizerAmountGPerPlant', parseFloat(e.target.value) || 0)} unit="g" step="1" placeholder="10" />
+          <DesignField label="Tần suất bón" value={form.fertilizerFrequencyDays} onChange={e => updateField('fertilizerFrequencyDays', parseInt(e.target.value) || 0)} unit="ngày/lần" placeholder="14" />
+        </div>
+      </SectionCard>
+
+      {/* 6. Điều kiện môi trường (ngưỡng) */}
+      <SectionCard title="6. Ngưỡng Điều Kiện Môi Trường (Environment)" icon="🌡️" color="amber">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div>
-            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Target Temperature</label>
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Nhiệt độ (°C)</label>
             <div className="flex items-center gap-1">
-              <input type="number" value={params.envConditions?.temperatureMin || ''} onChange={e => updateParam('envConditions', { ...params.envConditions, temperatureMin: parseFloat(e.target.value) || 0 })}
+              <input type="number" value={form.temperatureMinC} onChange={e => updateField('temperatureMinC', parseFloat(e.target.value) || 0)}
                 placeholder="20" className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white/70" />
               <span className="text-gray-400">-</span>
-              <input type="number" value={params.envConditions?.temperatureMax || ''} onChange={e => updateParam('envConditions', { ...params.envConditions, temperatureMax: parseFloat(e.target.value) || 0 })}
+              <input type="number" value={form.temperatureMaxC} onChange={e => updateField('temperatureMaxC', parseFloat(e.target.value) || 0)}
                 placeholder="30" className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white/70" />
               <span className="text-xs text-gray-400">°C</span>
             </div>
           </div>
           <div>
-            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Target Humidity</label>
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Độ ẩm (%)</label>
             <div className="flex items-center gap-1">
-              <input type="number" value={params.envConditions?.humidityMin || ''} onChange={e => updateParam('envConditions', { ...params.envConditions, humidityMin: parseFloat(e.target.value) || 0 })}
+              <input type="number" value={form.humidityMinPct} onChange={e => updateField('humidityMinPct', parseFloat(e.target.value) || 0)}
                 placeholder="60" className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white/70" />
               <span className="text-gray-400">-</span>
-              <input type="number" value={params.envConditions?.humidityMax || ''} onChange={e => updateParam('envConditions', { ...params.envConditions, humidityMax: parseFloat(e.target.value) || 0 })}
+              <input type="number" value={form.humidityMaxPct} onChange={e => updateField('humidityMaxPct', parseFloat(e.target.value) || 0)}
                 placeholder="80" className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white/70" />
               <span className="text-xs text-gray-400">%</span>
             </div>
           </div>
           <div>
-            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Target pH</label>
+            <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">pH đất</label>
             <div className="flex items-center gap-1">
-              <input type="number" value={params.envConditions?.phMin || ''} onChange={e => updateParam('envConditions', { ...params.envConditions, phMin: parseFloat(e.target.value) || 0 })}
-                placeholder="6.0" step="0.1" className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white/70" />
+              <input type="number" step="0.1" value={form.phMin} onChange={e => updateField('phMin', parseFloat(e.target.value) || 0)}
+                placeholder="6.0" className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white/70" />
               <span className="text-gray-400">-</span>
-              <input type="number" value={params.envConditions?.phMax || ''} onChange={e => updateParam('envConditions', { ...params.envConditions, phMax: parseFloat(e.target.value) || 0 })}
-                placeholder="6.5" step="0.1" className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white/70" />
+              <input type="number" step="0.1" value={form.phMax} onChange={e => updateField('phMax', parseFloat(e.target.value) || 0)}
+                placeholder="6.5" className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-white/70" />
             </div>
           </div>
-          <DesignField label="Target Light" value={params.envConditions?.light || ''} onChange={e => updateParam('envConditions', { ...params.envConditions, light: e.target.value })} unit="Lux" placeholder="10000" />
+          <DesignField label="Ánh sáng" value={form.lightLux} onChange={e => updateField('lightLux', parseInt(e.target.value) || 0)} unit="Lux" placeholder="10000" />
         </div>
       </SectionCard>
 
-      {/* Notes */}
+      {/* Ghi chú */}
       <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
         <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">Ghi Chú Thiết Kế</label>
-        <textarea value={params.notes || ''} onChange={e => updateParam('notes', e.target.value)}
+        <textarea value={form.notes} onChange={e => updateField('notes', e.target.value)}
           placeholder="Mô tả chi tiết về thiết kế thí nghiệm..."
           rows={2} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white resize-none" />
       </div>
@@ -3364,7 +3904,7 @@ const SchedulesTab = ({ schedules = [], stages = [], batches = [], form, setForm
 
 // ── Batches Tab ───────────────────────────────────────────────────────────────
 
-const BatchesTab = ({ batches = [], bedAssignments = [], groups = [], form, setForm, onCreate, onDelete, onEdit, onRandomizeBeds, loading, taskReportsByBatch = {} }) => {
+const BatchesTab = ({ batches = [], bedAssignments = [], groups = [], form, setForm, onCreate, onDelete, onEdit, loading, taskReportsByBatch = {} }) => {
   // Helper render cell "Số cây thực tế" (tính từ các TaskReport Planting của batch)
   const renderActualCountCell = (batch) => {
     const reports = taskReportsByBatch[batch.id] || [];
@@ -3411,19 +3951,19 @@ const BatchesTab = ({ batches = [], bedAssignments = [], groups = [], form, setF
       </div>
     )}
 
-    {/* Nút Randomize Beds - song song với cách tạo thủ công */}
-    {bedAssignments.length > 0 && (
+    {/* Nút Randomize Beds đã được ẩn theo yêu cầu người dùng - chỉ dùng cách tạo thủ công bên dưới */}
+    {false && bedAssignments.length > 0 && (
       <div className="bg-indigo-50 rounded-xl p-4 border border-indigo-100">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div className="flex-1 min-w-0">
-            <h4 className="text-xs font-bold text-indigo-700 mb-1">🎲 Randomize Beds (Khuyến nghị)</h4>
+            <h4 className="text-xs font-bold text-indigo-700 mb-1">Randomize Beds (Khuyến nghị)</h4>
             <p className="text-[11px] text-indigo-600/80 leading-relaxed">
               Tự động phân bổ ngẫu nhiên các luống cho từng nhóm — đảm bảo tính ngẫu nhiên hóa của thiết kế thí nghiệm.
             </p>
           </div>
           <button onClick={onRandomizeBeds} disabled={loading || groups.length === 0}
             className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold disabled:opacity-50 shadow-sm shadow-indigo-600/20 whitespace-nowrap">
-            {loading ? 'Đang xử lý...' : '🎲 Randomize Beds'}
+            {loading ? 'Đang xử lý...' : 'Randomize Beds'}
           </button>
         </div>
       </div>
