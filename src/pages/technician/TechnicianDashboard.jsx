@@ -1032,6 +1032,17 @@ const TechReportsTab = () => {
     [reports, selectedTask]
   );
 
+  // Resolve metric label - trả về key nguyên bản nếu không match 'def_' pattern.
+  // TechReportsTab không load definitions riêng nên dùng bản đơn giản này.
+  const resolveMetricLabel = (key) => {
+    if (typeof key !== 'string') return String(key);
+    if (key.startsWith('def_')) {
+      const defId = key.slice(4);
+      return `Chỉ số #${defId.slice(0, 8)}`;
+    }
+    return key;
+  };
+
   return (
     <div className="space-y-4 animate-fade-in">
       <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-col sm:flex-row gap-3 sm:items-end">
