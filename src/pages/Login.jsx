@@ -64,17 +64,17 @@ const Login = () => {
         };
         navigateTo(rolePaths[data.role] || '/');
       } else {
-        showMsg('Google Login failed at backend!', 'error');
+        showMsg('Đăng nhập Google thất bại ở backend!', 'error');
       }
     } catch (err) {
       console.error(err);
-      showMsg('Connection failed!', 'error');
+      showMsg('Kết nối thất bại!', 'error');
     }
   };
 
   const loginWithGoogle = useGoogleLogin({
     onSuccess: handleGoogleSuccess,
-    onError: () => showMsg('Google Login Failed', 'error'),
+    onError: () => showMsg('Đăng Nhập Google Thất Bại', 'error'),
   });
 
   const handleSubmit = async (e) => {
@@ -103,11 +103,11 @@ const Login = () => {
           navigateTo(rolePaths[data.role] || '/');
         } else {
           const error = await response.json();
-          showMsg(error.message || 'Login failed!', 'error');
+          showMsg(error.message || 'Đăng nhập thất bại!', 'error');
         }
       } else if (view === 'signup') {
         if (password !== confirmPassword) {
-          showMsg('Passwords do not match!', 'warning');
+          showMsg('Mật khẩu không khớp!', 'warning');
           return;
         }
 
@@ -118,11 +118,11 @@ const Login = () => {
         });
 
         if (response.ok) {
-          showMsg('Registration successful! Please sign in.', 'success');
+          showMsg('Đăng ký thành công! Vui lòng đăng nhập.', 'success');
           setView('login');
         } else {
           const error = await response.json();
-          showMsg(error.message || 'Registration failed!', 'error');
+          showMsg(error.message || 'Đăng ký thất bại!', 'error');
         }
       } else if (view === 'forgot') {
         const response = await fetch(`${AUTH_URL}/forgot-password`, {
@@ -186,7 +186,7 @@ const Login = () => {
           <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
           <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
         </svg>
-        Continue with Google
+        Tiếp tục với Google
       </button>
     </div>
   );
@@ -198,11 +198,11 @@ const Login = () => {
       <div className="hidden lg:flex flex-1 relative flex-col bg-[#f0f2f5] bg-cover bg-center" style={{ backgroundImage: "url('/background/background-login.jpg')" }}>
         <div className="flex-1 bg-gradient-to-b from-black/10 to-black/70 flex flex-col justify-between p-14 text-white">
           <div className="animate-slide-up">
-            <h1 className="font-serif text-5xl font-bold mb-4 tracking-tight">Smart Farm</h1>
-            <p className="text-lg font-light opacity-90 max-w-md leading-relaxed">The future of agriculture, visualized.</p>
+            <h1 className="font-serif text-5xl font-bold mb-4 tracking-tight">Vườn Ươm Thông Minh</h1>
+            <p className="text-lg font-light opacity-90 max-w-md leading-relaxed">Tương lai của nông nghiệp, được mô phỏng.</p>
           </div>
           <div className="opacity-60 text-sm font-light">
-            <p>© 2026 SEP490 Project</p>
+            <p>© 2026 Dự Án SEP490</p>
           </div>
         </div>
       </div>
@@ -217,16 +217,16 @@ const Login = () => {
             <line x1="19" y1="12" x2="5" y2="12"></line>
             <polyline points="12 19 5 12 12 5"></polyline>
           </svg>
-          Simulation
+          Mô Phỏng
         </button>
 
         <div className="flex-1 flex flex-col justify-center px-8 sm:px-20 animate-slide-right">
           <div className="mb-10">
             <h2 className="text-3xl font-bold text-slate-900 mb-3 tracking-tight">
-              {view === 'login' ? 'Welcome back' : 'Reset password'}
+              {view === 'login' ? 'Chào mừng trở lại' : 'Đặt lại mật khẩu'}
             </h2>
             <p className="text-[15px] text-gray-500">
-              {view === 'login' ? 'Please enter your details to sign in.' : 'Enter your email to receive a reset link.'}
+              {view === 'login' ? 'Vui lòng nhập thông tin để đăng nhập.' : 'Nhập email để nhận liên kết đặt lại mật khẩu.'}
             </p>
           </div>
 
@@ -234,7 +234,7 @@ const Login = () => {
 
           {view === 'login' && (
             <div className="flex items-center text-center text-gray-400 text-[13px] mb-8 after:content-[''] after:flex-1 after:border-b after:border-gray-200 before:content-[''] before:flex-1 before:border-b before:border-gray-200">
-              <span className="px-4">or sign in with email</span>
+              <span className="px-4">hoặc đăng nhập bằng email</span>
             </div>
           )}
 
@@ -245,7 +245,7 @@ const Login = () => {
                   type="text" 
                   id="name" 
                   className="w-full pt-5 pb-2 px-4 text-[15px] border border-gray-200 rounded-xl bg-white text-slate-900 focus:outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 transition-all peer placeholder-transparent autofill:shadow-[inset_0_0_0_1000px_white] autofill:text-slate-900"
-                  placeholder="Full Name"
+                  placeholder="Họ và tên"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   required 
@@ -257,7 +257,7 @@ const Login = () => {
                              peer-focus:top-1.5 peer-focus:text-[11px] peer-focus:text-gray-600
                              peer-autofill:top-1.5 peer-autofill:text-[11px]"
                 >
-                  Full Name
+                  Họ và tên
                 </label>
               </div>
             )}
@@ -291,7 +291,7 @@ const Login = () => {
                   type="email" 
                   id="email" 
                   className="w-full pt-5 pb-2 px-4 text-[15px] border border-gray-200 rounded-xl bg-white text-slate-900 focus:outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 transition-all peer placeholder-transparent autofill:shadow-[inset_0_0_0_1000px_white] autofill:text-slate-900"
-                  placeholder="Email address"
+                  placeholder="Địa chỉ email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required 
@@ -304,7 +304,7 @@ const Login = () => {
                              peer-focus:top-1.5 peer-focus:text-[11px] peer-focus:text-gray-600
                              peer-autofill:top-1.5 peer-autofill:text-[11px]"
                 >
-                  Email address
+                  Địa chỉ email
                 </label>
               </div>
             )}
@@ -315,7 +315,7 @@ const Login = () => {
                   type={showPassword ? "text" : "password"} 
                   id="password" 
                   className="w-full pt-5 pb-2 px-4 text-[15px] border border-gray-200 rounded-xl bg-white text-slate-900 focus:outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 transition-all peer placeholder-transparent autofill:shadow-[inset_0_0_0_1000px_white] autofill:text-slate-900"
-                  placeholder={view === 'reset_password' ? "Mật khẩu mới" : "Password"}
+                  placeholder="Mật khẩu"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required 
@@ -327,7 +327,7 @@ const Login = () => {
                              peer-focus:top-1.5 peer-focus:text-[11px] peer-focus:text-gray-600
                              peer-autofill:top-1.5 peer-autofill:text-[11px]"
                 >
-                  {view === 'reset_password' ? "Mật khẩu mới" : "Password"}
+                  Mật khẩu
                 </label>
                 <button 
                   type="button" 
@@ -350,7 +350,7 @@ const Login = () => {
                   type={showPassword ? "text" : "password"} 
                   id="confirmPassword" 
                   className="w-full pt-5 pb-2 px-4 text-[15px] border border-gray-200 rounded-xl bg-white text-slate-900 focus:outline-none focus:border-emerald-600 focus:ring-4 focus:ring-emerald-600/10 transition-all peer placeholder-transparent autofill:shadow-[inset_0_0_0_1000px_white] autofill:text-slate-900"
-                  placeholder="Confirm Password"
+                  placeholder="Xác nhận mật khẩu"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   required 
@@ -362,7 +362,7 @@ const Login = () => {
                              peer-focus:top-1.5 peer-focus:text-[11px] peer-focus:text-gray-600
                              peer-autofill:top-1.5 peer-autofill:text-[11px]"
                 >
-                  Confirm Password
+                  Xác nhận mật khẩu
                 </label>
               </div>
             )}
@@ -371,14 +371,14 @@ const Login = () => {
               <div className="flex justify-between items-center -mt-2">
                 <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
                   <input type="checkbox" className="w-4 h-4 accent-emerald-600 cursor-pointer rounded" />
-                  Remember me
+                  Ghi nhớ tôi
                 </label>
-                <a href="#" className="text-sm text-emerald-600 font-semibold hover:underline" onClick={(e) => { e.preventDefault(); setView('forgot'); }}>Forgot password?</a>
+                <a href="#" className="text-sm text-emerald-600 font-semibold hover:underline" onClick={(e) => { e.preventDefault(); setView('forgot'); }}>Quên mật khẩu?</a>
               </div>
             )}
             
             <button type="submit" className="bg-slate-900 text-white p-4 rounded-xl text-[15px] font-semibold transition-all duration-300 mt-2 hover:bg-emerald-700 hover:-translate-y-0.5 hover:shadow-lg active:scale-[0.98]">
-              {view === 'login' ? 'Sign In' : 'Reset Password'}
+              {view === 'login' ? 'Đăng Nhập' : 'Đặt Lại Mật Khẩu'}
             </button>
           </form>
 
@@ -386,7 +386,7 @@ const Login = () => {
 
           <p className="mt-8 text-center text-sm text-gray-500">
             {view === 'forgot' && (
-              <>Remember your password? <a href="#" className="text-slate-900 font-semibold hover:underline" onClick={(e) => { e.preventDefault(); setView('login'); }}>Back to login</a></>
+              <>Quên mật khẩu? <a href="#" className="text-slate-900 font-semibold hover:underline" onClick={(e) => { e.preventDefault(); setView('login'); }}> Quay lại đăng nhập</a></>
             )}
           </p>
         </div>

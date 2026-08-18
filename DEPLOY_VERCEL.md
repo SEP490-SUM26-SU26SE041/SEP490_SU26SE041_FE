@@ -1,4 +1,4 @@
-# Hướng dẫn Deploy Smart Farm FE lên Vercel
+# Hướng dẫn Deploy Vườn Ươm Thông Minh FE lên Vercel
 
 ## 1. Chuẩn bị
 
@@ -31,7 +31,7 @@ Project đã được cấu hình sẵn:
    | `VITE_API_ORIGIN` | `https://smartfarm-sep490-api-c3emdvfmdefybacs.eastasia-01.azurewebsites.net` |
    | `VITE_GOOGLE_CLIENT_ID` | (client ID Google OAuth của bạn, nếu có) |
    Áp dụng cho cả **Production**, **Preview**, **Development**.
-5. Bấm **Deploy**. Sau ~1 phút bạn sẽ có URL dạng `https://smart-farm-sep490.vercel.app`.
+5. Bấm **Deploy**. Sau ~1 phút bạn sẽ có URL dạng `https://vuon-uom-thong-minh.vercel.app`.
 
 ## 3. Cách 2 — Deploy qua Vercel CLI
 
@@ -49,7 +49,7 @@ vercel
 #   - Set up and deploy? Y
 #   - Which scope? <account của bạn>
 #   - Link to existing project? N (hoặc Y nếu đã tạo)
-#   - Project name: smart-farm-sep490
+#   - Project name: vuon-uom-thong-minh
 #   - In which directory is your code located? ./
 #   - Override settings? N (đã có vercel.json)
 

@@ -119,33 +119,45 @@ const ResearcherComparison = () => {
     fetchAll();
   }, [batches, metricName, showToast]);
 
-  // ── Build comparison data from API ──────────────────────────────────────────────────
-  const metricOptions = useMemo(() => {
-    // First check if we have API comparison data with metric comparisons
-    if (comparisonData?.groupComparisons?.length > 0) {
+    // Build a lookup map: measurementDefinitionId → definition (for fallback computation)
+    const defMap = useMemo(() => {
+      const map = {};
+      measurements.forEach(m => { if (m.id) map[m.id] = m; });
+      return map;
+    }, [measurements]);
+
+    // ── Build comparison data from API ──────────────────────────────────────────────────
+    const metricOptions = useMemo(() => {
+      // First check if we have API comparison data with metric comparisons
+      if (comparisonData?.groupComparisons?.length > 0) {
+        const set = new Set();
+        comparisonData.groupComparisons.forEach(g => {
+          if (g.metricComparisons) {
+            g.metricComparisons.forEach(m => {
+              // Trim whitespace to avoid duplicates caused by trailing spaces in DB
+              if (m.metricName) set.add(m.metricName.trim());
+            });
+          }
+        });
+        return Array.from(set).sort();
+      }
+      // Fallback to local data — records carry measurementDefinitionId, resolve via defMap
       const set = new Set();
-      comparisonData.groupComparisons.forEach(g => {
-        if (g.metricComparisons) {
-          g.metricComparisons.forEach(m => {
-            if (m.metricName) set.add(m.metricName);
-          });
-        }
+      measurements.forEach(m => { if (m.metricName) set.add(m.metricName.trim()); });
+      batches.forEach(b => {
+        (recordsByBatch[b.id] || []).forEach(r => {
+          const def = r.measurementDefinitionId ? defMap[r.measurementDefinitionId] : null;
+          if (def?.metricName) set.add(def.metricName.trim());
+        });
       });
-      return Array.from(set);
-    }
-    // Fallback to local data
-    const set = new Set();
-    measurements.forEach(m => { if (m.metricName) set.add(m.metricName); });
-    batches.forEach(b => {
-      (recordsByBatch[b.id] || []).forEach(r => { if (r.metricName) set.add(r.metricName); });
-    });
-    return Array.from(set);
-  }, [comparisonData, measurements, batches, recordsByBatch]);
+      return Array.from(set).sort();
+    }, [comparisonData, measurements, batches, recordsByBatch, defMap]);
 
   // Use API comparison data or fallback to computed data
   const groupComparison = useMemo(() => {
     // Use API comparison data if available and has data
     if (comparisonData?.groupComparisons?.length > 0) {
+      const trimmedMetricName = metricName.trim();
       return comparisonData.groupComparisons.map(g => ({
         id: g.groupId,
         groupName: g.groupName,
@@ -153,14 +165,14 @@ const ResearcherComparison = () => {
         treatmentDescription: g.treatmentDescription,
         batchCount: g.totalBatches,
         recordCount: g.totalMeasurements,
-        avg: g.metricComparisons?.find(m => m.metricName === metricName)?.averageValue || 
+        avg: g.metricComparisons?.find(m => m.metricName?.trim() === trimmedMetricName)?.averageValue ||
              (g.metricComparisons?.length > 0 ? g.metricComparisons[0].averageValue : 0) || 0,
-        max: g.metricComparisons?.find(m => m.metricName === metricName)?.maxValue ||
+        max: g.metricComparisons?.find(m => m.metricName?.trim() === trimmedMetricName)?.maxValue ||
              (g.metricComparisons?.length > 0 ? g.metricComparisons[0].maxValue : 0) || 0,
-        min: g.metricComparisons?.find(m => m.metricName === metricName)?.minValue ||
+        min: g.metricComparisons?.find(m => m.metricName?.trim() === trimmedMetricName)?.minValue ||
              (g.metricComparisons?.length > 0 ? g.metricComparisons[0].minValue : 0) || 0,
-        targetAvg: g.metricComparisons?.find(m => m.metricName === metricName)?.targetValue || 0,
-        achievementPct: g.metricComparisons?.find(m => m.metricName === metricName)?.targetAchievementRate || 0,
+        targetAvg: g.metricComparisons?.find(m => m.metricName?.trim() === trimmedMetricName)?.targetValue || 0,
+        achievementPct: g.metricComparisons?.find(m => m.metricName?.trim() === trimmedMetricName)?.targetAchievementRate || 0,
         metricComparisons: g.metricComparisons || [],
         batchMetrics: g.batchMetrics || [],
         records: g.batchMetrics?.flatMap(b => b.metricTimeSeries || []) || []
@@ -170,14 +182,14 @@ const ResearcherComparison = () => {
     // Fallback to computed data from local records
     if (!groups.length || !batches.length) return [];
 
-    // Map batch -> group
-    const batchGroupMap = {};
-    batches.forEach(b => { batchGroupMap[b.id] = b.groupId; });
-
     const result = groups.map(g => {
       const groupBatches = batches.filter(b => b.groupId === g.id);
       const records = groupBatches.flatMap(b =>
-        (recordsByBatch[b.id] || []).filter(r => !metricName || r.metricName === metricName)
+        (recordsByBatch[b.id] || []).filter(r => {
+          if (!metricName) return true;
+          const def = r.measurementDefinitionId ? defMap[r.measurementDefinitionId] : null;
+          return def?.metricName?.trim() === metricName.trim();
+        })
       );
 
       const numericValues = records
@@ -188,7 +200,10 @@ const ResearcherComparison = () => {
       const avg = numericValues.length ? sum / numericValues.length : 0;
       const max = numericValues.length ? Math.max(...numericValues) : 0;
       const min = numericValues.length ? Math.min(...numericValues) : 0;
-      const targetValues = records.map(r => parseFloat(r.targetValue)).filter(v => !isNaN(v));
+      const targetValues = records.map(r => {
+        const def = r.measurementDefinitionId ? defMap[r.measurementDefinitionId] : null;
+        return parseFloat(def?.targetValue);
+      }).filter(v => !isNaN(v));
       const avgTarget = targetValues.length ? targetValues.reduce((s, v) => s + v, 0) / targetValues.length : 0;
       const achievementPct = avgTarget > 0 ? Math.round((avg / avgTarget) * 100) : 0;
 

@@ -58,8 +58,8 @@ const StudentDashboard = () => {
       <aside className="w-64 bg-white border-r border-slate-200 text-slate-900 flex flex-col fixed h-full z-50 shadow-sm">
         <div className="px-6 py-6 border-b border-slate-100 flex items-center justify-between">
           <div>
-            <h1 className="text-lg font-bold text-slate-900">Smart <span className="text-blue-600">Farm</span></h1>
-            <p className="text-[9px] text-slate-400 uppercase tracking-widest font-bold mt-0.5">Student Portal</p>
+            <h1 className="text-lg font-bold text-slate-900">Vườn <span className="text-emerald-600">Ươm</span></h1>
+            <p className="text-[9px] text-slate-400 uppercase tracking-widest font-bold mt-0.5">Sinh Viên</p>
             {(() => { try { const u = JSON.parse(localStorage.getItem('user') || '{}'); return u.fullName ? <p className="mt-2 text-xs text-slate-500 font-medium">{u.fullName}</p> : null; } catch { return null; } })()}
           </div>
           <NotificationBell />

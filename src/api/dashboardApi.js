@@ -80,7 +80,8 @@ export const comparisonApi = {
       const contentType = response.headers.get('content-type') || '';
       if (contentType.includes('application/json')) {
         const data = await response.json();
-        return u(data);
+        // Endpoint returns plain DTO, not wrapped — do NOT call unwrapData here
+        return data;
       }
       return null;
     } catch (error) {

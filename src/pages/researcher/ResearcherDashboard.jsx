@@ -45,8 +45,8 @@ const ResearcherDashboard = () => {
       <aside className="w-64 bg-indigo-950 text-white flex flex-col fixed h-full z-50 shadow-2xl">
         <div className="px-6 py-7 border-b border-indigo-800/50 flex items-center justify-between gap-2">
           <div className="flex-1 min-w-0">
-            <h1 className="text-xl font-bold tracking-tight">Smart <span className="text-indigo-400">Farm</span></h1>
-            <p className="text-[9px] text-indigo-400/60 mt-1 uppercase tracking-widest font-bold">Researcher Portal</p>
+            <h1 className="text-xl font-bold tracking-tight">Vườn <span className="text-emerald-600">Ươm</span></h1>
+            <p className="text-[9px] text-emerald-600/60 mt-1 uppercase tracking-widest font-bold">Nhà Nghiên Cứu</p>
             {user?.fullName && (
               <p className="mt-2 text-xs text-indigo-300/70 font-medium truncate">{user.fullName}</p>
             )}
