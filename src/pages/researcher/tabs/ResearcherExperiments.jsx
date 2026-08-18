@@ -1,9 +1,11 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { experimentsApi, tasksApi, experimentRequestsApi } from '../../../api/experimentApi';
+import { experimentsApi, tasksApi, experimentRequestsApi, taskReportsApi, measurementRecordsApi } from '../../../api/experimentApi';
 import { farmsApi, bedsApi } from '../../../api/managerResourcesApi';
 import { stagesApi, groupsApi, designApi, measurementsApi, schedulesApi, batchesApi, bedAssignmentsApi, userApi, areasApi } from '../../../api/researcherApi';
 import { canCreateTaskOnStage, canGenerateTasksFromStage, canCreateBatch } from '../../../utils/taskValidation';
+import { aggregatePlantCountFromReports, comparePlannedVsActual } from '../../../utils/measurement';
+import { autoFillAllFields, autoFillFromDynamicSchema, evaluateAgainstTarget, buildMiniComparison, generateStructuredComment, getFieldMeta, computeResultsByGroup, computeResultsFromSchedulesAndReports, calcScheduledOccurrences, isPerGroupStage, getAutoFillFieldKeys, addDynamicMeasurementsToSchema, buildGrowthResultSchema } from '../../../utils/stageResultCompute';
 import { cropsApi } from '../../../api/cropApi';
 import { skillsApi, tasksCountApi } from '../../../api/skillsApi';
 import { useToast } from '../../../context/ToastContext';
@@ -11,6 +13,7 @@ import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
 import Pagination from '../../../components/ui/Pagination';
 import BatchEditModal from '../../../components/researcher/BatchEditModal';
 import StatisticsDashboard from '../../../components/researcher/StatisticsDashboard';
+import IoTSensorTab from '../../../components/iot/IoTSensorTab';
 
 // ── Portal helper ─────────────────────────────────────────────────────────────
 
@@ -35,6 +38,7 @@ const DETAIL_TABS = [
   { id: 'schedules', label: 'Lịch Chăm Sóc' },
   { id: 'batches', label: 'Lô' },
   { id: 'tasks', label: 'Tác Vụ' },
+  { id: 'iot', label: 'IoT Sensor' },
 ];
 
 const STATUS_COLORS = {
@@ -605,6 +609,7 @@ const ResearcherExperiments = ({ prefillData, onPrefillConsumed }) => {
       {detailOpen && activeExp && (
         <ExperimentDetailModal
           experiment={activeExp}
+          allSkills={allSkills}
           onClose={() => { setDetailOpen(false); setActiveExp(null); }}
           onExperimentUpdated={(updated) => {
             if (updated) {
@@ -622,7 +627,7 @@ const ResearcherExperiments = ({ prefillData, onPrefillConsumed }) => {
 
 // ── Experiment Detail Modal ───────────────────────────────────────────────────────
 
-const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => {
+const ExperimentDetailModal = ({ experiment, allSkills: parentAllSkills = [], onClose, onExperimentUpdated }) => {
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState('overview');
   const [expDetail, setExpDetail] = useState(experiment);
@@ -643,6 +648,11 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
   const [batches, setBatches] = useState([]);
   const [bedAssignments, setBedAssignments] = useState([]);
   const [tasks, setTasks] = useState([]);
+  // TaskReports để tính "số cây đã trồng" thực tế từ các report Planting
+  // (key theo batchId, value là mảng các report của batch đó).
+  const [taskReportsByBatch, setTaskReportsByBatch] = useState({});
+  // MeasurementRecords (giá trị thực đo) — dùng cho auto-fill + comparison.
+  const [measurementRecords, setMeasurementRecords] = useState([]);
 
   // Available beds
   const [availableBeds, setAvailableBeds] = useState([]);
@@ -749,6 +759,28 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
       } else if (tab === 'stages') {
         const data = await stagesApi.getByExperiment(experiment.id);
         setStages(Array.isArray(data) ? data : []);
+      } else if (tab === 'stages') {
+        const stageData = await stagesApi.getByExperiment(experiment.id);
+        setStages(Array.isArray(stageData) ? stageData : []);
+        // Also load batches để hiển thị thông tin trồng cây trong stage form
+        const batchData = await batchesApi.getByExperiment(experiment.id);
+        setBatches(Array.isArray(batchData) ? batchData : []);
+        // Load groups for batch-group mapping
+        const groupData = await groupsApi.getByExperiment(experiment.id);
+        setGroups(Array.isArray(groupData) ? groupData : []);
+        // Load task reports for all batches
+        const batchList = batchData || [];
+        if (batchList.length > 0) {
+          const reports = await Promise.allSettled(
+            batchList.map(b => taskReportsApi.getByBatch(b.id))
+          );
+          const map = {};
+          batchList.forEach((b, i) => {
+            const r = reports[i];
+            map[b.id] = r.status === 'fulfilled' ? (Array.isArray(r.value) ? r.value : []) : [];
+          });
+          setTaskReportsByBatch(map);
+        }
       } else if (tab === 'groups') {
         const data = await groupsApi.getByExperiment(experiment.id);
         setGroups(Array.isArray(data) ? data : []);
@@ -771,6 +803,32 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
         setBatches(Array.isArray(data) ? data : []);
         const ba = await bedAssignmentsApi.getByExperiment(experiment.id);
         setBedAssignments(Array.isArray(ba) ? ba : []);
+        // Fetch task reports cho từng batch (song song, allSettled để không fail cả batch khi 1 batch lỗi)
+        // → dùng để tính "số cây thực tế đã trồng" từ các report Planting.
+        const batchList = Array.isArray(data) ? data : [];
+        if (batchList.length > 0) {
+          const reports = await Promise.allSettled(
+            batchList.map(b => taskReportsApi.getByBatch(b.id))
+          );
+          const map = {};
+          batchList.forEach((b, i) => {
+            const r = reports[i];
+            if (r.status === 'fulfilled') {
+              map[b.id] = Array.isArray(r.value) ? r.value : [];
+            } else {
+              map[b.id] = [];
+            }
+          });
+          setTaskReportsByBatch(map);
+        }
+        // Fetch measurement records (giá trị thực đo) cho cả experiment
+        // → dùng cho auto-fill + comparison trong StagesTab.
+        try {
+          const records = await measurementRecordsApi.getByExperiment(experiment.id);
+          setMeasurementRecords(Array.isArray(records) ? records : []);
+        } catch {
+          setMeasurementRecords([]);
+        }
       } else if (tab === 'beds') {
         const ba = await bedAssignmentsApi.getByExperiment(experiment.id);
         setBedAssignments(Array.isArray(ba) ? ba : []);
@@ -1362,7 +1420,7 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
                 <OverviewTab exp={expDetail} editExp={editExp} setEditExp={setEditExp} showEditExp={showEditExp} setShowEditExp={setShowEditExp} onSave={handleUpdateExp} saving={savingExp} />
               )}
               {activeTab === 'stages' && (
-                <StagesTab stages={stages} form={stageForm} setForm={setStageForm} onCreate={handleCreateStage} onDelete={handleDeleteStage} onEdit={openEditStage} onUpdate={handleUpdateStageFromTab} loading={tabLoading} tasks={tasks} measurements={measurements} showToast={showToast} />
+                <StagesTab stages={stages} form={stageForm} setForm={setStageForm} onCreate={handleCreateStage} onDelete={handleDeleteStage} onEdit={openEditStage} onUpdate={handleUpdateStageFromTab} loading={tabLoading} tasks={tasks} measurements={measurements} showToast={showToast} measurementRecords={measurementRecords} groups={groups} batches={batches} taskReportsByBatch={taskReportsByBatch} schedules={schedules} />
               )}
               {activeTab === 'groups' && (
                 <GroupsTab groups={groups} form={groupForm} setForm={setGroupForm} onCreate={handleCreateGroup} onDelete={handleDeleteGroup} loading={tabLoading} />
@@ -1377,12 +1435,12 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
                 <SchedulesTab schedules={schedules} stages={stages} batches={batches} form={scheduleForm} setForm={setScheduleForm} onCreate={handleCreateSchedule} onDelete={handleDeleteSchedule} loading={tabLoading} />
               )}
               {activeTab === 'batches' && (
-                <BatchesTab batches={batches} bedAssignments={bedAssignments} groups={groups} form={batchForm} setForm={setBatchForm} onCreate={handleCreateBatch} onDelete={handleDeleteBatch} onEdit={openBatchEdit} onRandomizeBeds={handleRandomizeBeds} loading={tabLoading} />
+                <BatchesTab batches={batches} bedAssignments={bedAssignments} groups={groups} form={batchForm} setForm={setBatchForm} onCreate={handleCreateBatch} onDelete={handleDeleteBatch} onEdit={openBatchEdit} onRandomizeBeds={handleRandomizeBeds} loading={tabLoading} taskReportsByBatch={taskReportsByBatch} />
               )}
               {activeTab === 'tasks' && (
 <TasksTab
                 tasks={tasks} stages={stages} batches={batches} schedules={schedules}
-                form={taskForm} setForm={setTaskForm} allSkills={allSkills}
+                form={taskForm} setForm={setTaskForm} allSkills={parentAllSkills}
                 users={users} assignForm={assignForm} setAssignForm={setAssignForm}
                 skillMatches={skillMatches} userWorkload={userWorkload}
                 selectedTaskForAssign={selectedTaskForAssign}
@@ -1397,6 +1455,9 @@ const ExperimentDetailModal = ({ experiment, onClose, onExperimentUpdated }) => 
                 onCloseReassign={closeReassign}
                 loading={tabLoading}
               />
+              )}
+              {activeTab === 'iot' && (
+                <IoTSensorTab experimentTitle={expDetail?.title || expDetail?.experimentCode} />
               )}
             </>
           )}
@@ -1628,7 +1689,7 @@ const StageResultPanel = ({ result }) => {
   );
 };
 
-const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate, loading, tasks = [], measurements = [], showToast }) => {
+const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate, loading, tasks = [], measurements = [], showToast, measurementRecords = [], groups = [], batches = [], taskReportsByBatch = {}, schedules = [] }) => {
   // State cho accordion: stageId đang mở rộng
   const [expandedId, setExpandedId] = useState(null);
   // State form local cho mỗi stage khi edit
@@ -1646,6 +1707,68 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
       try { parsed = typeof s.resultData === 'string' ? JSON.parse(s.resultData) : s.resultData; }
       catch { parsed = {}; }
     }
+    // Auto-fill: với mỗi field trong schema có auto-fill được, nếu parsed[key] rỗng
+    // → tự động tính từ measurement records (của stage này) và điền vào.
+    // Map _autoFilled để UI biết field nào đến từ auto-fill (có thể override sau).
+    const stageRecs = measurementRecords.filter(r =>
+      r.stageId === s.id || r.experimentStageId === s.id || r.stage?.id === s.id
+    );
+    // Schema động cho Growing/Growth: tự động lấy từ MeasurementDefinition
+    const isGrowth = s.stageType === 'Growing' || s.stageType === 'Growth';
+    const dynamicSchema = isGrowth ? buildGrowthResultSchema(s.stageType, measurements) : [];
+    // Auto-fill: ưu tiên auto-fill từ schema động (đầy đủ metric), fallback hardcode cho stage khác
+    const autoFilledMap = isGrowth && dynamicSchema.length > 0
+      ? autoFillFromDynamicSchema(dynamicSchema, stageRecs, measurements)
+      : autoFillAllFields(s.stageType, stageRecs, measurements);
+    // Hỗ trợ per-group: nếu stage này dùng per-group, ta chia kết quả theo từng nhóm.
+    const isPerGroup = isPerGroupStage(s.stageType);
+    const merged = isPerGroup
+      ? ensurePerGroupStructure(parsed, s.stageType, groups)
+      : { ...parsed };
+    const autoFilled = {};
+
+    // Auto-fill overall + per-group khi isPerGroup
+    if (isPerGroup) {
+      const fieldKeys = getAutoFillFieldKeys(s.stageType);
+      const computed = computeResultsByGroup({
+        stageId: s.id,
+        groups,
+        batches,
+        records: stageRecs,
+        definitions: measurements,
+        fieldKeys
+      });
+      // Auto-fill overall (chỉ khi overall[field] rỗng)
+      Object.entries(computed.overall).forEach(([k, v]) => {
+        if (merged.overall[k] === undefined || merged.overall[k] === null || merged.overall[k] === '') {
+          merged.overall[k] = v;
+          autoFilled[k] = { value: v, source: `Tổng hợp ${groups.length} nhóm`, count: stageRecs.length };
+        }
+      });
+      // Auto-fill per-group (chỉ khi group[key] rỗng)
+      Object.entries(computed.perGroup).forEach(([gid, perG]) => {
+        if (!merged.byGroup[gid]) merged.byGroup[gid] = {};
+        Object.entries(perG).forEach(([fk, v]) => {
+          if (merged.byGroup[gid][fk] === undefined || merged.byGroup[gid][fk] === null || merged.byGroup[gid][fk] === '') {
+            merged.byGroup[gid][fk] = v;
+          }
+        });
+      });
+
+      // ── KHÔNG auto-fill từ Schedules + TaskReports vào form nữa ──
+      // Researcher sẽ xem bảng tham khảo và tự bấm nút "Điền vào form" nếu muốn.
+      // (Logic tham khảo vẫn dùng computeResultsFromSchedulesAndReports ở UI phía dưới.)
+    } else {
+      // Auto-fill cũ (flat)
+      Object.entries(autoFilledMap).forEach(([k, info]) => {
+        const cur = merged[k];
+        if (cur === undefined || cur === null || cur === '') {
+          merged[k] = info.value;
+          autoFilled[k] = info;
+        }
+      });
+    }
+
     setEditData({
       stageName: s.stageName || '',
       stageOrder: s.stageOrder ?? 1,
@@ -1654,14 +1777,67 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
       startDate: s.startDate ? s.startDate.slice(0, 10) : '',
       endDate: s.endDate ? s.endDate.slice(0, 10) : '',
       resultSummary: s.resultSummary || '',
-      resultData: parsed
+      resultData: merged,
+      _autoFilled: autoFilled,
+      _isPerGroup: isPerGroup
     });
   };
 
+  // Đảm bảo cấu trúc { overall: {...}, byGroup: { [gid]: {...} } } cho per-group stages
+  function ensurePerGroupStructure(parsed, stageType, groupsList) {
+    const schema = RESULT_DATA_SCHEMA[stageType] || [];
+    const overall = {};
+    schema.forEach(f => { overall[f.key] = ''; });
+    const byGroup = {};
+    (groupsList || []).forEach(g => {
+      byGroup[g.id] = {};
+      schema.forEach(f => { byGroup[g.id][f.key] = ''; });
+    });
+
+    // Nếu parsed đã có cấu trúc per-group → copy
+    if (parsed && typeof parsed === 'object' && (parsed.overall || parsed.byGroup)) {
+      // overall
+      if (parsed.overall && typeof parsed.overall === 'object') {
+        Object.entries(parsed.overall).forEach(([k, v]) => {
+          if (overall.hasOwnProperty(k)) overall[k] = v;
+        });
+      }
+      // byGroup
+      if (parsed.byGroup && typeof parsed.byGroup === 'object') {
+        Object.entries(parsed.byGroup).forEach(([gid, vals]) => {
+          if (!byGroup[gid]) byGroup[gid] = {};
+          schema.forEach(f => { byGroup[gid][f.key] = ''; });
+          Object.entries(vals || {}).forEach(([k, v]) => {
+            if (byGroup[gid].hasOwnProperty(k)) byGroup[gid][k] = v;
+          });
+        });
+      }
+    } else if (parsed && typeof parsed === 'object') {
+      // parsed là flat cũ → đổ hết vào overall
+      Object.entries(parsed).forEach(([k, v]) => {
+        if (overall.hasOwnProperty(k)) overall[k] = v;
+      });
+    }
+    return { overall, byGroup };
+  }
+
   const cancelEdit = () => { setEditingId(null); setEditData({}); };
 
-  const updateResultField = (key, value) => {
-    setEditData(prev => ({ ...prev, resultData: { ...prev.resultData, [key]: value } }));
+  const updateResultField = (key, value, groupId = null) => {
+    setEditData(prev => {
+      if (prev._isPerGroup) {
+        if (groupId != null) {
+          const newByGroup = { ...(prev.resultData?.byGroup || {}) };
+          newByGroup[groupId] = { ...(newByGroup[groupId] || {}), [key]: value };
+          return { ...prev, resultData: { ...prev.resultData, byGroup: newByGroup } };
+        }
+        // Group chưa chọn → ghi vào overall
+        const newOverall = { ...(prev.resultData?.overall || {}) };
+        newOverall[key] = value;
+        return { ...prev, resultData: { ...prev.resultData, overall: newOverall } };
+      }
+      return { ...prev, resultData: { ...prev.resultData, [key]: value } };
+    });
   };
 
   const saveEdit = async (stageId) => {
@@ -1690,6 +1866,14 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
   // Filter tasks/measurements theo stage
   const getStageTasks = (stageId) => tasks.filter(t => t.stageId === stageId || t.stage?.id === stageId);
   const getStageMeasurements = (stageId) => measurements.filter(m => m.stageId === stageId || m.stage?.id === stageId);
+
+  // Parse resultData (string JSON → object)
+  const parseResultData = (raw) => {
+    if (!raw) return null;
+    try {
+      return typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch { return null; }
+  };
 
   return (
     <div className="space-y-4">
@@ -1731,7 +1915,18 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
               : {};
             const stageTasks = getStageTasks(s.id);
             const stageMeasurements = getStageMeasurements(s.id);
-            const schema = getSchemaForStage(s.stageType);
+            // Schema cho form ResultData:
+            //   - Nursery/Planting/Care/Evaluation/Harvest/...: schema hardcode (RESULT_DATA_SCHEMA).
+            //   - Growing/Growth (Theo dõi sinh trưởng): schema ĐỘNG hoàn toàn từ MeasurementDefinition
+            //     của experiment — mỗi metric → 1 field input. Researcher chủ động tạo metric ở tab
+            //     Đo Lường → form báo cáo tự động sinh field tương ứng.
+            //     Nếu chưa có metric nào → fallback schema hardcode + banner hướng dẫn.
+            const baseSchema = getSchemaForStage(s.stageType);
+            let schema = baseSchema;
+            if (s.stageType === 'Growing' || s.stageType === 'Growth') {
+              const dynamicSchema = buildGrowthResultSchema(s.stageType, measurements);
+              schema = dynamicSchema.length > 0 ? dynamicSchema : baseSchema;
+            }
             const grouped = groupFields(schema);
 
             // Tô nền theo color của stage type
@@ -1773,14 +1968,56 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
                       📅 {s.startDate || '—'} → {s.endDate || '—'}
                       {stageTasks.length > 0 && <span className="ml-2">📋 {stageTasks.length} tác vụ</span>}
                       {stageMeasurements.length > 0 && <span className="ml-2">📊 {stageMeasurements.length} đo lường</span>}
+                      {(['Nursery', 'Planting'].includes(s.stageType) && (() => {
+                        // Chỉ hiển thị số cây cho stage Ươm cây hoặc Gieo trồng
+                        const stageSchedules = schedules.filter(sc => sc.experimentStageId === s.id);
+                        const batchIds = [...new Set(stageSchedules.map(sc => sc.batchId).filter(Boolean))];
+                        if (batchIds.length === 0) return null;
+                        let total = 0;
+                        batchIds.forEach(bid => {
+                          const reports = taskReportsByBatch[bid] || [];
+                          const result = aggregatePlantCountFromReports(bid, reports);
+                          if (result?.total) total += result.total;
+                        });
+                        return total > 0 ? <span className="ml-2">🌱 {total} cây đã trồng</span> : null;
+                      })())}
                     </p>
+
+                    {/* Kết quả giai đoạn (collapsed) — per-group summary */}
+                    {(() => {
+                      const rd = parseResultData(s.resultData);
+                      if (!rd) return null;
+                      if (rd.byGroup && typeof rd.byGroup === 'object') {
+                        const groupIds = Object.keys(rd.byGroup);
+                        if (groupIds.length === 0) return null;
+                        // Lấy schema để biết field nào là số
+                        const schemaFields = getSchemaForStage(s.stageType).filter(f => f.type === 'number');
+                        const rows = groupIds.map(gid => {
+                          const g = groups.find(x => x.id === gid) || { groupName: `Nhóm ${gid.slice(0, 6)}` };
+                          const obj = rd.byGroup[gid] || {};
+                          const filled = schemaFields.filter(f => {
+                            const v = obj[f.key];
+                            return v !== '' && v !== null && v !== undefined;
+                          }).length;
+                          const totalF = schemaFields.length;
+                          return { gid, name: g.groupName, groupType: g.groupType, filled, totalF };
+                        }).filter(r => r.filled > 0);
+                        if (rows.length === 0) return null;
+                        return (
+                          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                            <span className="text-[9px] font-bold text-purple-700 uppercase">🧪 Kết quả:</span>
+                            {rows.map(r => (
+                              <span key={r.gid} className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-purple-100 text-purple-800 rounded-md text-[9px] font-bold">
+                                {r.name} <span className="text-purple-600 font-mono">{r.filled}/{r.totalF}</span>
+                              </span>
+                            ))}
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    {s.resultSummary && (
-                      <span className="hidden md:inline-flex px-2 py-1 bg-emerald-100 text-emerald-700 rounded-md text-[10px] font-bold max-w-[180px] truncate">
-                        ✅ {s.resultSummary}
-                      </span>
-                    )}
                     <span className={`text-slate-400 text-xs transition-transform ${isExpanded ? 'rotate-180' : ''}`}>▼</span>
                   </div>
                 </div>
@@ -1852,25 +2089,98 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
                         )}
 
                         {/* Result Data (read-only) */}
-                        {Object.keys(parsedResult).length > 0 && (
-                          <div className="bg-blue-50/70 rounded-lg p-3 border border-blue-200">
-                            <p className="text-[10px] font-bold uppercase text-blue-700 mb-2">📊 Số liệu kết quả</p>
-                            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                              {schema.filter(f => parsedResult[f.key] !== undefined && parsedResult[f.key] !== null && parsedResult[f.key] !== '').map(f => (
-                                <div key={f.key} className="bg-white p-2 rounded-md border border-blue-100">
-                                  <p className="text-[9px] font-bold text-slate-500 uppercase flex items-center gap-1">
-                                    <span>{f.icon}</span>
-                                    <span className="truncate">{f.label}</span>
-                                  </p>
-                                  <p className="text-sm font-mono font-bold text-blue-900 mt-0.5">
-                                    {parsedResult[f.key]}
-                                    {f.unit && <span className="text-[9px] text-slate-500 ml-1">{f.unit}</span>}
-                                  </p>
-                                </div>
-                              ))}
+                        {(() => {
+                          if (!parsedResult || Object.keys(parsedResult).length === 0) return null;
+
+                          // Per-group view
+                          if (parsedResult.byGroup && typeof parsedResult.byGroup === 'object') {
+                            const groupIds = Object.keys(parsedResult.byGroup);
+                            const schemaFields = schema.filter(f => f.type === 'number');
+                            const overall = parsedResult.overall || {};
+                            const hasOverall = Object.entries(overall).some(([k, v]) =>
+                              schemaFields.some(f => f.key === k) && v !== '' && v !== null && v !== undefined
+                            );
+                            return (
+                              <div className="bg-blue-50/70 rounded-lg p-3 border border-blue-200 space-y-3">
+                                <p className="text-[10px] font-bold uppercase text-blue-700">📊 Số liệu kết quả ({stageTypeMeta.label})</p>
+
+                                {hasOverall && (
+                                  <div className="bg-white rounded-md p-2 border border-blue-100">
+                                    <p className="text-[9px] font-bold text-blue-700 uppercase mb-1.5">📐 Tổng hợp (overall)</p>
+                                    <div className="grid grid-cols-2 md:grid-cols-3 gap-1.5">
+                                      {schemaFields.filter(f => overall[f.key] !== undefined && overall[f.key] !== null && overall[f.key] !== '').map(f => (
+                                        <div key={`ov-${f.key}`} className="bg-blue-50/50 p-1.5 rounded border border-blue-100">
+                                          <p className="text-[9px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                                            <span>{f.icon}</span>
+                                            <span className="truncate">{f.label}</span>
+                                          </p>
+                                          <p className="text-sm font-mono font-bold text-blue-900 mt-0.5">
+                                            {overall[f.key]}{f.unit && <span className="text-[9px] text-slate-500 ml-1">{f.unit}</span>}
+                                          </p>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {groupIds.length > 0 && (
+                                  <div className="space-y-2">
+                                    {groupIds.map(gid => {
+                                      const g = groups.find(x => x.id === gid) || { groupName: `Nhóm ${gid.slice(0, 6)}` };
+                                      const obj = parsedResult.byGroup[gid] || {};
+                                      const filledFields = schemaFields.filter(f =>
+                                        obj[f.key] !== undefined && obj[f.key] !== null && obj[f.key] !== ''
+                                      );
+                                      if (filledFields.length === 0) return null;
+                                      return (
+                                        <div key={gid} className="bg-white rounded-md p-2 border-2 border-purple-200">
+                                          <p className="text-[10px] font-extrabold text-purple-700 uppercase mb-1.5 flex items-center gap-1.5">
+                                            🧪 {g.groupName}
+                                            <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px] font-bold">{g.groupType || 'Group'}</span>
+                                          </p>
+                                          <div className="grid grid-cols-2 md:grid-cols-3 gap-1.5">
+                                            {filledFields.map(f => (
+                                              <div key={`${gid}-${f.key}`} className="bg-purple-50/50 p-1.5 rounded border border-purple-100">
+                                                <p className="text-[9px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                                                  <span>{f.icon}</span>
+                                                  <span className="truncate">{f.label}</span>
+                                                </p>
+                                                <p className="text-sm font-mono font-bold text-purple-900 mt-0.5">
+                                                  {obj[f.key]}{f.unit && <span className="text-[9px] text-slate-500 ml-1">{f.unit}</span>}
+                                                </p>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          }
+
+                          // Flat view
+                          return (
+                            <div className="bg-blue-50/70 rounded-lg p-3 border border-blue-200">
+                              <p className="text-[10px] font-bold uppercase text-blue-700 mb-2">📊 Số liệu kết quả</p>
+                              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                                {schema.filter(f => parsedResult[f.key] !== undefined && parsedResult[f.key] !== null && parsedResult[f.key] !== '').map(f => (
+                                  <div key={f.key} className="bg-white p-2 rounded-md border border-blue-100">
+                                    <p className="text-[9px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                                      <span>{f.icon}</span>
+                                      <span className="truncate">{f.label}</span>
+                                    </p>
+                                    <p className="text-sm font-mono font-bold text-blue-900 mt-0.5">
+                                      {parsedResult[f.key]}
+                                      {f.unit && <span className="text-[9px] text-slate-500 ml-1">{f.unit}</span>}
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                        )}
+                          );
+                        })()}
 
                         {/* Actions */}
                         <div className="flex items-center gap-2 pt-2 border-t border-white">
@@ -1940,15 +2250,433 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
                           </div>
                         </div>
 
+                        {/* Thông tin số cây đã trồng - CHỈ CHO STAGE ƯƠM/GIEO) */}
+                        {['Nursery', 'Planting'].includes(s.stageType) && (() => {
+                          // Lấy các batch liên quan đến stage này qua schedules
+                          const stageSchedules = schedules.filter(sc => sc.experimentStageId === s.id);
+                          const relatedBatchIds = [...new Set(stageSchedules.map(sc => sc.batchId).filter(Boolean))];
+
+                          if (relatedBatchIds.length === 0) {
+                            return (
+                              <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
+                                <p className="text-[10px] text-slate-500 flex items-center gap-1.5">
+                                  🌱 <span>Chưa có lô nào liên quan đến giai đoạn này (chưa có lịch chăm sóc)</span>
+                                </p>
+                              </div>
+                            );
+                          }
+
+                          // Tính toán summary cho các lô liên quan
+                          let totalPlanted = 0;
+                          const batchInfos = relatedBatchIds.map(bid => {
+                            const batch = batches.find(b => b.id === bid);
+                            if (!batch) return null;
+                            const reports = taskReportsByBatch[bid] || [];
+                            const result = aggregatePlantCountFromReports(bid, reports);
+                            const planted = result?.total ?? 0;
+                            totalPlanted += planted;
+                            const group = groups.find(g => g.id === batch.groupId || g.id === batch.experimentalGroupId);
+                            return { batchCode: batch.batchCode, groupName: group?.groupName || group?.name || null, planted };
+                          }).filter(Boolean);
+
+                          return (
+                            <div className="bg-emerald-50 rounded-lg p-3 border border-emerald-200">
+                              <p className="text-[10px] font-bold text-emerald-700 uppercase mb-2 flex items-center gap-1.5">
+                                🌱 Số cây đã trồng thực tế (từ báo cáo tác vụ)
+                              </p>
+                              <div className="space-y-1.5">
+                                {batchInfos.map((b, i) => (
+                                  <div key={i} className="flex items-center gap-2 p-1.5 bg-white/70 rounded border border-emerald-100">
+                                    <span className="font-bold text-emerald-800 text-[11px] min-w-[80px]">{b.batchCode}</span>
+                                    {b.groupName && (
+                                      <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px] font-bold">
+                                        {b.groupName}
+                                      </span>
+                                    )}
+                                    <span className="flex-1" />
+                                    <span className={`font-extrabold text-sm ${b.planted > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                      {b.planted > 0 ? `${b.planted} cây` : '—'}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                              {totalPlanted > 0 && (
+                                <div className="mt-2 pt-2 border-t border-emerald-200 flex items-center justify-between">
+                                  <span className="text-[10px] font-bold text-emerald-700">Tổng cộng</span>
+                                  <span className="text-lg font-extrabold text-emerald-700">{totalPlanted} cây</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+
                         {/* Form nhập số liệu (theo stageType) */}
                         <div className="border-t border-slate-200 pt-3">
                           <div className="flex items-center justify-between mb-3">
                             <h5 className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
                               📊 Số liệu kết quả — <span className="text-blue-600">{stageTypeMeta.label}</span>
                             </h5>
-                            <span className="text-[10px] text-slate-500">{Object.keys(grouped).length} nhóm · {schema.length} chỉ số</span>
+                            <span className="text-[10px] text-slate-500">
+                              {editData._isPerGroup ? `${groups.length} nhóm × ${schema.length} chỉ số` : `${Object.keys(grouped).length} nhóm · ${schema.length} chỉ số`}
+                            </span>
                           </div>
 
+                          {/* Banner: form động cho stage Theo dõi sinh trưởng */}
+                          {(s.stageType === 'Growing' || s.stageType === 'Growth') && (() => {
+                            // Đếm metric từ 2 nguồn, lấy max:
+                            //   1. schema động (buildGrowthResultSchema khi chạy) - có thể thiếu nếu groupId filter
+                            //   2. measurements gốc - tổng số MeasurementDefinition của experiment
+                            const dynamicFields = schema.filter(f => f.group === 'Sinh trưởng (động)');
+                            const dynamicFromRaw = (measurements || []).length;
+                            // Gom unique theo (label + unit) → tránh đếm trùng khi 2 nhóm có cùng metric
+                            const uniqKeys = new Set();
+                            const uniqFields = [];
+                            for (const f of dynamicFields) {
+                              const k = `${(f.label || '').toLowerCase()}|${(f.unit || '').toLowerCase()}`;
+                              if (uniqKeys.has(k)) continue;
+                              uniqKeys.add(k);
+                              uniqFields.push(f);
+                            }
+                            // Nếu schema có dynamicFields rỗng nhưng measurements có data → fallback hiển thị
+                            const dynamicCount = uniqFields.length > 0
+                              ? uniqFields.length
+                              : dynamicFromRaw;
+                            return (
+                              <div className={`mb-3 px-3 py-2 rounded-r-lg text-[10px] flex items-start gap-2 border-l-4 ${dynamicCount > 0 ? 'bg-teal-50 border-teal-500 text-teal-800' : 'bg-amber-50 border-amber-500 text-amber-800'}`}>
+                                <span className="text-base shrink-0">{dynamicCount > 0 ? '📊' : '⚠️'}</span>
+                                <div className="flex-1">
+                                  {dynamicCount > 0 ? (
+                                    <>
+                                      <strong className="font-extrabold">Form động từ MeasurementDefinition:</strong> Đã fetch <strong>{dynamicCount}</strong> chỉ số sinh trưởng (đã gom trùng theo tên + đơn vị) từ API:
+                                      <span className="ml-1">{uniqFields.map(f => `${f.label}${f.unit ? ` (${f.unit})` : ''}`).join(', ')}</span>.
+                                      <div className="mt-1">Mỗi nhóm chỉ thấy chỉ số của nhóm mình. Báo cáo được tách riêng theo từng nhóm bên dưới.</div>
+                                      {dynamicFields.length === 0 && dynamicFromRaw > 0 && (
+                                        <div className="mt-1 text-amber-700">
+                                          (debug: schema={dynamicFields.length} nhưng measurements={dynamicFromRaw} — schema rỗng do measurements thiếu group/groupId)
+                                        </div>
+                                      )}
+                                    </>
+                                  ) : (
+                                    <>
+                                      <strong className="font-extrabold">Chưa có chỉ số đo lường nào:</strong> giai đoạn <em>{s.stageName}</em> hiện chưa có <em>MeasurementDefinition</em> nào.
+                                      Vào tab <em>Đo Lường</em> → bấm <code>+ Tạo Đo Lường</code> để thêm chỉ số sinh trưởng → form báo cáo sẽ tự động cập nhật.
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })()}
+
+                          {/* Bảng tham khảo: Lịch chăm sóc + Báo cáo thực tế (chỉ cho stage Care) */}
+                          {editData._isPerGroup && s.stageType === 'Care' && (() => {
+                            const ref = computeResultsFromSchedulesAndReports({
+                              stageId: s.id, groups, batches, schedules, taskReportsByBatch
+                            });
+                            const batchIds = Object.keys(ref.byBatch);
+                            if (batchIds.length === 0) return null;
+                            // Chỉ hiển thị các field có thể đếm được từ Schedules/Reports (soLanTuoi, soLanBonPhan, soLanPhunThuoc)
+                            // Bỏ field text như ghiChu, loaiPhanBon và field đo lường như luongNuocTong (cần đo thực tế)
+                            const COUNTABLE_FIELD_KEYS = new Set(['soLanTuoi', 'soLanBonPhan', 'soLanPhunThuoc']);
+                            const careFields = schema.filter(f => f.type === 'number' && COUNTABLE_FIELD_KEYS.has(f.key));
+                            return (
+                              <div className="mb-4 bg-gradient-to-br from-cyan-50 to-blue-50 rounded-lg p-3 border-2 border-cyan-300">
+                                <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+                                  <p className="text-[11px] font-extrabold text-cyan-800 uppercase tracking-wider flex items-center gap-1.5">
+                                    🔍 Bảng tham khảo — Số liệu THỰC TẾ vs KẾ HOẠCH (theo từng batch → nhóm)
+                                  </p>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      // Fill form từ ref — CHỈ điền số liệu THỰC TẾ (actual), không phải kế hoạch
+                                      setEditData(prev => {
+                                        const newOverall = { ...(prev.resultData?.overall || {}) };
+                                        const newByGroup = { ...(prev.resultData?.byGroup || {}) };
+                                        // Overall: lấy actual (số liệu thực tế)
+                                        Object.entries(ref.overall).forEach(([k, v]) => {
+                                          const actual = (typeof v === 'object' && v !== null) ? v.actual : v;
+                                          if (newOverall[k] === '' || newOverall[k] == null) newOverall[k] = actual;
+                                        });
+                                        // Per-group: lấy actual
+                                        Object.entries(ref.perGroup).forEach(([gid, vals]) => {
+                                          if (!newByGroup[gid]) newByGroup[gid] = {};
+                                          Object.entries(vals).forEach(([fk, v]) => {
+                                            if (fk === '_meta') return;
+                                            const actual = (typeof v === 'object' && v !== null) ? v.actual : v;
+                                            if (newByGroup[gid][fk] === '' || newByGroup[gid][fk] == null) newByGroup[gid][fk] = actual;
+                                          });
+                                        });
+                                        return { ...prev, resultData: { overall: newOverall, byGroup: newByGroup } };
+                                      });
+                                      showToast && showToast('Đã điền số liệu THỰC TẾ từ task reports đã duyệt vào các ô trống. Vui lòng kiểm tra lại trước khi lưu.', 'success');
+                                    }}
+                                    className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-[10px] font-bold shadow-sm transition-all"
+                                    title="Điền số liệu THỰC TẾ (TT) từ task reports đã duyệt vào các ô trống. KHÔNG điền kế hoạch (KH)."
+                                  >
+                                    ⬇️ Điền thực tế vào form (chỉ ô trống)
+                                  </button>
+                                </div>
+
+                                <p className="text-[9px] text-cyan-700 italic mb-2">
+                                  💡 <strong>KH</strong> (kế hoạch) = tổng số lần dự kiến theo lịch (tính bằng <code>floor((endDate - startDate) / frequencyDays) + 1</code>).
+                                  <strong>TT</strong> (thực tế) = số task report <em>đã duyệt</em> của batch.
+                                  <strong className="text-emerald-700">Nút "Điền vào form" chỉ điền số THỰC TẾ</strong> — researcher review rồi tự chỉnh thêm nếu cần.
+                                </p>
+
+                                <div className="overflow-x-auto bg-white rounded-lg border border-cyan-200">
+                                  <table className="w-full text-[10px]">
+                                    <thead>
+                                      <tr className="bg-cyan-100 text-cyan-900">
+                                        <th className="px-2 py-2 text-left">Nhóm</th>
+                                        {careFields.map(f => (
+                                          <th key={f.key} className="px-2 py-2 text-center border-l border-cyan-200" colSpan={2} title={`KH = tổng lần dự kiến theo lịch (startDate→endDate, frequencyDays). TT = số task report đã duyệt.`}>
+                                            <div className="flex items-center justify-center gap-1">{f.icon}<span>{f.label}</span></div>
+                                            <div className="text-[8px] font-normal text-cyan-700">(KH / TT)</div>
+                                          </th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {/* Chỉ hiển thị hàng tổng theo nhóm (gom các batch trong nhóm) */}
+                                      {groups.map(g => {
+                                        const perG = ref.perGroup[g.id] || {};
+                                        const metaG = perG._meta || {};
+                                        return (
+                                          <tr key={`g-${g.id}`} className="border-t border-cyan-100 hover:bg-cyan-50/50">
+                                            <td className="px-2 py-1.5 font-bold text-purple-900">
+                                              <span>🧪 {g.groupName || '—'}</span>
+                                              <span className="px-1 py-0.5 ml-1 bg-purple-100 text-purple-700 rounded text-[8px] font-bold">{g.groupType || 'Group'}</span>
+                                            </td>
+                                            {careFields.map(f => {
+                                              const m = metaG[f.key] || {};
+                                              return (
+                                                <td key={`g-${g.id}-${f.key}-kh`} className="px-2 py-1.5 text-center font-mono font-extrabold border-l border-cyan-100 text-blue-700" title="KH = tổng số lần dự kiến theo lịch (gom các batch trong nhóm)">
+                                                  {m.planned || 0}
+                                                </td>
+                                              );
+                                            }).concat(careFields.map(f => {
+                                              const m = metaG[f.key] || {};
+                                              return (
+                                                <td key={`g-${g.id}-${f.key}-tt`} className="px-2 py-1.5 text-center font-mono font-extrabold text-emerald-700" title="TT = số task report đã duyệt (Approved/Completed/Done) của các batch trong nhóm">
+                                                  {m.actual || 0}
+                                                </td>
+                                              );
+                                            }))}
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            );
+                          })()}
+
+                          {/* PER-GROUP MODE: 1 bảng per group (bỏ OVERALL cho Growing/Growth) */}
+                          {editData._isPerGroup && groups.length > 0 ? (
+                            <div className="space-y-4">
+                              {/* OVERALL section - chỉ hiển thị cho stage KHÔNG phải Growing/Growth */}
+                              {(s.stageType !== 'Growing' && s.stageType !== 'Growth') && (
+                              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-3 border border-blue-200">
+                                <p className="text-[10px] font-extrabold text-blue-700 uppercase mb-2 tracking-wider flex items-center gap-1.5">
+                                  Tổng hợp (overall) — trung bình các nhóm
+                                </p>
+                                {/* Với Growing/Growth: overall GOM các metric có cùng label + unit từ tất cả nhóm
+                                    thành 1 dòng duy nhất, hiển thị trung bình các nhóm. */}
+                                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                                  {(() => {
+                                    const isGrowth = s.stageType === 'Growing' || s.stageType === 'Growth';
+                                    if (!isGrowth) {
+                                      // Stage thường: render schema như cũ
+                                      return schema.map(field => {
+                                        const v = editData.resultData?.overall?.[field.key];
+                                        const hasValue = v !== undefined && v !== null && v !== '';
+                                        const evalResult = field.type === 'number' && hasValue
+                                          ? evaluateAgainstTarget(v, field.key)
+                                          : null;
+                                        return (
+                                          <div key={`ov-${field.key}`} className={`rounded-md p-2 border ${
+                                            evalResult?.status === 'met' ? 'bg-emerald-50 border-emerald-200'
+                                            : hasValue ? 'bg-white border-blue-100' : 'bg-slate-50 border-slate-200'
+                                          }`}>
+                                            <p className="text-[9px] font-bold text-slate-500 uppercase truncate flex items-center gap-1">
+                                              <span>{field.icon}</span><span className="truncate">{field.label}</span>
+                                            </p>
+                                            <p className="text-sm font-mono font-bold text-slate-800">
+                                              {hasValue ? v : '—'} {field.unit && <span className="text-[9px] text-slate-500 ml-1">{field.unit}</span>}
+                                            </p>
+                                            {evalResult && evalResult.status !== 'no_target' && (
+                                              <p className={`text-[9px] mt-0.5 font-bold text-${evalResult.color}-700`}>
+                                                {evalResult.icon} {evalResult.percent}% target
+                                              </p>
+                                            )}
+                                          </div>
+                                        );
+                                      });
+                                    }
+
+                                    // Growing/Growth: gom metric theo (label + unit)
+                                    //   key gom = label.toLowerCase + '|' + unit
+                                    const grouped = new Map();
+                                    for (const f of schema) {
+                                      if (f.key === 'ghiChu') continue;
+                                      const gKey = `${(f.label || '').toLowerCase().trim()}|${(f.unit || '').toLowerCase().trim()}`;
+                                      if (!grouped.has(gKey)) {
+                                        grouped.set(gKey, { label: f.label, unit: f.unit, icon: f.icon, targetValue: f.targetValue, fieldKeys: [] });
+                                      }
+                                      grouped.get(gKey).fieldKeys.push(f.key);
+                                    }
+
+                                    return Array.from(grouped.values()).map(g => {
+                                      // Tính overall: ưu tiên giá trị overall trực tiếp, fallback trung bình byGroup
+                                      let v = editData.resultData?.overall?.[g.fieldKeys[0]];
+                                      let hasValue = v !== undefined && v !== null && v !== '';
+                                      if (!hasValue && editData.resultData?.byGroup) {
+                                        const vals = g.fieldKeys.map(k =>
+                                          Object.values(editData.resultData.byGroup)
+                                            .map(bg => bg?.[k])
+                                            .filter(x => x !== undefined && x !== null && x !== '')
+                                            .map(Number)
+                                            .filter(n => !isNaN(n))
+                                        ).flat();
+                                        if (vals.length > 0) {
+                                          v = vals.reduce((s, x) => s + x, 0) / vals.length;
+                                          v = Math.round(v * 100) / 100;
+                                          hasValue = true;
+                                        }
+                                      }
+                                      const evalResult = g.targetValue != null && hasValue
+                                        ? (() => {
+                                            const target = parseFloat(g.targetValue);
+                                            const val = parseFloat(v);
+                                            if (isNaN(target) || isNaN(val)) return null;
+                                            const pct = Math.round((val / target) * 100);
+                                            let status = 'met', color = 'emerald', icon = '✅', label = 'Đạt';
+                                            if (pct < 70) { status = 'below'; color = 'rose'; icon = '⚠️'; label = 'Dưới'; }
+                                            else if (pct < 90) { status = 'close'; color = 'amber'; icon = '🔸'; label = 'Gần'; }
+                                            return { status, color, icon, label, percent: pct };
+                                          })()
+                                        : null;
+                                      return (
+                                        <div key={`ov-grp-${g.label}-${g.unit}`} className={`rounded-md p-2 border ${
+                                          evalResult?.status === 'met' ? 'bg-emerald-50 border-emerald-200'
+                                          : hasValue ? 'bg-white border-blue-100' : 'bg-slate-50 border-slate-200'
+                                        }`}>
+                                          <p className="text-[9px] font-bold text-slate-500 uppercase truncate flex items-center gap-1">
+                                            <span>{g.icon}</span><span className="truncate">{g.label}</span>
+                                          </p>
+                                          <p className="text-sm font-mono font-bold text-slate-800">
+                                            {hasValue ? v : '—'} {g.unit && <span className="text-[9px] text-slate-500 ml-1">{g.unit}</span>}
+                                          </p>
+                                          {evalResult && (
+                                            <p className={`text-[9px] mt-0.5 font-bold text-${evalResult.color}-700`}>
+                                              {evalResult.icon} {evalResult.percent}% target
+                                            </p>
+                                          )}
+                                        </div>
+                                      );
+                                    });
+                                  })()}
+                                </div>
+                                <p className="text-[9px] text-blue-600 italic mt-2">💡 Overall chỉ hiển thị chỉ số chung. Chỉ số riêng của từng nhóm xem bên dưới.</p>
+                              </div>
+                              )}
+
+                              {/* Placeholder cho Growing/Growth: không có OVERALL vì mỗi nhóm có metric riêng */}
+                              {(s.stageType === 'Growing' || s.stageType === 'Growth') && (
+                                <div className="bg-gradient-to-r from-cyan-50 to-blue-50 rounded-lg p-3 border border-cyan-200">
+                                  <p className="text-[10px] font-extrabold text-cyan-700 uppercase mb-1 tracking-wider flex items-center gap-1.5">
+                                    Báo cáo riêng từng nhóm
+                                  </p>
+                                  <p className="text-[9px] text-cyan-600 italic">
+                                    💡 Giai đoạn <em>Theo dõi sinh trưởng</em> không có tổng hợp chung vì mỗi nhóm có chỉ số riêng (tùy theo MeasurementDefinition gán cho nhóm đó). Vui lòng nhập số liệu cho từng nhóm bên dưới.
+                                  </p>
+                                </div>
+                              )}
+
+                              {/* PER-GROUP sections */}
+                              {(() => {
+                                // Với Growing/Growth: mỗi nhóm có schema riêng từ MeasurementDefinition của nhóm đó.
+                                // Với stage khác: tất cả nhóm dùng chung schema hardcode.
+                                const isGrowthStage = s.stageType === 'Growing' || s.stageType === 'Growth';
+                                return groups.map(g => {
+                                const groupData = editData.resultData?.byGroup?.[g.id] || {};
+                                // Schema riêng cho group
+                                let groupSchema = schema;
+                                if (isGrowthStage) {
+                                  const dynamicSchema = buildGrowthResultSchema(s.stageType, measurements, g.id);
+                                  groupSchema = dynamicSchema.length > 0 ? dynamicSchema : schema;
+                                }
+                                const groupFieldCount = groupSchema.filter(f => f.group === 'Sinh trưởng (động)').length;
+                                return (
+                                  <div key={g.id} className="bg-white rounded-lg p-3 border-2 border-purple-200">
+                                    <p className="text-[11px] font-extrabold text-purple-700 uppercase mb-2 tracking-wider flex items-center gap-1.5">
+                                      🧪 Nhóm: <span className="text-purple-900">{g.groupName || g.name}</span>
+                                      <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[9px] font-bold">{g.groupType || 'Group'}</span>
+                                      {isGrowthStage && (
+                                        <span className="px-1.5 py-0.5 bg-cyan-100 text-cyan-700 rounded text-[9px] font-bold">
+                                          📊 {groupFieldCount} chỉ số của nhóm
+                                        </span>
+                                      )}
+                                    </p>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                                      {groupSchema.map(field => {
+                                        const currentVal = groupData[field.key];
+                                        const hasValue = currentVal !== undefined && currentVal !== null && currentVal !== '';
+                                        const evalResult = field.type === 'number' && hasValue
+                                          ? evaluateAgainstTarget(currentVal, field.key)
+                                          : null;
+                                        return (
+                                          <div key={`${g.id}-${field.key}`} className={`relative rounded-lg p-2.5 border transition-all ${
+                                            evalResult?.status === 'met' ? 'bg-emerald-50/50 border-emerald-200'
+                                            : evalResult?.status === 'close' ? 'bg-amber-50/50 border-amber-200'
+                                            : evalResult?.status === 'below' || evalResult?.status === 'above' ? 'bg-rose-50/50 border-rose-200'
+                                            : hasValue ? 'bg-blue-50/50 border-blue-200'
+                                            : 'bg-slate-50 border-slate-200'
+                                          }`}>
+                                            <label className="text-[10px] font-bold text-slate-600 flex items-center gap-1.5 mb-1">
+                                              <span>{field.icon}</span>
+                                              <span className="truncate">{field.label}</span>
+                                              {evalResult && evalResult.status !== 'no_target' && evalResult.status !== 'no_value' && (
+                                                <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold bg-${evalResult.color}-100 text-${evalResult.color}-700`}
+                                                  title={`${evalResult.label} (${evalResult.percent}% target)`}>
+                                                  {evalResult.icon} {evalResult.percent}%
+                                                </span>
+                                              )}
+                                            </label>
+                                            {field.type === 'select' ? (
+                                              <select value={currentVal || ''}
+                                                onChange={e => updateResultField(field.key, e.target.value, g.id)}
+                                                className="w-full px-2.5 py-1.5 border border-slate-200 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-200 focus:border-blue-400 outline-none">
+                                                <option value="">-- Chọn --</option>
+                                                {field.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                              </select>
+                                            ) : field.type === 'text' ? (
+                                              <input type="text" value={currentVal || ''}
+                                                onChange={e => updateResultField(field.key, e.target.value, g.id)}
+                                                className="w-full px-2.5 py-1.5 border border-slate-200 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-200 focus:border-blue-400 outline-none" />
+                                            ) : (
+                                              <div className="flex items-center gap-1.5">
+                                                <input type="number" value={currentVal ?? ''}
+                                                  min={field.min} max={field.max} step={field.step}
+                                                  onChange={e => updateResultField(field.key, e.target.value === '' ? null : Number(e.target.value), g.id)}
+                                                  className="flex-1 px-2.5 py-1.5 border border-slate-200 rounded-md text-sm bg-white focus:ring-2 focus:ring-blue-200 focus:border-blue-400 outline-none font-mono font-bold" />
+                                                {field.unit && (
+                                                  <span className="text-[10px] text-slate-500 font-bold bg-white px-2 py-1.5 rounded-md border border-slate-200 shrink-0">{field.unit}</span>
+                                                )}
+                                              </div>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                );
+                              });
+                              })()}
+                            </div>
+                          ) : (
+                          /* FLAT MODE (cũ) */
+                          <div>
                           {Object.entries(grouped).map(([groupName, fields]) => (
                             <div key={groupName} className="mb-3 last:mb-0">
                               <p className="text-[10px] font-bold text-slate-500 uppercase mb-1.5 tracking-wider">{groupName}</p>
@@ -1956,13 +2684,40 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
                                 {fields.map(field => {
                                   const currentVal = editData.resultData?.[field.key];
                                   const hasValue = currentVal !== undefined && currentVal !== null && currentVal !== '';
+                                  // Auto-fill info (nếu field này đã được auto-fill khi mở edit)
+                                  const autoInfo = editData._autoFilled?.[field.key];
+                                  // Target evaluation (chỉ cho field số)
+                                  const isNumeric = field.type === 'number';
+                                  const evalResult = isNumeric && hasValue
+                                    ? evaluateAgainstTarget(currentVal, field.key)
+                                    : null;
                                   return (
-                                    <div key={field.key} className={`relative rounded-lg p-2.5 border transition-all ${hasValue ? 'bg-blue-50/50 border-blue-200' : 'bg-slate-50 border-slate-200'}`}>
+                                    <div key={field.key} className={`relative rounded-lg p-2.5 border transition-all ${
+                                      evalResult?.status === 'met' ? 'bg-emerald-50/50 border-emerald-200'
+                                      : evalResult?.status === 'close' ? 'bg-amber-50/50 border-amber-200'
+                                      : evalResult?.status === 'below' || evalResult?.status === 'above' ? 'bg-rose-50/50 border-rose-200'
+                                      : hasValue ? 'bg-blue-50/50 border-blue-200'
+                                      : 'bg-slate-50 border-slate-200'
+                                    }`}>
                                       <label className="text-[10px] font-bold text-slate-600 flex items-center gap-1.5 mb-1">
                                         <span>{field.icon}</span>
                                         <span>{field.label}</span>
                                         {field.autoFrom && (
                                           <span className="px-1 py-0.5 bg-blue-100 text-blue-700 rounded text-[8px] font-bold" title={`Có thể tự tính từ ${field.autoFrom}`}>AUTO</span>
+                                        )}
+                                        {autoInfo && (
+                                          <span
+                                            className="px-1 py-0.5 bg-purple-100 text-purple-700 rounded text-[8px] font-bold cursor-help"
+                                            title={`✨ Tự động từ ${autoInfo.count} mẫu đo (metric: ${autoInfo.source}). Bạn có thể sửa lại.`}
+                                          >
+                                            ✨ {autoInfo.count} mẫu
+                                          </span>
+                                        )}
+                                        {evalResult && evalResult.status !== 'no_target' && evalResult.status !== 'no_value' && (
+                                          <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold bg-${evalResult.color}-100 text-${evalResult.color}-700`}
+                                            title={`${evalResult.label} (${evalResult.percent}% target${evalResult.delta != null ? `, Δ=${evalResult.delta}` : ''})`}>
+                                            {evalResult.icon} {evalResult.label} · {evalResult.percent}%
+                                          </span>
                                         )}
                                       </label>
                                       {field.type === 'select' ? (
@@ -1990,22 +2745,94 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
                                       {field.hint && (
                                         <p className="text-[9px] text-slate-500 mt-1 italic">{field.hint}</p>
                                       )}
+                                      {autoInfo && (
+                                        <p className="text-[9px] text-purple-700 mt-1 italic">
+                                          💡 Tính từ <strong>{autoInfo.source}</strong> ({autoInfo.count} mẫu đo). Có thể sửa lại.
+                                        </p>
+                                      )}
                                     </div>
                                   );
                                 })}
                               </div>
                             </div>
                           ))}
+                          </div>
+                          )}
                         </div>
+
+                        {/* Mini comparison table các nhóm */}
+                        {(() => {
+                          const stageRecs = measurementRecords.filter(r =>
+                            r.stageId === s.id || r.experimentStageId === s.id || r.stage?.id === s.id
+                          );
+                          const comparison = buildMiniComparison({
+                            stageId: s.id,
+                            groups,
+                            batches,
+                            records: stageRecs,
+                            definitions: measurements,
+                            fieldKeys: ['chieuCaoCm', 'tiLeSong', 'tiLeDauQua', 'sanLuongKg', 'soLaTrungBinh']
+                          });
+                          if (comparison.length === 0) return null;
+                          return (
+                            <div className="border-t border-slate-200 pt-3">
+                              <div className="flex items-center justify-between mb-2">
+                                <h5 className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                                  🏆 So sánh giữa các nhóm
+                                </h5>
+                                <span className="text-[10px] text-slate-500">{comparison.length} chỉ số · {comparison[0].rows.length} nhóm</span>
+                              </div>
+                              <div className="space-y-2">
+                                {comparison.map(cmp => (
+                                  <div key={cmp.fieldKey} className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+                                    <div className="bg-slate-50 px-2.5 py-1.5 border-b border-slate-200 flex items-center justify-between">
+                                      <span className="text-[10px] font-bold text-slate-700">📏 {cmp.label}</span>
+                                      <span className="text-[9px] text-slate-500">
+                                        {(() => {
+                                          const meta = getFieldMeta(cmp.fieldKey);
+                                          return meta.target ? `Target: ${meta.target}${cmp.unit || meta.unit || ''}` : '';
+                                        })()}
+                                      </span>
+                                    </div>
+                                    <div className="divide-y divide-slate-100">
+                                      {cmp.rows.map((row, idx) => (
+                                        <div key={row.groupId} className={`flex items-center gap-2 px-2.5 py-1.5 text-[11px] ${row.isBest ? 'bg-emerald-50/40' : ''}`}>
+                                          <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${row.isBest ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                                            {idx + 1}
+                                          </span>
+                                          <span className="flex-1 truncate font-semibold text-slate-800">
+                                            {row.groupName}
+                                            {row.isBest && <span className="ml-1.5 text-emerald-600">🏆</span>}
+                                          </span>
+                                          <span className="font-mono font-bold text-slate-900">
+                                            {row.value}{cmp.unit}
+                                          </span>
+                                          {row.status && row.status.status !== 'no_target' && row.status.status !== 'no_value' && (
+                                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold bg-${row.status.color}-100 text-${row.status.color}-700 shrink-0`}
+                                              title={`${row.status.label} · ${row.status.percent}% target`}>
+                                              {row.status.icon} {row.status.percent}%
+                                            </span>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
 
                         {/* Summary */}
                         <div>
-                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">📝 Nhận xét & Kết luận</label>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">📝 Nhận xét & Kết luận</label>
+                          </div>
                           <textarea value={editData.resultSummary}
                             onChange={e => setEditData({ ...editData, resultSummary: e.target.value })}
-                            rows={3}
-                            placeholder={`VD: ${stageTypeMeta.label.split('(')[0].trim()} đạt kết quả tốt. Chi tiết xem các số liệu bên trên...`}
-                            className="w-full mt-1 px-3 py-2 border border-amber-200 rounded-lg text-sm bg-amber-50/30 focus:ring-2 focus:ring-amber-200 focus:border-amber-400 outline-none resize-none" />
+                            rows={5}
+                            placeholder="Nhập nhận xét, phân tích và kết luận của bạn về kết quả giai đoạn..."
+                            className="w-full px-3 py-2 border border-amber-200 rounded-lg text-sm bg-amber-50/30 focus:ring-2 focus:ring-amber-200 focus:border-amber-400 outline-none resize-none font-mono text-[11px]" />
                         </div>
 
                         {/* Actions */}
@@ -2040,7 +2867,7 @@ function safeParseJSON(s, fallback = null) {
 
 // ── Groups Tab ─────────────────────────────────────────────────────────────────
 
-const GroupsTab = ({ groups, form, setForm, onCreate, onDelete, loading }) => (
+const GroupsTab = ({ groups = [], form, setForm, onCreate, onDelete, loading }) => (
   <div className="space-y-4">
 
     <div className="bg-emerald-50 rounded-xl p-4 border border-emerald-100">
@@ -2290,7 +3117,7 @@ const DesignTab = ({ design, form, setForm, onSave, onDelete, loading }) => {
 
 // ── Measurements Tab ─────────────────────────────────────────────────────────────
 
-const MeasurementsTab = ({ measurements, groups, form, setForm, onCreate, onDelete, loading, experimentId, stages }) => (
+const MeasurementsTab = ({ measurements = [], groups = [], form, setForm, onCreate, onDelete, loading, experimentId, stages = [] }) => (
   <div className="space-y-4">
     {/* CRUD MeasurementDefinition (giữ lại để tạo các metric mới) */}
     <div className="bg-teal-50 rounded-xl p-4 border border-teal-100">
@@ -2376,7 +3203,7 @@ const MeasurementsTab = ({ measurements, groups, form, setForm, onCreate, onDele
 
 // ── Schedules Tab ───────────────────────────────────────────────────────────────
 
-const SchedulesTab = ({ schedules, stages, batches, form, setForm, onCreate, onDelete, loading }) => {
+const SchedulesTab = ({ schedules = [], stages = [], batches = [], form, setForm, onCreate, onDelete, loading }) => {
   // Auto-fill startDate/endDate khi chọn giai đoạn (nếu giai đoạn có thông tin)
   const handleStageChange = (stageId) => {
     const selected = stages.find(s => s.id === stageId);
@@ -2537,7 +3364,45 @@ const SchedulesTab = ({ schedules, stages, batches, form, setForm, onCreate, onD
 
 // ── Batches Tab ───────────────────────────────────────────────────────────────
 
-const BatchesTab = ({ batches, bedAssignments, groups, form, setForm, onCreate, onDelete, onEdit, onRandomizeBeds, loading }) => (
+const BatchesTab = ({ batches = [], bedAssignments = [], groups = [], form, setForm, onCreate, onDelete, onEdit, onRandomizeBeds, loading, taskReportsByBatch = {} }) => {
+  // Helper render cell "Số cây thực tế" (tính từ các TaskReport Planting của batch)
+  const renderActualCountCell = (batch) => {
+    const reports = taskReportsByBatch[batch.id] || [];
+    const actual = aggregatePlantCountFromReports(batch.id, reports);
+    const cmp = comparePlannedVsActual(batch.plantCount, actual);
+    if (cmp.status === 'empty') {
+      return (
+        <span className="text-[10px] text-slate-400 italic" title="Chưa có báo cáo Planting nào">
+          —
+        </span>
+      );
+    }
+    if (cmp.status === 'no_plan') {
+      return (
+        <span className="text-[10px] text-amber-700 font-semibold" title="Có báo cáo trồng nhưng batch chưa ghi kế hoạch">
+          ⚠ {cmp.actual} cây
+        </span>
+      );
+    }
+    const statusBadge = {
+      match: { color: 'bg-emerald-100 text-emerald-700', icon: '✅', label: 'khớp' },
+      less: { color: 'bg-amber-100 text-amber-800', icon: '⚠️', label: `thiếu ${Math.abs(cmp.diff)}` },
+      over: { color: 'bg-blue-100 text-blue-700', icon: 'ℹ️', label: `dư +${cmp.diff}` }
+    }[cmp.status];
+    const tooltip = `Kế hoạch: ${cmp.planned} · Thực tế: ${cmp.actual} (${actual.reportCount} báo cáo Planting)`;
+    return (
+      <div className="flex flex-col gap-0.5">
+        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${statusBadge.color}`} title={tooltip}>
+          <span>{statusBadge.icon}</span> {cmp.actual} <span className="opacity-70 font-normal">{statusBadge.label}</span>
+        </span>
+        {actual.reportCount > 1 && (
+          <span className="text-[9px] text-slate-500 italic">{actual.reportCount} lần trồng</span>
+        )}
+      </div>
+    );
+  };
+
+  return (
   <div className="space-y-4">
     {/* Info banner if no beds assigned */}
     {bedAssignments.length === 0 && (
@@ -2625,7 +3490,7 @@ const BatchesTab = ({ batches, bedAssignments, groups, form, setForm, onCreate, 
       <div className="overflow-x-auto bg-white border border-outline-variant rounded-xl">
         <table className="w-full text-xs">
           <thead className="bg-rose-50 border-b border-rose-100">
-            <tr>{['Mã Lô', 'Luống (Khu/Trại)', 'Nhóm', 'Ngày Trồng', 'Dự Kiến Thu Hoạch', 'Số Cây', 'Ghi Chú', 'Thao Tác'].map(h => (
+            <tr>{['Mã Lô', 'Luống (Khu/Trại)', 'Nhóm', 'Ngày Trồng', 'Dự Kiến Thu Hoạch', 'Số Cây (kế hoạch)', 'Thực Tế (Planting)', 'Ghi Chú', 'Thao Tác'].map(h => (
               <th key={h} className="px-4 py-3 text-left font-bold text-rose-700 uppercase">{h}</th>
             ))}</tr>
           </thead>
@@ -2656,6 +3521,7 @@ const BatchesTab = ({ batches, bedAssignments, groups, form, setForm, onCreate, 
                   <td className="px-4 py-3 font-mono">{b.plantingDate || '—'}</td>
                   <td className="px-4 py-3 font-mono">{b.expectedHarvestDate || '—'}</td>
                   <td className="px-4 py-3 font-bold">{b.plantCount || '—'}</td>
+                  <td className="px-4 py-3">{renderActualCountCell(b)}</td>
                   <td className="px-4 py-3 text-on-surface-variant max-w-[160px]">
                     <div className="truncate" title={b.notes || ''}>{b.notes || '—'}</div>
                   </td>
@@ -2678,11 +3544,12 @@ const BatchesTab = ({ batches, bedAssignments, groups, form, setForm, onCreate, 
       </div>
     }
   </div>
-);
+  );
+};
 
 // ── Beds Tab ─────────────────────────────────────────────────────────────────
 
-const BedsTab = ({ bedAssignments, availableBeds, areas, form, setForm, onAssign, onDelete, loading }) => (
+const BedsTab = ({ bedAssignments = [], availableBeds = [], areas = [], form, setForm, onAssign, onDelete, loading }) => (
   <div className="space-y-4">
     <div className="bg-green-50 rounded-xl p-4 border border-green-100">
       <h4 className="text-xs font-bold text-green-700 mb-3">+ Gán Luống Vào Thí Nghiệm</h4>
@@ -2731,8 +3598,8 @@ const BedsTab = ({ bedAssignments, availableBeds, areas, form, setForm, onAssign
 // ── Tasks Tab (Visual: grouped by dueDate, date filter, modal assign) ─────────
 
 const TasksTab = ({
-  tasks, stages, batches, schedules, form, setForm, allSkills = [],
-  users, assignForm, setAssignForm, skillMatches, userWorkload = {},
+  tasks = [], stages = [], batches = [], schedules = [], form, setForm, allSkills = [],
+  users = [], assignForm, setAssignForm, skillMatches = [], userWorkload = {},
   selectedTaskForAssign, currentUserId,
   onCreate, onDelete, onGenerate, onSkillMatch, onAssign, onReassign,
   reassignModalTask, onReassignFormChange, onConfirmReassign, onCloseReassign,

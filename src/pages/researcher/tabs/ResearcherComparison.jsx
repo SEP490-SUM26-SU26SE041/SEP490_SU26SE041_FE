@@ -534,7 +534,7 @@ const ResearcherComparison = () => {
                       Giá trị trung bình đạt <strong>{fmt(goldenFormula.avg)}</strong>{goldenFormula.targetAvg > 0 && `, hoàn thành ${goldenFormula.achievementPct}% mục tiêu`}.
                     </p>
                   </div>
-                  {goldenFormula.records.length > 0 && (
+                  {goldenFormula.recordCount > 0 && (
                     <div className="p-4 bg-blue-50 border border-blue-200 rounded-xl">
                       <p className="text-[10px] font-bold uppercase text-blue-700 mb-1">Mức độ ổn định</p>
                       <p className="text-sm text-on-surface">
