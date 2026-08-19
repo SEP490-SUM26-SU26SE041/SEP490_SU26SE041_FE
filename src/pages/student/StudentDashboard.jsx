@@ -474,33 +474,19 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
       const reportRes = await taskReportsApi.create({ taskId: task.id, reportText, resultData: dataObj });
       const reportId = reportRes?.id || reportRes?.data?.id;
 
-      // Bridge: tạo MeasurementRecord (Bulk cho Measurement/Observation Task, Legacy cho các loại khác)
-      const usesBulkPath = task?.taskType === 'Measurement' || task?.taskType === 'Observation';
-      // Lọc definitions theo nhóm của batch (fetch trực tiếp qua GET /batches/{batchId})
+      // Bridge: CHỈ tạo MeasurementRecord cho Observation Task
+      // Các task khác (Harvest, Planting, Watering...) KHÔNG cần map vô MeasurementRecord
+      const isObservation = task?.taskType === 'Observation';
       const effectiveDefinitions = filterDefinitionsByTaskGroup(definitions, task, batchGroupId);
       let mResult;
-      if (usesBulkPath) {
-        // Truyền definitions để items có metricName/unit/targetValue
+      if (isObservation) {
         const bulkItems = extractBulkItemsFromResultData(resultData, effectiveDefinitions);
         mResult = await createMeasurementsBulk(task, bulkItems, {
           measuredAt: new Date().toISOString(),
           notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
         }, measurementRecordsApi.bulk);
       } else {
-        // Build Map<name, definition> để map key 'plantHeight' → definition tương ứng
-        const defByName = new Map(
-          effectiveDefinitions.map(d => [d.metricName, d])
-        );
-        const payloads = buildMeasurementPayloads(
-          task,
-          extractMeasurementsFromReport(dataObj),
-          {
-            measuredAt: new Date().toISOString(),
-            notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
-          },
-          defByName
-        );
-        mResult = await createMeasurementsFromTaskReport(payloads, measurementRecordsApi);
+        mResult = { created: 0, skipped: 0, success: 0, warnings: [] };
       }
 
       // Gắn ảnh đính kèm vào TaskReport (multipart với File + đầy đủ metadata)
@@ -539,11 +525,9 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
       }
 
       const toastMsg = [];
-      if (usesBulkPath) {
-        if (mResult.created > 0) toastMsg.push(`📊 ${mResult.created} chỉ số`);
+      if (isObservation && mResult.created > 0) {
+        toastMsg.push(`📊 ${mResult.created} chỉ số`);
         if (mResult.skipped > 0) toastMsg.push(`⚠️ ${mResult.skipped} bỏ qua`);
-      } else if (mResult.success > 0) {
-        toastMsg.push(`📊 ${mResult.success} chỉ số`);
       }
       if (imageOk > 0) toastMsg.push(`📷 ${imageOk} ảnh`);
       showToast(toastMsg.length > 0 ? `Đã gửi báo cáo! ${toastMsg.join(' · ')}` : 'Đã gửi báo cáo!', 'success');
@@ -591,32 +575,17 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
         reportId = reports[reports.length - 1]?.id;
       }
 
-      // 2. Bridge: tạo MeasurementRecord (Bulk cho Measurement/Observation Task, Legacy cho các loại khác)
-      let mResult = { created: 0, skipped: 0, success: 0 };
+      // 2. Bridge: CHỈ tạo MeasurementRecord cho Observation Task
+      let mResult = { created: 0, skipped: 0, success: 0, warnings: [] };
       if (hasNewContent && Object.keys(dataObj).length > 0) {
-        const usesBulkPath = task?.taskType === 'Measurement' || task?.taskType === 'Observation';
-        // Lọc definitions theo nhóm của batch (fetch trực tiếp qua GET /batches/{batchId})
+        const isObservation = task?.taskType === 'Observation';
         const effectiveDefinitions = filterDefinitionsByTaskGroup(definitions, task, batchGroupId);
-        if (usesBulkPath) {
+        if (isObservation) {
           const bulkItems = extractBulkItemsFromResultData(resultData, effectiveDefinitions);
           mResult = await createMeasurementsBulk(task, bulkItems, {
             measuredAt: new Date().toISOString(),
             notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
           }, measurementRecordsApi.bulk);
-        } else {
-          const defByName = new Map(
-            effectiveDefinitions.map(d => [d.metricName, d])
-          );
-          const payloads = buildMeasurementPayloads(
-            task,
-            extractMeasurementsFromReport(dataObj),
-            {
-              measuredAt: new Date().toISOString(),
-              notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
-            },
-            defByName
-          );
-          mResult = await createMeasurementsFromTaskReport(payloads, measurementRecordsApi);
         }
       }
 
@@ -653,12 +622,10 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
       await tasksApi.complete(task.id);
 
       const toastMsg = [];
-      const usesBulkPath = task?.taskType === 'Measurement' || task?.taskType === 'Observation';
-      if (usesBulkPath) {
-        if (mResult.created > 0) toastMsg.push(`📊 ${mResult.created} chỉ số`);
+      const isObservation = task?.taskType === 'Observation';
+      if (isObservation && mResult.created > 0) {
+        toastMsg.push(`📊 ${mResult.created} chỉ số`);
         if (mResult.skipped > 0) toastMsg.push(`⚠️ ${mResult.skipped} bỏ qua`);
-      } else if (mResult.success > 0) {
-        toastMsg.push(`📊 ${mResult.success} chỉ số`);
       }
       if (hasNewImages) toastMsg.push(`📷 ${reportImages.length} ảnh`);
       const modeLabel = hasNewContent ? 'báo cáo mới' : (hasNewImages ? 'bổ sung ảnh' : 'lịch sử');
