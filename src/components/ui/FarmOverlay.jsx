@@ -227,7 +227,7 @@ export default function FarmOverlay() {
     <div id="ui-overlay">
       {/* Header */}
       <header className="header">
-        <div className="logo">Vườn Ươm Thông Minh SEP490</div>
+        <div className="logo">Vườn Ươm Thực Nghiệm Thông Minh SEP490</div>
         <nav className="nav">
           {['Tổng Quan', 'Gieo Trồng', 'Phát Triển', 'Giám Sát'].map((name, i) => (
             <button

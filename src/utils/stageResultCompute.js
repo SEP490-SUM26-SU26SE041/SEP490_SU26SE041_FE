@@ -763,9 +763,12 @@ export function calcScheduledOccurrences(sc) {
  *                         reportText, resultData, reportedAt, images, batchId, ... }
  *   → CHỈ CẦN đếm trực tiếp theo report.taskType (KHÔNG cần lookup task).
  *   Vì BE chỉ trả report khi task đã hoàn thành (status implicit = xong).
+ * @param {Array} [params.tasks] - MẢNG TASK để resolve stageId cho từng report
+ *   Mỗi task: { id, experimentStageId, batchId, taskType, ... }
+ *   → Dùng taskMap: Map<taskId, task> để lọc report chỉ thuộc stage hiện tại
  * @returns {{ perGroup: Object, overall: Object, byBatch: Object }}
  */
-export function computeResultsFromSchedulesAndReports({ stageId, groups = [], batches = [], schedules = [], taskReportsByBatch = {} }) {
+export function computeResultsFromSchedulesAndReports({ stageId, groups = [], batches = [], schedules = [], taskReportsByBatch = {}, tasks = [] }) {
   const result = { perGroup: {}, overall: {}, byBatch: {} };
   if (!Array.isArray(batches) || batches.length === 0) return result;
   if (!Array.isArray(schedules) && !taskReportsByBatch) return result;
@@ -818,12 +821,25 @@ export function computeResultsFromSchedulesAndReports({ stageId, groups = [], ba
   // Chuẩn bị set các batch thuộc stage (lọc qua schedule trước, fallback qua report có stageId)
   const stageScheduleBatchIds = new Set(stageSchedules.map(sc => sc.batchId).filter(Boolean));
 
+  // Xây dựng taskMap: Map<taskId, task> để resolve stageId cho từng report
+  // Lọc chỉ task thuộc stage hiện tại
+  const taskMap = new Map();
+  const stageTaskIds = new Set();
+  tasks.forEach(t => {
+    const sid = t.experimentStageId || t.stageId || t.stage?.id;
+    if (sid === stageId) {
+      taskMap.set(t.id, t);
+      stageTaskIds.add(t.id);
+    }
+  });
+
   // THỰC TẾ (TT) — đếm trực tiếp từ report.taskType
   // CHUẨN LOGIC KHOA HỌC:
   //   - BE chỉ trả report khi task đã hoàn thành → mỗi report = 1 lần thực hiện
   //   - CHỈ đếm taskType thuộc nhóm chăm sóc (Watering, Fertilizing, Spraying/PestControl)
   //   - Bỏ qua: Planting, Observation, Inspection, Harvest, ... (không phải care)
   //   - Lọc theo batchId (key của taskReportsByBatch) → resolve sang groupId
+  //   - LỌC THEO STAGE: chỉ nhận report có task thuộc stage hiện tại
   Object.entries(taskReportsByBatch || {}).forEach(([bid, reports]) => {
     if (!Array.isArray(reports)) return;
     for (const r of reports) {
@@ -831,6 +847,8 @@ export function computeResultsFromSchedulesAndReports({ stageId, groups = [], ba
       const taskType = r.taskType || r.TaskType;
       const fk = TASK_TYPE_TO_CARE_FIELD[taskType];
       if (!fk) continue; // Bỏ qua Planting, Observation, Inspection, Harvest...
+      // Lọc theo stage: chỉ nhận report có task thuộc stage hiện tại
+      if (!stageTaskIds.has(r.taskId)) continue;
       // Nếu có stageScheduleBatchIds → chỉ nhận batch thuộc lịch (tránh đếm nhầm batch của stage khác)
       // Nếu không có schedule nào → fallback lấy tất cả batch có report
       if (stageScheduleBatchIds.size > 0 && !stageScheduleBatchIds.has(bid)) continue;

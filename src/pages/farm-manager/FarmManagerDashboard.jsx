@@ -48,9 +48,6 @@ const Header = ({ title, unreadCount, onNotificationsClick }) => (
           </span>
         )}
       </button>
-      <div className="w-8 h-8 rounded-full overflow-hidden border border-outline-variant">
-        <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=100" alt="Avatar" className="w-full h-full object-cover" />
-      </div>
     </div>
   </header>
 );
@@ -143,7 +140,7 @@ const FarmManagerDashboard = () => {
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 20h10" /><path d="M10 20c5.5 0 5.5-18 0-18" /><path d="M14 20c-5.5 0-5.5-18 0-18" /><path d="M2 13c3.5 0 3.5 7 7 7" /><path d="M22 13c-3.5 0-3.5 7-7 7" /></svg>
               </div>
               <div>
-                <h1 className="font-hanken text-lg font-bold text-primary leading-tight">Vườn Ươm Thông Minh</h1>
+                <h1 className="font-hanken text-lg font-bold text-primary leading-tight">Vườn Ươm Thực Nghiệm Thông Minh</h1>
                 <p className="text-[9px] text-on-surface-variant font-bold uppercase tracking-widest">QUẢN LÝ</p>
               </div>
             </div>
@@ -205,9 +202,9 @@ const FarmManagerDashboard = () => {
               <div className="w-6 h-6 bg-primary/20 flex items-center justify-center rounded text-primary">
                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M7 20h10" /><path d="M10 20c5.5 0 5.5-18 0-18" /><path d="M14 20c-5.5 0-5.5-18 0-18" /><path d="M2 13c3.5 0 3.5 7 7 7" /><path d="M22 13c-3.5 0-3.5 7-7 7" /></svg>
               </div>
-              <span className="font-hanken font-bold text-primary text-sm tracking-tight">Vườn Ươm Thông Minh SEP490</span>
+              <span className="font-hanken font-bold text-primary text-sm tracking-tight">Vườn Ươm Thực Nghiệm Thông Minh SEP490</span>
             </div>
-            <p className="text-[10px] text-on-surface-variant font-medium">© 2026 Vườn Ươm Thông Minh. Bản quyền đã được bảo hộ.</p>
+            <p className="text-[10px] text-on-surface-variant font-medium">© 2026 Vườn Ươm Thực Nghiệm Thông Minh. Bản quyền đã được bảo hộ.</p>
           </div>
 
           <div className="flex items-center gap-8">

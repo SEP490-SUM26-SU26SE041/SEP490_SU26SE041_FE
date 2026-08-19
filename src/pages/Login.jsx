@@ -198,7 +198,7 @@ const Login = () => {
       <div className="hidden lg:flex flex-1 relative flex-col bg-[#f0f2f5] bg-cover bg-center" style={{ backgroundImage: "url('/background/background-login.jpg')" }}>
         <div className="flex-1 bg-gradient-to-b from-black/10 to-black/70 flex flex-col justify-between p-14 text-white">
           <div className="animate-slide-up">
-            <h1 className="font-serif text-5xl font-bold mb-4 tracking-tight">Vườn Ươm Thông Minh</h1>
+            <h1 className="font-serif text-5xl font-bold mb-4 tracking-tight">Vườn Ươm Thực Nghiệm Thông Minh</h1>
             <p className="text-lg font-light opacity-90 max-w-md leading-relaxed">Tương lai của nông nghiệp, được mô phỏng.</p>
           </div>
           <div className="opacity-60 text-sm font-light">
