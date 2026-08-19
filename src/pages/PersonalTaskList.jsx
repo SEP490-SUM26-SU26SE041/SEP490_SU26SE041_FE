@@ -116,27 +116,18 @@ const PersonalTaskList = () => {
       // Lọc definitions theo nhóm của batch (chỉ lấy 1 nhóm, tránh trùng metricName)
       const effectiveDefinitions = filterDefinitionsByTaskGroup(definitions, selectedTask, batchGroupId);
 
-      const isMeasurementTask = selectedTask.taskType === 'Measurement' || selectedTask.taskType === 'Observation';
+      // Bridge: CHỈ tạo MeasurementRecord cho Observation Task
+      // Các task khác (Harvest, Planting, Watering...) KHÔNG cần map vô MeasurementRecord
+      const isObservation = selectedTask?.taskType === 'Observation';
       let measureResult;
-      if (isMeasurementTask) {
+      if (isObservation) {
         const bulkItems = extractBulkItemsFromResultData(resultData, effectiveDefinitions);
         measureResult = await createMeasurementsBulk(selectedTask, bulkItems, {
           measuredAt: new Date().toISOString(),
           notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
         }, measurementRecordsApi.bulk);
       } else {
-        // Build Map<name, definition> để measurementName → definitionId
-        const defByName = new Map(effectiveDefinitions.map(d => [d.metricName, d]));
-        const measurementPayloads = buildMeasurementPayloads(
-          selectedTask,
-          extractMeasurementsFromReport(dataObj),
-          {
-            measuredAt: new Date().toISOString(),
-            notes: `Tự động từ TaskReport${reportId ? ` #${reportId}` : ''}`
-          },
-          defByName
-        );
-        measureResult = await createMeasurementsFromTaskReport(measurementPayloads, measurementRecordsApi);
+        measureResult = { created: 0, skipped: 0, success: 0, warnings: [] };
       }
 
       // 3. Gắn ảnh đính kèm vào TaskReport (multipart với File + đầy đủ metadata)
