@@ -301,17 +301,13 @@ const NotificationBell = ({ variant = 'light' }) => {
               })
             )}
           </div>
-
-          {/* Footer */}
-          <div className="px-4 py-2 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
-            <span className="text-[10px] text-slate-500 italic">
-              {connected ? '🟢 Realtime' : '⚪ Offline'}
-            </span>
-            <button onClick={() => { setOpen(false); appNavigate('/notifications'); }}
-              className="text-[10px] font-bold text-slate-600 hover:text-blue-600 uppercase">
-              Xem tất cả →
-            </button>
-          </div>
+          {connected !== undefined && (
+            <div className="px-4 py-2 border-t border-slate-100 bg-slate-50 text-center">
+              <span className="text-[10px] text-slate-500 italic">
+                {connected ? '🟢 Realtime' : '⚪ Offline'}
+              </span>
+            </div>
+          )}
         </div>,
         document.body
       )}
