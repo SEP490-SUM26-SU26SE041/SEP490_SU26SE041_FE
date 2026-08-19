@@ -1636,23 +1636,23 @@ const ExperimentDetailModal = ({ experiment, allSkills: parentAllSkills = [], on
                 <BatchesTab batches={batches} bedAssignments={bedAssignments} groups={groups} form={batchForm} setForm={setBatchForm} onCreate={handleCreateBatch} onDelete={handleDeleteBatch} onEdit={openBatchEdit} loading={tabLoading} taskReportsByBatch={taskReportsByBatch} />
               )}
               {activeTab === 'tasks' && (
-<TasksTab
-                tasks={tasks} stages={stages} batches={batches} schedules={schedules}
+                <TasksTab
+                  tasks={tasks} stages={stages} batches={batches} schedules={schedules}
                 form={taskForm} setForm={setTaskForm} allSkills={parentAllSkills}
-                users={users} assignForm={assignForm} setAssignForm={setAssignForm}
+                  users={users} assignForm={assignForm} setAssignForm={setAssignForm}
                 skillMatches={skillMatches} userWorkload={userWorkload}
                 selectedTaskForAssign={selectedTaskForAssign}
                 currentUserId={currentUserId}
-                onCreate={handleCreateTask} onDelete={handleDeleteTask}
-                onGenerate={(type) => handleGenerateTasks(type)}
+                  onCreate={handleCreateTask} onDelete={handleDeleteTask}
+                  onGenerate={(type) => handleGenerateTasks(type)}
                 onSkillMatch={handleSkillMatch} onAssign={handleAssignTask}
                 onReassign={openReassign}
                 reassignModalTask={reassignModalTask}
                 onReassignFormChange={(patch) => setReassignModalTask(prev => prev ? { ...prev, form: { ...prev.form, ...patch } } : prev)}
                 onConfirmReassign={handleConfirmReassign}
                 onCloseReassign={closeReassign}
-                loading={tabLoading}
-              />
+                  loading={tabLoading}
+                />
               )}
               {activeTab === 'iot' && (
                 <IoTSensorTab experimentTitle={expDetail?.title || expDetail?.experimentCode} />
@@ -2360,23 +2360,23 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
 
                           // Flat view
                           return (
-                            <div className="bg-blue-50/70 rounded-lg p-3 border border-blue-200">
-                              <p className="text-[10px] font-bold uppercase text-blue-700 mb-2">📊 Số liệu kết quả</p>
-                              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                                {schema.filter(f => parsedResult[f.key] !== undefined && parsedResult[f.key] !== null && parsedResult[f.key] !== '').map(f => (
-                                  <div key={f.key} className="bg-white p-2 rounded-md border border-blue-100">
-                                    <p className="text-[9px] font-bold text-slate-500 uppercase flex items-center gap-1">
-                                      <span>{f.icon}</span>
-                                      <span className="truncate">{f.label}</span>
-                                    </p>
-                                    <p className="text-sm font-mono font-bold text-blue-900 mt-0.5">
-                                      {parsedResult[f.key]}
-                                      {f.unit && <span className="text-[9px] text-slate-500 ml-1">{f.unit}</span>}
-                                    </p>
-                                  </div>
-                                ))}
-                              </div>
+                          <div className="bg-blue-50/70 rounded-lg p-3 border border-blue-200">
+                            <p className="text-[10px] font-bold uppercase text-blue-700 mb-2">📊 Số liệu kết quả</p>
+                            <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                              {schema.filter(f => parsedResult[f.key] !== undefined && parsedResult[f.key] !== null && parsedResult[f.key] !== '').map(f => (
+                                <div key={f.key} className="bg-white p-2 rounded-md border border-blue-100">
+                                  <p className="text-[9px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                                    <span>{f.icon}</span>
+                                    <span className="truncate">{f.label}</span>
+                                  </p>
+                                  <p className="text-sm font-mono font-bold text-blue-900 mt-0.5">
+                                    {parsedResult[f.key]}
+                                    {f.unit && <span className="text-[9px] text-slate-500 ml-1">{f.unit}</span>}
+                                  </p>
+                                </div>
+                              ))}
                             </div>
+                          </div>
                           );
                         })()}
 
@@ -3289,7 +3289,7 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
                         {/* Summary */}
                         <div>
                           <div className="flex items-center justify-between mb-1">
-                            <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">📝 Nhận xét & Kết luận</label>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">📝 Nhận xét & Kết luận</label>
                           </div>
                           <textarea value={editData.resultSummary}
                             onChange={e => setEditData({ ...editData, resultSummary: e.target.value })}
@@ -3866,7 +3866,7 @@ const SchedulesTab = ({ schedules = [], stages = [], batches = [], form, setForm
           const stage = stages.find(s => s.id === sc.experimentStageId);
           return (
             <div key={sc.id} className="flex items-center gap-3 p-3 bg-white border border-outline-variant rounded-xl hover:border-amber-300 transition-colors">
-              <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5 flex-wrap mb-1">
                   <span className="text-sm font-semibold text-on-surface truncate">{sc.title || '—'}</span>
                   {stage && (
@@ -3885,21 +3885,21 @@ const SchedulesTab = ({ schedules = [], stages = [], batches = [], form, setForm
                     </span>
                   )}
                 </div>
-                <p className="text-[10px] text-on-surface-variant">
-                  {sc.frequencyDays ? `${sc.frequencyDays} ngày/lần · ` : ''}
+              <p className="text-[10px] text-on-surface-variant">
+                {sc.frequencyDays ? `${sc.frequencyDays} ngày/lần · ` : ''}
                   📍 {sc.startDate || '—'} → {sc.endDate || '—'}
                   {batch?.plantingDate && <> · Trồng {(batch.plantingDate || '').split('T')[0]}</>}
-                </p>
-                {sc.instruction && <p className="text-[10px] text-on-surface-variant mt-0.5 truncate">{sc.instruction}</p>}
-              </div>
-              <button onClick={() => onDelete(sc.id)} className="text-rose-400 hover:text-rose-600 text-xs font-bold shrink-0">✕ Xóa</button>
+              </p>
+              {sc.instruction && <p className="text-[10px] text-on-surface-variant mt-0.5 truncate">{sc.instruction}</p>}
             </div>
+            <button onClick={() => onDelete(sc.id)} className="text-rose-400 hover:text-rose-600 text-xs font-bold shrink-0">✕ Xóa</button>
+          </div>
           );
         })}
       </div>
     }
   </div>
-  );
+);
 };
 
 // ── Batches Tab ───────────────────────────────────────────────────────────────
@@ -4084,7 +4084,7 @@ const BatchesTab = ({ batches = [], bedAssignments = [], groups = [], form, setF
       </div>
     }
   </div>
-  );
+);
 };
 
 // ── Beds Tab ─────────────────────────────────────────────────────────────────
@@ -4579,8 +4579,8 @@ const TasksTab = ({
                               <button onClick={() => onReassign(t)}
                                 className="px-2 py-1.5 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-[10px] font-bold"
                                 title="Chuyển giao tác vụ">
-                                🔄
-                              </button>
+                          🔄
+                        </button>
                             );
                           }
                           return (
@@ -4654,7 +4654,7 @@ const TasksTab = ({
                   </div>
                   {rankedSkillMatches.length === 0 ? (
                     <div className="space-y-1">
-                      <p className="text-xs text-on-surface-variant italic py-2">Đang tìm người phù hợp...</p>
+                    <p className="text-xs text-on-surface-variant italic py-2">Đang tìm người phù hợp...</p>
                       <p className="text-[10px] text-amber-700 italic">
                         ⚠️ Chỉ hiển thị user thuộc role <b>Technician</b> hoặc <b>Student</b>.
                       </p>
@@ -4684,26 +4684,26 @@ const TasksTab = ({
                         })();
 
                         return (
-                          <button key={m.userId} type="button"
-                            onClick={() => setAssignForm({ ...assignForm, assigneeId: m.userId })}
-                            className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-all text-left ${
-                              assignForm.assigneeId === m.userId
-                                ? 'border-emerald-500 bg-emerald-50 shadow-md'
+                        <button key={m.userId} type="button"
+                          onClick={() => setAssignForm({ ...assignForm, assigneeId: m.userId })}
+                          className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-all text-left ${
+                            assignForm.assigneeId === m.userId
+                              ? 'border-emerald-500 bg-emerald-50 shadow-md'
                                 : isTopPick
                                   ? 'border-amber-300 bg-amber-50/40 hover:border-amber-400'
-                                  : 'border-outline-variant bg-white hover:border-emerald-200'
-                            }`}>
+                              : 'border-outline-variant bg-white hover:border-emerald-200'
+                          }`}>
                             <div className="relative">
-                              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white flex items-center justify-center text-sm font-bold shrink-0">
-                                {(m.fullName || m.userId || '?')[0]?.toUpperCase()}
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white flex items-center justify-center text-sm font-bold shrink-0">
+                            {(m.fullName || m.userId || '?')[0]?.toUpperCase()}
                               </div>
                               {isTopPick && (
                                 <span className="absolute -top-1 -right-1 text-[8px] font-black bg-amber-500 text-white px-1.5 py-0.5 rounded-full shadow-sm">
                                   ⭐ TOP
                                 </span>
                               )}
-                            </div>
-                            <div className="flex-1 min-w-0">
+                          </div>
+                          <div className="flex-1 min-w-0">
                               <p className="text-sm font-semibold text-on-surface truncate flex items-center gap-1.5">
                                 {m.fullName || m.userId}
                                 {isTopPick && <span className="text-[9px] text-amber-700 font-bold">TỐI ƯU</span>}
@@ -4721,7 +4721,7 @@ const TasksTab = ({
                                     ({m.pendingTasks} chờ · {m.inProgressTasks} đang làm)
                                   </span>
                                 )}
-                              </div>
+                          </div>
                               {assignModalTask?.dueDate && (
                                 <p className="text-[9px] text-on-surface-variant mt-1 italic">
                                   📅 Trong ngày {new Date(assignModalTask.dueDate).toLocaleDateString('vi-VN')}: <b className={m.totalTasks > 0 ? 'text-amber-700' : 'text-emerald-700'}>{m.totalTasks} task</b>
@@ -4729,14 +4729,14 @@ const TasksTab = ({
                               )}
                             </div>
                             <div className="shrink-0 text-right space-y-1">
-                              <div className="text-xs font-bold text-emerald-700">{m.matchScore || 0}%</div>
+                            <div className="text-xs font-bold text-emerald-700">{m.matchScore || 0}%</div>
                               <div className="text-[9px] text-on-surface-variant">match</div>
                               <div className={`text-[9px] font-bold ${isTopPick ? 'text-amber-700' : 'text-slate-500'}`}>
                                 {Math.round(m.weightedScore * 100)}%
                               </div>
                               <div className="text-[8px] text-on-surface-variant">điểm</div>
-                            </div>
-                          </button>
+                          </div>
+                        </button>
                         );
                       })}
                     </div>
@@ -5118,7 +5118,7 @@ const ReassignModal = ({ data, users, onFormChange, onConfirm, onClose }) => {
       </div>
     </Portal>
   );
-};
+  };
 
 // ── Create Experiment Modal ─────────────────────────────────────────────────────────
 
