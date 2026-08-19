@@ -52,7 +52,7 @@ const printReport = (content, title) => {
     .kpi-label{font-size:11px;color:#64748b;text-transform:uppercase}
     .footer{margin-top:40px;padding-top:16px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;text-align:center}
     @media print{body{padding:20px}}
-  </style></head><body>${content}<div class="footer">Cổng Nghiên Cứu Vườn Ươm Thông Minh · Được tạo lúc ${new Date().toLocaleString('vi-VN')}</div></body></html>`);
+  </style></head><body>${content}<div class="footer">Cổng Nghiên Cứu Vườn Ươm Thực Nghiệm Thông Minh · Được tạo lúc ${new Date().toLocaleString('vi-VN')}</div></body></html>`);
   win.document.close();
   setTimeout(() => win.print(), 500);
 };

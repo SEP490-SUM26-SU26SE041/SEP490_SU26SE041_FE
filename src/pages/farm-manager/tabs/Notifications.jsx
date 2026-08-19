@@ -16,7 +16,7 @@ const Notifications = ({ setUnreadCount }) => {
   const fetch = async (p = page) => {
     try {
       setLoading(true);
-      const data = await notificationsApi.getAll({ pageNumber: p, pageSize });
+      const data = await notificationsApi.getPaged(p, pageSize);
       setNotifications(data?.items ?? []);
       setTotal(data?.totalCount ?? 0);
     } catch (err) {
@@ -31,7 +31,7 @@ const Notifications = ({ setUnreadCount }) => {
 
   const handleMarkRead = async (id) => {
     try {
-      await notificationsApi.markRead(id);
+      await notificationsApi.markAsRead(id);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
       setUnreadCount(prev => Math.max(0, prev - 1));
     } catch (err) {
@@ -41,7 +41,7 @@ const Notifications = ({ setUnreadCount }) => {
 
   const handleMarkAllRead = async () => {
     try {
-      await notificationsApi.markAllRead();
+      await notificationsApi.markAllAsRead();
       setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
       setUnreadCount(0);
       showToast('Đã đánh dấu tất cả đã đọc', 'success');

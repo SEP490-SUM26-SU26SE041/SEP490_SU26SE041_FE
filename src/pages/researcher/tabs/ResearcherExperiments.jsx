@@ -885,9 +885,6 @@ const ExperimentDetailModal = ({ experiment, allSkills: parentAllSkills = [], on
         const data = await tasksApi.getByExperiment(experiment.id);
         setTasks(Array.isArray(data) ? data : []);
       } else if (tab === 'stages') {
-        const data = await stagesApi.getByExperiment(experiment.id);
-        setStages(Array.isArray(data) ? data : []);
-      } else if (tab === 'stages') {
         const stageData = await stagesApi.getByExperiment(experiment.id);
         setStages(Array.isArray(stageData) ? stageData : []);
         // Also load batches để hiển thị thông tin trồng cây trong stage form
@@ -896,6 +893,9 @@ const ExperimentDetailModal = ({ experiment, allSkills: parentAllSkills = [], on
         // Load groups for batch-group mapping
         const groupData = await groupsApi.getByExperiment(experiment.id);
         setGroups(Array.isArray(groupData) ? groupData : []);
+        // Load tasks để lọc TaskReport theo stage (cho computeResultsFromSchedulesAndReports)
+        const tasksData = await tasksApi.getByExperiment(experiment.id);
+        setTasks(Array.isArray(tasksData) ? tasksData : []);
         // Load task reports for all batches (BE trả sẵn taskType trong mỗi report
         // → đếm trực tiếp theo report.taskType, không cần lookup task riêng)
         const batchList = batchData || [];
@@ -2566,7 +2566,7 @@ const StagesTab = ({ stages, form, setForm, onCreate, onDelete, onEdit, onUpdate
                             const SHOW_REF_STAGES = ['Care', 'Growing', 'Growth', 'Harvest', 'Harvesting'];
                             if (!SHOW_REF_STAGES.includes(stageTypeName)) return null;
                             const ref = computeResultsFromSchedulesAndReports({
-                              stageId: s.id, groups, batches, schedules, taskReportsByBatch
+                              stageId: s.id, groups, batches, schedules, taskReportsByBatch, tasks
                             });
                             const batchIds = Object.keys(ref.byBatch);
                             const isHarvestStage = stageTypeName === 'Harvesting' || stageTypeName === 'Harvest';
