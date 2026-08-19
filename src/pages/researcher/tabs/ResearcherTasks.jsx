@@ -1,9 +1,41 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { tasksApi, taskReportsApi, experimentsApi } from '../../../api/experimentApi';
+import { tasksApi, taskReportsApi, experimentsApi, measurementDefinitionsApi, taskImagesApi } from '../../../api/experimentApi';
 import { skillsApi } from '../../../api/skillsApi';
 import { useToast } from '../../../context/ToastContext';
 import { canCancelTask, canEditTask, canDeleteTask, canSubmitReport, canGenerateTasksFromStage, canCreateTaskOnStage } from '../../../utils/taskValidation';
+
+// ── Business Validation: Reassign ──────────────────────────────────────────────────
+const REASSIGN_ALLOWED_STATUSES = ['Pending', 'Assigned', 'InProgress', 'Overdue'];
+const REASSIGN_BLOCKED_STATUSES = ['Completed', 'Approved', 'Cancelled', 'Rejected', 'Resigned', 'Reassigned'];
+
+export const getTaskAssignee = (task) => {
+  if (!task) return { id: null, name: null };
+  return {
+    id: task.assignedToId || task.assignedToUserId || task.assigneeId || null,
+    name: task.assignedToName || task.assignedToUserName || task.assigneeName || null
+  };
+};
+
+export const isTaskAssigned = (task) => {
+  const { id, name } = getTaskAssignee(task);
+  return Boolean(id || name);
+};
+
+export const canReassignTask = (task, currentUserId) => {
+  if (!task) return { allowed: false, reason: 'Không có tác vụ' };
+  if (!REASSIGN_ALLOWED_STATUSES.includes(task.status)) {
+    return { allowed: false, reason: `Không thể chuyển giao khi task đang ở trạng thái "${task.status}"` };
+  }
+  if (!isTaskAssigned(task)) {
+    return { allowed: false, reason: 'Tác vụ chưa được gán — dùng "Gán" để phân công' };
+  }
+  const { id: assigneeId } = getTaskAssignee(task);
+  if (currentUserId && assigneeId === currentUserId) {
+    return { allowed: false, reason: 'Bạn là người đang được gán — không thể tự chuyển cho mình' };
+  }
+  return { allowed: true, reason: '' };
+};
 
 // ── Portal helper ─────────────────────────────────────────────────────────────
 
@@ -76,6 +108,7 @@ const startOfWeek = (d) => {
 };
 
 const formatViDate = (d) => new Date(d).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+const formatViDateTime = (d) => new Date(d).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 const relativeDay = (d) => {
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -99,10 +132,28 @@ const ResearcherTasks = () => {
   const [search, setSearch] = useState('');
   const [experimentId, setExperimentId] = useState('');
   const [experiments, setExperiments] = useState([]);
+  const [users, setUsers] = useState([]);
   const [selectedTask, setSelectedTask] = useState(null);
   const [reportsModal, setReportsModal] = useState({ open: false, task: null, reports: [], loading: false });
   const [weekAnchor, setWeekAnchor] = useState(new Date());
   const [editModal, setEditModal] = useState({ open: false, task: null, saving: false });
+  const [skillMatches, setSkillMatches] = useState([]);
+  const [userWorkload, setUserWorkload] = useState({});
+  const [assignModalTask, setAssignModalTask] = useState(null);
+  const [reassignModalTask, setReassignModalTask] = useState(null);
+  const [assignForm, setAssignForm] = useState({ assigneeId: '', reason: '' });
+  const [savingAssign, setSavingAssign] = useState(false);
+  const [savingReassign, setSavingReassign] = useState(false);
+
+  // Lấy current user ID từ localStorage
+  const currentUserId = useMemo(() => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return null;
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      return payload.id || payload.sub || null;
+    } catch { return null; }
+  }, []);
 
   useEffect(() => {
     const loadExperiments = async () => {
@@ -112,6 +163,27 @@ const ResearcherTasks = () => {
       } catch { setExperiments([]); }
     };
     loadExperiments();
+  }, []);
+
+  // Load users cho assign/reassign
+  useEffect(() => {
+    const loadUsers = async () => {
+      try {
+        const data = await tasksApi.getSkillMatches('');
+        if (Array.isArray(data)) {
+          const uniqueUsers = [];
+          const seen = new Set();
+          data.forEach(m => {
+            if (m.userId && !seen.has(m.userId)) {
+              seen.add(m.userId);
+              uniqueUsers.push(m);
+            }
+          });
+          setUsers(uniqueUsers);
+        }
+      } catch { setUsers([]); }
+    };
+    loadUsers();
   }, []);
 
   const fetchTasks = async () => {
@@ -160,6 +232,95 @@ const ResearcherTasks = () => {
     }
   };
   const closeReports = () => setReportsModal({ open: false, task: null, reports: [], loading: false });
+
+  // Handle open assign modal
+  const handleOpenAssign = async (task) => {
+    setAssignModalTask(task);
+    setAssignForm({ assigneeId: '', reason: '' });
+    setSkillMatches([]);
+    setUserWorkload({});
+    try {
+      const matches = await tasksApi.getSkillMatches(task.id);
+      const matchList = Array.isArray(matches) ? matches : [];
+      setSkillMatches(matchList);
+
+      // Fetch workload for each user
+      const workloadMap = {};
+      await Promise.allSettled(matchList.map(m =>
+        tasksApi.getByUser(m.userId).then(res => {
+          const tasks = Array.isArray(res) ? res : [];
+          workloadMap[m.userId] = {
+            totalTasks: tasks.length,
+            pendingTasks: tasks.filter(t => t.status === 'Pending').length,
+            inProgressTasks: tasks.filter(t => t.status === 'InProgress').length,
+            overdueTasks: tasks.filter(t => t.dueDate && new Date(t.dueDate) < new Date() && t.status !== 'Completed' && t.status !== 'Cancelled').length,
+            roleName: m.roleName
+          };
+        }).catch(() => {})
+      ));
+      setUserWorkload(workloadMap);
+    } catch { setSkillMatches([]); }
+  };
+
+  // Handle confirm assign
+  const handleConfirmAssign = async () => {
+    if (!assignModalTask) return;
+    if (!assignForm.assigneeId) { showToast('Vui lòng chọn người được giao', 'error'); return; }
+    setSavingAssign(true);
+    try {
+      await tasksApi.assign({ taskId: assignModalTask.id, assigneeId: assignForm.assigneeId, reason: assignForm.reason });
+      showToast('Đã gán tác vụ', 'success');
+      setAssignModalTask(null);
+      fetchTasks();
+    } catch (err) { showToast(err.message || 'Lỗi gán tác vụ', 'error'); }
+    finally { setSavingAssign(false); }
+  };
+
+  // Handle open reassign modal
+  const handleOpenReassign = async (task) => {
+    const check = canReassignTask(task, currentUserId);
+    if (!check.allowed) { showToast(check.reason, 'error'); return; }
+    setReassignModalTask({ task, form: { assigneeId: '', reason: '' }, skillMatches: [], userWorkload: {}, loading: true });
+    try {
+      const matches = await tasksApi.getSkillMatches(task.id);
+      const matchList = Array.isArray(matches) ? matches : [];
+      setReassignModalTask(prev => prev ? { ...prev, skillMatches: matchList, loading: false } : prev);
+
+      // Fetch workload
+      const workloadMap = {};
+      await Promise.allSettled(matchList.map(m =>
+        tasksApi.getByUser(m.userId).then(res => {
+          const tasks = Array.isArray(res) ? res : [];
+          workloadMap[m.userId] = {
+            totalTasks: tasks.length,
+            pendingTasks: tasks.filter(t => t.status === 'Pending').length,
+            inProgressTasks: tasks.filter(t => t.status === 'InProgress').length,
+            overdueTasks: tasks.filter(t => t.dueDate && new Date(t.dueDate) < new Date() && t.status !== 'Completed' && t.status !== 'Cancelled').length,
+            roleName: m.roleName
+          };
+        }).catch(() => {})
+      ));
+      setReassignModalTask(prev => prev ? { ...prev, userWorkload: workloadMap } : prev);
+    } catch { setReassignModalTask(prev => prev ? { ...prev, loading: false } : prev); }
+  };
+
+  // Handle confirm reassign
+  const handleConfirmReassign = async () => {
+    if (!reassignModalTask) return;
+    const { task, form } = reassignModalTask;
+    const check = canReassignTask(task, currentUserId);
+    if (!check.allowed) { showToast(check.reason, 'error'); setReassignModalTask(null); return; }
+    if (!form.assigneeId) { showToast('Vui lòng chọn người được chuyển giao', 'error'); return; }
+    if (form.assigneeId === getTaskAssignee(task).id) { showToast('Không thể chuyển cho cùng người đang giữ task', 'error'); return; }
+    setSavingReassign(true);
+    try {
+      await tasksApi.reassign({ taskId: task.id, newAssigneeId: form.assigneeId, reason: form.reason });
+      showToast('Đã chuyển giao tác vụ', 'success');
+      setReassignModalTask(null);
+      fetchTasks();
+    } catch (err) { showToast(err.message || 'Lỗi chuyển giao', 'error'); }
+    finally { setSavingReassign(false); }
+  };
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -257,7 +418,15 @@ const ResearcherTasks = () => {
 
       {/* ── Detail Drawer ─────────────────────────────────────────────────── */}
       {selectedTask && (
-        <TaskDetailDrawer task={selectedTask} onClose={() => setSelectedTask(null)} onOpenReports={openReports} onChange={() => { fetchTasks(); setSelectedTask(null); }} onEdit={(t) => setEditModal({ open: true, task: t, saving: false })} />
+        <TaskDetailDrawer
+          task={selectedTask}
+          onClose={() => setSelectedTask(null)}
+          onOpenReports={openReports}
+          onChange={() => { fetchTasks(); setSelectedTask(null); }}
+          onEdit={(t) => setEditModal({ open: true, task: t, saving: false })}
+          onAssign={handleOpenAssign}
+          onReassign={handleOpenReassign}
+        />
       )}
 
       {/* ── Edit Task Modal ───────────────────────────────────────────────── */}
@@ -288,6 +457,40 @@ const ResearcherTasks = () => {
       {/* ── Reports Modal ─────────────────────────────────────────────────── */}
       {reportsModal.open && (
         <TaskReportsModal task={reportsModal.task} reports={reportsModal.reports} loading={reportsModal.loading} onClose={closeReports} />
+      )}
+
+      {/* ── Assign Modal ─────────────────────────────────────────────────── */}
+      {assignModalTask && (
+        <AssignReassignModal
+          type="assign"
+          task={assignModalTask}
+          form={assignForm}
+          setForm={setAssignForm}
+          skillMatches={skillMatches}
+          userWorkload={userWorkload}
+          loading={skillMatches.length === 0}
+          saving={savingAssign}
+          onConfirm={handleConfirmAssign}
+          onClose={() => setAssignModalTask(null)}
+          currentUserId={currentUserId}
+        />
+      )}
+
+      {/* ── Reassign Modal ─────────────────────────────────────────────────── */}
+      {reassignModalTask && (
+        <AssignReassignModal
+          type="reassign"
+          task={reassignModalTask.task}
+          form={reassignModalTask.form}
+          setForm={(patch) => setReassignModalTask(prev => prev ? { ...prev, form: { ...prev.form, ...patch } } : prev)}
+          skillMatches={reassignModalTask.skillMatches}
+          userWorkload={reassignModalTask.userWorkload}
+          loading={reassignModalTask.loading}
+          saving={savingReassign}
+          onConfirm={handleConfirmReassign}
+          onClose={() => setReassignModalTask(null)}
+          currentUserId={currentUserId}
+        />
       )}
     </div>
   );
@@ -550,15 +753,16 @@ const ListView = ({ tasks, onSelect, onOpenReports, onChange, onEdit }) => (
 // TASK DETAIL DRAWER (slide from right)
 // ────────────────────────────────────────────────────────────────────────────
 
-const TaskDetailDrawer = ({ task, onClose, onOpenReports, onChange, onEdit }) => {
+const TaskDetailDrawer = ({ task, onClose, onOpenReports, onChange, onEdit, onAssign, onReassign }) => {
   const { showToast } = useToast();
   const tm = TASK_TYPE_META[task.taskType] || TASK_TYPE_META.Other;
   const sm = STATUS_META[task.status] || STATUS_META.Pending;
   const overdue = isTaskOverdue(task);
   const rel = task.dueDate ? relativeDay(task.dueDate) : null;
+  const assigned = isTaskAssigned(task);
+  const reassignCheck = canReassignTask(task, null);
 
   const handleCancel = async () => {
-    // P0-#2: validate nghiệp vụ trước khi gọi API
     const check = canCancelTask(task);
     if (!check.allowed) { showToast(check.reason, 'error'); return; }
     if (!window.confirm(`Hủy tác vụ "${task.title || ''}"?`)) return;
@@ -601,7 +805,7 @@ const TaskDetailDrawer = ({ task, onClose, onOpenReports, onChange, onEdit }) =>
               <InfoBlock label="Loại" icon={tm.icon} value={tm.label} />
               <InfoBlock label="Hạn Chót"
                 icon="📅"
-                value={task.dueDate ? formatViDate(task.dueDate) : '—'}
+                value={task.dueDate ? formatViDateTime(task.dueDate) : '—'}
                 sub={rel?.text} subCls={rel?.cls} />
             </div>
 
@@ -687,41 +891,67 @@ const TaskDetailDrawer = ({ task, onClose, onOpenReports, onChange, onEdit }) =>
             )}
           </div>
 
-          {/* Footer actions - researcher chỉ quản lý, không thực thi */}
+          {/* Footer actions */}
           <div className="px-6 py-4 border-t border-outline-variant bg-surface-container-low/30 flex items-center gap-2 flex-wrap">
+            {/* Completed: chỉ có Xem Báo Cáo */}
             {task.status === 'Completed' && (
               <button onClick={() => { onOpenReports(task); onClose(); }}
                 className="flex-1 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-600/20 transition-all">
                 📄 Xem Báo Cáo
               </button>
             )}
+
+            {/* Pending / InProgress: Sửa + Gán + Chuyển Giao + Hủy */}
             {(task.status === 'Pending' || task.status === 'InProgress') && (
               <>
-                <button
-                  onClick={() => onEdit(task)}
+                <button onClick={() => onEdit(task)}
                   className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-amber-500/20 transition-all flex items-center gap-1.5"
                   title="Sửa thông tin tác vụ">
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3Z"/></svg>
-                  Sửa Tác Vụ
+                  Sửa
                 </button>
-                <div className="flex-1 px-4 py-2.5 bg-slate-100 text-slate-500 rounded-xl text-xs flex items-center gap-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
-                  Việc thực hiện do người được gán (Student/Tech) xử lý
-                </div>
-                <button onClick={() => { onOpenReports(task); onClose(); }}
-                  disabled={hasTaskReport(task)}
-                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-600/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={hasTaskReport(task) ? 'Tác vụ đã có báo cáo' : 'Xem / Tạo báo cáo'}>
-                  📄 {hasTaskReport(task) ? 'Đã Có Báo Cáo' : 'Tạo Báo Cáo'}
-                </button>
+
+                {/* Nút Gán - chỉ hiện khi chưa gán */}
+                {!assigned && (
+                  <button onClick={() => { onAssign(task); onClose(); }}
+                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-emerald-600/20 transition-all flex items-center gap-1.5">
+                    🎯 Gán
+                  </button>
+                )}
+
+                {/* Nút Chuyển Giao - chỉ hiện khi đã gán */}
+                {assigned && (
+                  <button onClick={() => { onReassign(task); onClose(); }}
+                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20 transition-all flex items-center gap-1.5">
+                    🔄 Chuyển Giao
+                  </button>
+                )}
+
                 <button onClick={handleCancel}
                   disabled={overdue}
                   className="px-4 py-2.5 border border-rose-300 text-rose-600 hover:bg-rose-50 rounded-xl text-sm font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                   title={overdue ? 'Không thể hủy task quá hạn' : 'Hủy tác vụ'}>
-                  Hủy Tác Vụ
+                  Hủy
                 </button>
               </>
             )}
+
+            {/* Assigned: có thể xem báo cáo + chuyển giao */}
+            {task.status === 'Assigned' && (
+              <>
+                <button onClick={() => { onOpenReports(task); onClose(); }}
+                  disabled={hasTaskReport(task)}
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-600/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                  📄 {hasTaskReport(task) ? 'Đã Có Báo Cáo' : 'Xem Báo Cáo'}
+                </button>
+                <button onClick={() => { onReassign(task); onClose(); }}
+                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20 transition-all flex items-center gap-1.5">
+                  🔄 Chuyển Giao
+                </button>
+              </>
+            )}
+
+            {/* Cancelled */}
             {task.status === 'Cancelled' && (
               <div className="flex-1 text-center text-xs text-slate-400 italic py-2">Tác vụ đã bị hủy</div>
             )}
@@ -762,88 +992,390 @@ const InfoBlock = ({ label, icon, value, sub, subCls }) => (
 // TASK REPORTS MODAL
 // ────────────────────────────────────────────────────────────────────────────
 
-const TaskReportsModal = ({ task, reports, loading, onClose }) => (
-  <Portal>
+const TaskReportsModal = ({ task, reports, loading, onClose }) => {
+  // Definitions state (keyed by definition.id for fast lookup)
+  const [definitions, setDefinitions] = useState([]);
+  const [loadingDefs, setLoadingDefs] = useState(false);
+
+  // Images map: reportId -> list of TaskImage (fetched from API)
+  const [imagesMap, setImagesMap] = useState({});
+  const [loadingImages, setImagesLoading] = useState(false);
+
+  // Build definitionMap: definition.id -> definition
+  const definitionMap = useMemo(() => {
+    const m = new Map();
+    for (const d of definitions) m.set(d.id, d);
+    return m;
+  }, [definitions]);
+
+  // Resolve key 'def_<uuid>' -> display label (metricName + unit)
+  const resolveMetricLabel = (key) => {
+    if (typeof key !== 'string') return String(key);
+    if (key.startsWith('def_')) {
+      const defId = key.slice(4);
+      const def = definitionMap.get(defId);
+      if (def?.metricName) {
+        return def.unit ? `${def.metricName} (${def.unit})` : def.metricName;
+      }
+      return `Chỉ số #${defId.slice(0, 8)}`;
+    }
+    return key;
+  };
+
+  // Fetch definitions by experimentId from task
+  useEffect(() => {
+    const expId = task?.experimentId || task?.experiment?.id;
+    if (!expId) {
+      setDefinitions([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingDefs(true);
+    measurementDefinitionsApi.getByExperiment(expId)
+      .then(data => {
+        if (!cancelled) setDefinitions(Array.isArray(data) ? data : []);
+      })
+      .catch(() => { if (!cancelled) setDefinitions([]); })
+      .finally(() => { if (!cancelled) setLoadingDefs(false); });
+    return () => { cancelled = true; };
+  }, [task?.experimentId, task?.experiment?.id]);
+
+  // Fetch images per report (same logic as StudentDashboard)
+  useEffect(() => {
+    if (!Array.isArray(reports) || reports.length === 0) {
+      setImagesMap({});
+      return;
+    }
+    const reportsNeedingFetch = reports.filter(r => r.id && !imagesMap[r.id]);
+    if (reportsNeedingFetch.length === 0) return;
+
+    let cancelled = false;
+    setImagesLoading(true);
+    (async () => {
+      const results = await Promise.allSettled(
+        reportsNeedingFetch.map(r => taskImagesApi.getByTaskReport(r.id))
+      );
+      if (cancelled) return;
+      setImagesMap(prev => {
+        const next = { ...prev };
+        reportsNeedingFetch.forEach((r, i) => {
+          const res = results[i];
+          if (res.status === 'fulfilled') {
+            const list = Array.isArray(res.value) ? res.value
+              : (Array.isArray(res.value?.data) ? res.value.data : []);
+            next[r.id] = list;
+          } else {
+            // Fallback: dùng ảnh có sẵn trong report
+            next[r.id] = Array.isArray(r.images) ? r.images : [];
+          }
+        });
+        return next;
+      });
+      setImagesLoading(false);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reports.map(r => r.id).join(',')]);
+
+  return (
+    <Portal>
       <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[10800] flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col animate-scale-in" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-5 border-b border-outline-variant">
-          <div className="min-w-0 flex-1">
-            <h3 className="font-hanken font-bold text-base text-on-surface">Báo Cáo Tác Vụ</h3>
-            <p className="text-xs text-on-surface-variant mt-0.5 truncate">{task?.title || '—'}</p>
-            {reports.length > 0 && (
-              <p className="text-[10px] text-emerald-700 font-bold mt-1 inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 border border-emerald-200 rounded-full">
-                ✅ Đã có báo cáo · BE không cho gửi thêm
-              </p>
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col animate-scale-in" onClick={e => e.stopPropagation()}>
+          <div className="flex items-center justify-between p-5 border-b border-outline-variant shrink-0">
+            <div className="min-w-0 flex-1">
+              <h3 className="font-hanken font-bold text-base text-on-surface">Báo Cáo Tác Vụ</h3>
+              <p className="text-xs text-on-surface-variant mt-0.5 truncate">{task?.title || '—'}</p>
+              {reports.length > 0 && (
+                <p className="text-[10px] text-emerald-700 font-bold mt-1 inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 border border-emerald-200 rounded-full">
+                  ✅ Đã có báo cáo · BE không cho gửi thêm
+                </p>
+              )}
+            </div>
+            <button onClick={onClose} className="p-2 rounded-xl hover:bg-surface-container/50 transition-colors shrink-0">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto p-5">
+            {loading ? (
+              <div className="text-center text-sm text-on-surface-variant py-8">Đang tải...</div>
+            ) : reports.length === 0 ? (
+              <div className="text-center text-sm text-on-surface-variant py-8">Chưa có báo cáo nào.</div>
+            ) : (
+              <div className="space-y-4">
+                {reports.map(r => {
+                  const resultEntries = r.resultData && typeof r.resultData === 'object' ? Object.entries(r.resultData) : [];
+                  const imageList = Array.isArray(imagesMap[r.id]) ? imagesMap[r.id] : [];
+                  const dateText = r.reportedAt || r.createdAt;
+
+                  return (
+                    <div key={r.id} className="p-4 border border-outline-variant rounded-xl bg-surface-container-low/30">
+                      <div className="flex items-center justify-between mb-2 gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-bold shrink-0">
+                            {(r.reporterName || 'T').charAt(0).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-semibold text-sm text-on-surface truncate">{r.reporterName || 'Reporter'}</div>
+                            {r.reportedAt && (
+                              <div className="text-[10px] text-on-surface-variant">{new Date(r.reportedAt).toLocaleString('vi-VN')}</div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                      {r.reportText && <p className="text-sm text-on-surface whitespace-pre-line mt-1">{r.reportText}</p>}
+                      {resultEntries.length > 0 && (
+                        <div className="mt-3 p-3 bg-white rounded-xl border border-outline-variant">
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant mb-2 flex items-center gap-1.5">
+                            <span>📊</span> Kết Quả Đo Lường
+                            {loadingDefs && <span className="text-[9px] text-slate-400 italic ml-1">đang tải...</span>}
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            {resultEntries.map(([key, value]) => {
+                              const label = resolveMetricLabel(key);
+                              const def = definitionMap.get(key.startsWith('def_') ? key.slice(4) : '');
+                              const unit = def?.unit || '';
+                              const target = def?.targetValue;
+                              const num = parseFloat(value);
+                              const targetNum = parseFloat(target);
+                              const meetsTarget = !isNaN(num) && !isNaN(targetNum) && num >= targetNum;
+                              const closeTarget = !isNaN(num) && !isNaN(targetNum) && num < targetNum && num >= targetNum * 0.8;
+
+                              return (
+                                <div key={key} className="text-xs p-2 rounded-lg bg-slate-50 border border-slate-100">
+                                  <div className="flex items-start justify-between gap-1">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-[10px] text-on-surface-variant font-bold truncate">{label}</div>
+                                      <div className="flex items-baseline gap-1 mt-0.5">
+                                        <span className="font-bold text-on-surface text-sm">{String(value)}</span>
+                                        {unit && <span className="text-[10px] text-on-surface-variant">{unit}</span>}
+                                      </div>
+                                    </div>
+                                    {!isNaN(num) && !isNaN(targetNum) && (
+                                      <span className="shrink-0" title={`Target: ${target}${unit}`}>
+                                        {meetsTarget && <span className="text-emerald-600 font-bold text-sm">✅</span>}
+                                        {!meetsTarget && closeTarget && <span className="text-amber-500 font-bold text-sm">⚡</span>}
+                                        {!meetsTarget && !closeTarget && <span className="text-rose-400 font-bold text-sm">⚠️</span>}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {target != null && (
+                                    <div className="text-[9px] text-on-surface-variant mt-0.5">
+                                      🎯 Target: <span className="font-semibold">{target}{unit}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      {imageList.length > 0 && (
+                        <div className="mt-3">
+                          <div className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant mb-2 flex items-center gap-1.5">
+                            <span>📷</span> Hình Ảnh ({imageList.length})
+                            {loadingImages && <span className="inline-block w-2 h-2 bg-blue-500 rounded-full animate-pulse ml-1" />}
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {imageList.map((img, i) => (
+                              <a key={img.id || i} href={img.imageUrl || img.url} target="_blank" rel="noopener noreferrer"
+                                className="block w-14 h-14 rounded-lg overflow-hidden border border-outline-variant hover:opacity-80 hover:shadow-md transition-all relative group"
+                                title={img.caption || ''}>
+                                <img src={img.imageUrl || img.url} alt={img.caption || `img-${i}`} className="w-full h-full object-cover" />
+                                {img.caption && (
+                                  <span className="absolute bottom-0 left-0 right-0 px-1 py-0.5 bg-black/70 text-white text-[8px] truncate opacity-0 group-hover:opacity-100 transition-opacity">
+                                    {img.caption}
+                                  </span>
+                                )}
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
-          <button onClick={onClose} className="p-2 rounded-xl hover:bg-surface-container/50 transition-colors shrink-0">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-5">
-          {loading ? (
-            <div className="text-center text-sm text-on-surface-variant py-8">Đang tải...</div>
-          ) : reports.length === 0 ? (
-            <div className="text-center text-sm text-on-surface-variant py-8">Chưa có báo cáo nào.</div>
-          ) : (
-            <div className="space-y-3">
-              {reports.map(r => {
-                const resultEntries = r.resultData && typeof r.resultData === 'object' ? Object.entries(r.resultData) : [];
-                const imageList = Array.isArray(r.images) ? r.images : [];
-                return (
-                  <div key={r.id} className="p-4 border border-outline-variant rounded-xl bg-surface-container-low/30">
-                    <div className="flex items-center justify-between mb-2 gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-bold shrink-0">
-                          {(r.reporterName || 'T').charAt(0).toUpperCase()}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="font-semibold text-sm text-on-surface truncate">{r.reporterName || 'Reporter'}</div>
-                          {r.reportedAt && (
-                            <div className="text-[10px] text-on-surface-variant">{new Date(r.reportedAt).toLocaleString('vi-VN')}</div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    {r.reportText && <p className="text-sm text-on-surface whitespace-pre-line mt-1">{r.reportText}</p>}
-                    {resultEntries.length > 0 && (
-                      <div className="mt-3 p-3 bg-white rounded-xl border border-outline-variant">
-                        <div className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant mb-2">Kết Quả</div>
-                        <div className="grid grid-cols-2 gap-2">
-                          {resultEntries.map(([key, value]) => (
-                            <div key={key} className="text-xs">
-                              <div className="text-[10px] text-on-surface-variant font-mono break-all">{key}</div>
-                              <div className="font-semibold text-on-surface break-all">{String(value)}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    {imageList.length > 0 && (
-                      <div className="mt-3">
-                        <div className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant mb-2">Hình Ảnh</div>
-                        <div className="flex flex-wrap gap-2">
-                          {imageList.map((img, i) => (
-                            <a key={i} href={img.url || img} target="_blank" rel="noopener noreferrer"
-                              className="block w-16 h-16 rounded-lg overflow-hidden border border-outline-variant hover:opacity-80">
-                              <img src={img.url || img} alt={img.name || `img-${i}`} className="w-full h-full object-cover" />
-                            </a>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </div>
       </div>
-    </div>
-  </Portal>
-);
+    </Portal>
+  );
+};
 
 export default ResearcherTasks;
+
+// ────────────────────────────────────────────────────────────────────────────
+// ASSIGN / REASSIGN MODALS
+// ────────────────────────────────────────────────────────────────────────────
+
+// Reusable Assign/Reassign modal (dùng chung cho cả 2 trường hợp)
+const AssignReassignModal = ({
+  type, // 'assign' | 'reassign'
+  task,
+  form,
+  setForm,
+  skillMatches,
+  userWorkload,
+  loading,
+  saving,
+  onConfirm,
+  onClose,
+  currentUserId
+}) => {
+  const isReassign = type === 'reassign';
+  const currentAssignee = getTaskAssignee(task);
+  const rankedMatches = useMemo(() => {
+    if (!Array.isArray(skillMatches)) return [];
+    return [...skillMatches].sort((a, b) => {
+      const scoreA = a.matchScore || 0;
+      const scoreB = b.matchScore || 0;
+      const tasksA = userWorkload[a.userId]?.totalTasks || 0;
+      const tasksB = userWorkload[b.userId]?.totalTasks || 0;
+      return (scoreB - scoreA) || (tasksA - tasksB);
+    });
+  }, [skillMatches, userWorkload]);
+
+  return (
+    <Portal>
+      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10600] flex items-center justify-center p-4 animate-fade-in" onClick={onClose}>
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden animate-scale-in" onClick={e => e.stopPropagation()}>
+          {/* Header */}
+          <div className={`px-6 py-4 border-b border-outline-variant ${isReassign ? 'bg-gradient-to-r from-blue-50 to-indigo-50' : 'bg-gradient-to-r from-emerald-50 to-teal-50'}`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className={`font-hanken font-bold text-lg ${isReassign ? 'text-blue-900' : 'text-emerald-900'}`}>
+                  {isReassign ? '🔄 Chuyển Giao Tác Vụ' : '🎯 Gán Tác Vụ'}
+                </h3>
+                <p className="text-xs text-on-surface-variant mt-0.5 truncate">{task?.title || '—'}</p>
+                {isReassign && currentAssignee.name && (
+                  <p className="text-[10px] text-blue-600 mt-0.5">
+                    👤 Hiện tại: <span className="font-semibold">{currentAssignee.name}</span>
+                  </p>
+                )}
+              </div>
+              <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+          </div>
+
+          {/* Body */}
+          <div className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
+            {/* Task info */}
+            <div className="bg-slate-50 rounded-xl p-3 space-y-1.5 border border-slate-200">
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-slate-400">Loại:</span>
+                <span className="font-semibold">{task?.taskType || '—'}</span>
+              </div>
+              {task?.dueDate && (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-slate-400">Hạn:</span>
+                  <span className="font-semibold">{formatViDateTime(task.dueDate)}</span>
+                </div>
+              )}
+              {task?.requiredSkillDescription && (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-slate-400">Kỹ năng:</span>
+                  <span className="font-semibold">{task.requiredSkillDescription}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Skill matches */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[10px] font-bold uppercase text-on-surface-variant">
+                  🎯 Người phù hợp
+                </p>
+              </div>
+              {loading ? (
+                <div className="space-y-1">
+                  <p className="text-xs text-on-surface-variant italic py-2">Đang tìm người phù hợp...</p>
+                </div>
+              ) : rankedMatches.length === 0 ? (
+                <p className="text-xs text-on-surface-variant italic py-2">Không tìm thấy người phù hợp.</p>
+              ) : (
+                <div className="space-y-2">
+                  {rankedMatches.map((m, idx) => {
+                    const isSelected = form.assigneeId === m.userId;
+                    const isCurrentUser = m.userId === currentAssignee.id;
+                    const wl = userWorkload[m.userId];
+
+                    return (
+                      <button key={m.userId} type="button"
+                        onClick={() => !isCurrentUser && setForm({ ...form, assigneeId: m.userId })}
+                        disabled={isCurrentUser}
+                        className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-all text-left ${
+                          isSelected
+                            ? 'border-emerald-500 bg-emerald-50 shadow-md'
+                            : isCurrentUser
+                              ? 'border-slate-200 bg-slate-50 opacity-50 cursor-not-allowed'
+                              : 'border-outline-variant bg-white hover:border-emerald-200'
+                        }`}>
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white flex items-center justify-center text-sm font-bold shrink-0">
+                          {(m.fullName || m.userId || '?')[0]?.toUpperCase()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold text-on-surface truncate flex items-center gap-1.5">
+                            {m.fullName || m.userId}
+                            {isCurrentUser && <span className="text-[9px] text-slate-500">(Hiện tại)</span>}
+                          </p>
+                          <p className="text-[10px] text-on-surface-variant">{m.roleName || '—'}</p>
+                          {wl && (
+                            <p className="text-[9px] text-on-surface-variant mt-0.5">
+                              📋 {wl.totalTasks} task · {wl.pendingTasks} chờ · {wl.inProgressTasks} đang làm
+                            </p>
+                          )}
+                        </div>
+                        {isSelected && <span className="text-emerald-600 font-bold">✓</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Reason */}
+            <div>
+              <label className="text-[10px] font-bold uppercase text-on-surface-variant block mb-1">
+                📝 Lý do {isReassign ? 'chuyển giao' : 'giao'} (tùy chọn)
+              </label>
+              <textarea
+                value={form.reason || ''}
+                onChange={e => setForm({ ...form, reason: e.target.value })}
+                placeholder="VD: Phân công lại do người cũ bận..."
+                rows={2}
+                className="w-full px-3 py-2 border border-outline-variant rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 resize-none"
+              />
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="px-6 py-4 border-t border-outline-variant bg-slate-50 flex items-center justify-end gap-2">
+            <button onClick={onClose} disabled={saving}
+              className="px-4 py-2 border border-outline-variant rounded-xl text-sm font-semibold hover:bg-white transition-colors disabled:opacity-50">
+              Hủy
+            </button>
+            <button onClick={onConfirm} disabled={saving || !form.assigneeId}
+              className={`px-5 py-2 rounded-xl text-sm font-bold shadow transition-all disabled:opacity-50 flex items-center gap-2 ${
+                isReassign
+                  ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-600/20'
+                  : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20'
+              }`}>
+              {saving ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  Đang xử lý...
+                </>
+              ) : isReassign ? '🔄 Chuyển Giao' : '🎯 Gán'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Portal>
+  );
+};
 
 // ────────────────────────────────────────────────────────────────────────────
 // TASK EDIT MODAL
