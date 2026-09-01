@@ -445,9 +445,14 @@ const ResearcherExperiments = ({ prefillData, onPrefillConsumed }) => {
     finally { setCreatingExp(false); }
   };
 
+  const navigateTo = (path) => {
+    window.history.pushState(null, '', path);
+    window.dispatchEvent(new Event('navigate'));
+  };
+
   const openDetail = async (exp) => {
-    setActiveExp(exp);
-    setDetailOpen(true);
+    // Mở trang chi tiết trong route riêng (/researcher/experiment/:id) thay vì modal
+    navigateTo(`/researcher/experiment/${exp.id}`);
   };
 
   const filtered = experiments.filter(e => {

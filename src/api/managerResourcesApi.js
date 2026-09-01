@@ -14,7 +14,8 @@ export const farmsApi = {
 };
 
 export const areasApi = {
-  getByFarm: (farmId) => apiClient.request('/farms/farms/' + farmId + '/areas').then(u),
+  getByFarm: (farmId) => apiClient.request('/farms/' + farmId + '/areas').then(u),
+  getAll: () => apiClient.request('/farms/areas').then(u),
   getById: (id) => apiClient.request('/farms/areas/' + id).then(u),
   create: (payload) => apiClient.request('/farms/areas', { method: 'POST', body: payload }),
   update: (id, payload) => apiClient.request('/farms/areas/' + id, { method: 'PUT', body: payload }),
@@ -22,6 +23,7 @@ export const areasApi = {
 };
 
 export const bedsApi = {
+  getAll: () => apiClient.request('/farms/beds').then(u),
   getByArea: (areaId) => apiClient.request('/farms/areas/' + areaId + '/beds').then(u),
   getAvailableByFarm: (farmId) => apiClient.request('/farms/' + farmId + '/beds/available').then(u),
   getById: (id) => apiClient.request('/farms/beds/' + id).then(u),
