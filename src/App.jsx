@@ -6,6 +6,7 @@ import AdminDashboard from './pages/admin/AdminDashboard';
 import FarmManagerDashboard from './pages/farm-manager/FarmManagerDashboard';
 import TechnicianDashboard from './pages/technician/TechnicianDashboard';
 import ResearcherDashboard from './pages/researcher/ResearcherDashboard';
+import ExperimentDetailPage from './pages/researcher/ExperimentDetailPage';
 import StudentDashboard from './pages/student/StudentDashboard';
 import MorphologyDataEntry from './pages/student/MorphologyDataEntry';
 import PersonalTaskList from './pages/PersonalTaskList';
@@ -35,6 +36,12 @@ const App = () => {
   }, []);
 
   const renderView = () => {
+    // Match /researcher/experiment/:id
+    if (currentPath.startsWith('/researcher/experiment/')) {
+      const id = currentPath.split('/').pop();
+      return <ExperimentDetailPage experimentId={id} />;
+    }
+
     switch (currentPath) {
       case '/login':
         return <Login />;
