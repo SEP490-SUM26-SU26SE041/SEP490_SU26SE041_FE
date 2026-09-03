@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { experimentsApi, measurementRecordsApi, taskReportsApi } from '../../api/experimentApi';
+import { experimentsApi, measurementRecordsApi, taskReportsApi, experimentRequestsApi } from '../../api/experimentApi';
 import { stagesApi, groupsApi, measurementsApi, batchesApi, schedulesApi, tasksApi } from '../../api/researcherApi';
 import { bedAssignmentsApi } from '../../api/managerResourcesApi';
 import { userApi } from '../../api/researcherApi';
@@ -205,6 +205,25 @@ const ExperimentDetailPage = ({ experimentId }) => {
     try {
       const exp = await experimentsApi.getById(experimentId);
       setExperiment(exp);
+
+      // Lấy chi tiết yêu cầu thí nghiệm (request)
+      if (exp.requestId) {
+        try {
+          const request = await experimentRequestsApi.getById(exp.requestId);
+          // Gắn thông tin request vào experiment object để truyền xuống Overview
+          if (request) {
+            setExperiment(prev => ({
+              ...prev,
+              requestName: request.title || request.name || request.experimentRequestTitle || request.experimentRequestName || null,
+              requestCode: request.code || request.requestCode || request.experimentRequestCode || null,
+              requestDescription: request.description || request.requestDescription || null,
+              requestObjective: request.objective || null,
+            }));
+          }
+        } catch (err) {
+          console.warn('[ExperimentDetail] Failed to load request:', err?.message || err);
+        }
+      }
 
       // Load experiment data (chỉ những endpoint chắc chắn tồn tại)
       const results = await Promise.allSettled([
@@ -1074,20 +1093,251 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                     </div>
                   )}
                   <div className="grid grid-cols-2 gap-4">
+                    {/* Thống kê theo từng loại giai đoạn - dựa vào schedules + task reports + measurement records */}
                     <div className="bg-white rounded-xl p-4 border border-slate-100">
-                      <p className="text-xs font-bold uppercase text-slate-500 mb-3">📋 Tác vụ ({stageTasks.length})</p>
-                      {stageTasks.length === 0 ? <p className="text-xs text-slate-400 italic">Chưa có tác vụ</p> : (
-                        <div className="space-y-2 max-h-36 overflow-y-auto">
-                          {stageTasks.slice(0, 6).map(t => (
-                            <div key={t.id} className="flex items-center gap-2 text-xs">
-                              <span className={`w-2 h-2 rounded-full ${t.status === 'Completed' ? 'bg-emerald-500' : t.status === 'InProgress' ? 'bg-blue-500' : 'bg-slate-300'}`} />
-                              <span className="font-semibold text-slate-800 truncate flex-1">{t.title || t.taskName}</span>
-                              <span className="text-slate-500 shrink-0">{t.assignedToName || 'Chưa giao'}</span>
-                            </div>
-                          ))}
-                          {stageTasks.length > 6 && <p className="text-[10px] text-slate-400">+ {stageTasks.length - 6} tác vụ khác</p>}
-                        </div>
-                      )}
+                      <p className="text-xs font-bold uppercase text-slate-500 mb-3 flex items-center gap-1">💡 Gợi ý đánh giá</p>
+                      {(() => {
+                        const stageType = s.stageType;
+                        // Lấy schedules của giai đoạn này
+                        const stageSchedules = schedules.filter(sc =>
+                          (sc.experimentStageId === s.id || sc.stageId === s.id)
+                        );
+                        // Lấy batches liên quan
+                        const stageBatchIds = new Set();
+                        stageSchedules.forEach(sc => { if (sc.batchId) stageBatchIds.add(sc.batchId); });
+                        stageTasks.forEach(t => { if (t.batchId) stageBatchIds.add(t.batchId); });
+                        if (stageBatchIds.size === 0) batches.forEach(b => stageBatchIds.add(b.id));
+
+                        // Tổng hợp tất cả reports của stage này
+                        const allStageReports = [...stageBatchIds].flatMap(bid => taskReportsByBatch?.[bid] || []);
+                        const allStageMeasurements = measurementRecords.filter(r =>
+                          (r.stageId === s.id || r.experimentStageId === s.id) &&
+                          [...stageBatchIds].some(bid => r.batchId === bid || r.bedId === bid)
+                        );
+
+                        // Helper: đếm schedule theo taskType
+                        const countScheduleByType = (types) => stageSchedules.filter(sc =>
+                          types.includes(sc.taskType || sc.TaskType)
+                        ).length;
+
+                        // Helper: đếm task completed theo taskType
+                        const countTaskByType = (types) => stageTasks.filter(t =>
+                          types.includes(t.taskType) && ['Completed', 'Approved'].includes(t.status)
+                        ).length;
+
+                        // Helper: đếm report đã duyệt theo taskType
+                        const countReportByType = (types) => allStageReports.filter(r => {
+                          const tt = r.taskType || r.TaskType;
+                          if (!types.includes(tt)) return false;
+                          return ['Approved', 'Completed'].includes(r.approvalStatus || r.status);
+                        }).length;
+
+                        // Helper: đọc số từ resultData JSONB
+                        const getResultDataVal = (r, keys) => {
+                          const rd = r.resultData || {};
+                          for (const k of keys) {
+                            if (rd[k] !== undefined && rd[k] !== null && rd[k] !== '') return Number(rd[k]);
+                            if (r[k] !== undefined && r[k] !== null && r[k] !== '') return Number(r[k]);
+                          }
+                          return null;
+                        };
+
+                        const stats = [];
+
+                        // ── Nursery / Planting: số cây đã trồng/ươm ──
+                        if (stageType === 'Nursery' || stageType === 'Planting') {
+                          // Số cây từ task report Planting
+                          const plantingReports = allStageReports.filter(r => {
+                            const tt = r.taskType || r.TaskType;
+                            return tt === 'Planting' || tt === 'Nursery' || (r.taskTitle || '').toLowerCase().includes('trồng') || (r.taskTitle || '').toLowerCase().includes('ươm');
+                          });
+                          const actualPlants = plantingReports.reduce((sum, r) => {
+                            const v = getResultDataVal(r, ['soLuong', 'plantCount', 'actualPlantCount', 'quantity']);
+                            return sum + (v || 0);
+                          }, 0);
+
+                          // Số cây kế hoạch (từ batch.plantCount hoặc schedule)
+                          const planPlants = batches
+                            .filter(b => stageBatchIds.has(b.id))
+                            .reduce((sum, b) => sum + (Number(b.plantCount) || 0), 0);
+
+                          stats.push({ icon: '🌱', label: 'Số cây thực tế', value: actualPlants, unit: 'cây', accent: 'emerald' });
+                          if (planPlants > 0) stats.push({ icon: '📋', label: 'Số cây kế hoạch', value: planPlants, unit: 'cây', accent: 'blue' });
+                          stats.push({ icon: '📝', label: 'Báo cáo trồng', value: plantingReports.length, unit: 'báo cáo', accent: 'violet' });
+                        }
+                        // ── Care: tưới, bón phân, phun thuốc, lượng nước ──
+                        else if (stageType === 'Care') {
+                          const khWater = countScheduleByType(['Watering', 'Irrigation']);
+                          const ttWater = countTaskByType(['Watering', 'Irrigation']);
+                          if (khWater > 0 || ttWater > 0) {
+                            stats.push({ icon: '💧', label: 'Tưới nước', kh: khWater, tt: ttWater, accent: 'blue' });
+                          }
+
+                          const khFert = countScheduleByType(['Fertilizing', 'Fertilizer']);
+                          const ttFert = countTaskByType(['Fertilizing', 'Fertilizer']);
+                          if (khFert > 0 || ttFert > 0) {
+                            stats.push({ icon: '🧪', label: 'Bón phân', kh: khFert, tt: ttFert, accent: 'emerald' });
+                          }
+
+                          const khSpray = countScheduleByType(['Spraying', 'PestControl']);
+                          const ttSpray = countTaskByType(['Spraying', 'PestControl']);
+                          if (khSpray > 0 || ttSpray > 0) {
+                            stats.push({ icon: '🛡️', label: 'Phun thuốc', kh: khSpray, tt: ttSpray, accent: 'amber' });
+                          }
+
+                          // Tổng lượng nước từ resultData
+                          const totalWater = allStageReports
+                            .filter(r => ['Watering', 'Irrigation'].includes(r.taskType || r.TaskType))
+                            .reduce((sum, r) => {
+                              const v = getResultDataVal(r, ['waterAmount', 'luongNuocTong', 'amount']);
+                              return sum + (v || 0);
+                            }, 0);
+                          if (totalWater > 0) {
+                            stats.push({ icon: '🚿', label: 'Tổng lượng nước', value: Math.round(totalWater), unit: 'lít', accent: 'cyan' });
+                          }
+                        }
+                        // ── Growing / Growth: chỉ số tăng trưởng từ measurement records ──
+                        else if (stageType === 'Growing' || stageType === 'Growth') {
+                          // Đếm task Observation đã hoàn thành
+                          const obsCount = countTaskByType(['Observation']);
+                          if (obsCount > 0) stats.push({ icon: '👁️', label: 'Quan sát tăng trưởng', value: obsCount, unit: 'lần', accent: 'slate' });
+
+                          // Chỉ số tăng trưởng trung bình từ measurement records
+                          const growMetrics = {};
+                          allStageMeasurements.forEach(m => {
+                            if (!m.metricName || !m.value) return;
+                            if (!growMetrics[m.metricName]) growMetrics[m.metricName] = [];
+                            const v = Number(m.value);
+                            if (!isNaN(v) && v > 0) growMetrics[m.metricName].push(v);
+                          });
+                          Object.entries(growMetrics).forEach(([metric, values]) => {
+                            if (values.length === 0) return;
+                            const avg = (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1);
+                            const unit = allStageMeasurements.find(m => m.metricName === metric)?.unit || '';
+                            stats.push({ icon: '📏', label: `TB ${metric}`, value: avg, unit: unit, accent: 'teal' });
+                          });
+
+                          // Tổng lượng nước (nếu có)
+                          const totalWater = allStageReports
+                            .filter(r => ['Watering', 'Irrigation'].includes(r.taskType || r.TaskType))
+                            .reduce((sum, r) => {
+                              const v = getResultDataVal(r, ['waterAmount', 'luongNuocTong']);
+                              return sum + (v || 0);
+                            }, 0);
+                          if (totalWater > 0) stats.push({ icon: '🚿', label: 'Tổng lượng nước', value: Math.round(totalWater), unit: 'lít', accent: 'cyan' });
+                        }
+                        // ── Harvest / Harvesting: sản lượng ──
+                        else if (stageType === 'Harvest' || stageType === 'Harvesting') {
+                          const harvestReports = allStageReports.filter(r =>
+                            ['Harvest', 'Harvesting'].includes(r.taskType || r.TaskType)
+                          );
+                          const totalKg = harvestReports.reduce((sum, r) => {
+                            const v = getResultDataVal(r, ['sanLuongKg', 'harvestWeight', 'yieldKg', 'sanLuongTan']);
+                            if (v !== null) {
+                              // Nếu là tấn → *1000
+                              return sum + (v * (getResultDataVal(r, ['sanLuongTan']) !== null ? 1000 : 1));
+                            }
+                            return sum;
+                          }, 0);
+                          if (totalKg > 0) {
+                            stats.push({ icon: '⚖️', label: 'Sản lượng thu hoạch', value: Math.round(totalKg), unit: 'kg', accent: 'yellow' });
+                          }
+                          const plantCount = harvestReports.reduce((sum, r) => {
+                            const v = getResultDataVal(r, ['soLuongCayThuHoach', 'plantCount', 'soLuong']);
+                            return sum + (v || 0);
+                          }, 0);
+                          if (plantCount > 0) {
+                            stats.push({ icon: '🌱', label: 'Số cây thu hoạch', value: plantCount, unit: 'cây', accent: 'emerald' });
+                          }
+                          stats.push({ icon: '📝', label: 'Báo cáo thu hoạch', value: harvestReports.length, unit: 'báo cáo', accent: 'violet' });
+                        }
+                        // ── Evaluation: tỷ lệ hoàn thành, đậu quả, sống ──
+                        else if (stageType === 'Evaluation') {
+                          const completedTasks = stageTasks.filter(t => ['Completed', 'Approved'].includes(t.status)).length;
+                          const totalTasks = stageTasks.length;
+                          if (totalTasks > 0) {
+                            const rate = Math.round((completedTasks / totalTasks) * 100);
+                            stats.push({ icon: '📊', label: 'Tỷ lệ hoàn thành', value: rate, unit: '%', accent: 'blue' });
+                          }
+                          // Lấy chỉ số từ resultData
+                          const evReports = allStageReports.filter(r => {
+                            const rd = r.resultData || {};
+                            return rd.tiLeDauQua || rd.tiLeSong || rd.danhGia;
+                          });
+                          evReports.forEach(r => {
+                            const rd = r.resultData || {};
+                            if (rd.tiLeDauQua) stats.push({ icon: '🌿', label: 'Tỷ lệ đậu quả', value: rd.tiLeDauQua, unit: '%', accent: 'emerald' });
+                            if (rd.tiLeSong) stats.push({ icon: '💚', label: 'Tỷ lệ sống', value: rd.tiLeSong, unit: '%', accent: 'teal' });
+                          });
+                        }
+                        // ── Preparation: diện tích, nhân công ──
+                        else if (stageType === 'Preparation') {
+                          const prepReports = allStageReports;
+                          const area = prepReports.reduce((sum, r) => {
+                            const v = getResultDataVal(r, ['dienTichChuanBi', 'area']);
+                            return sum + (v || 0);
+                          }, 0);
+                          if (area > 0) stats.push({ icon: '📐', label: 'Diện tích chuẩn bị', value: Math.round(area), unit: 'm²', accent: 'slate' });
+                          const workers = prepReports.reduce((sum, r) => {
+                            const v = getResultDataVal(r, ['nhanCong', 'workers']);
+                            return sum + (v || 0);
+                          }, 0);
+                          if (workers > 0) stats.push({ icon: '👷', label: 'Số nhân công', value: workers, unit: 'người', accent: 'amber' });
+                        }
+                        // ── PostHarvest: khối lượng bảo quản, hao hụt ──
+                        else if (stageType === 'PostHarvest') {
+                          const phReports = allStageReports;
+                          const stored = phReports.reduce((sum, r) => {
+                            const v = getResultDataVal(r, ['khoiLuongBaoQuan', 'storedWeight', 'mass']);
+                            return sum + (v || 0);
+                          }, 0);
+                          if (stored > 0) stats.push({ icon: '📦', label: 'Khối lượng bảo quản', value: Math.round(stored), unit: 'kg', accent: 'slate' });
+                          const loss = phReports.reduce((sum, r) => {
+                            const v = getResultDataVal(r, ['tyLeHaoHut', 'lossRate']);
+                            return sum + (v || 0);
+                          }, 0) / (phReports.length || 1);
+                          if (loss > 0) stats.push({ icon: '📉', label: 'Tỷ lệ hao hụt TB', value: loss.toFixed(1), unit: '%', accent: 'amber' });
+                        }
+                        // ── Default: hiển thị task stats chung ──
+                        else {
+                          const totalTasks = stageTasks.length;
+                          const completedTasks = stageTasks.filter(t => ['Completed', 'Approved'].includes(t.status)).length;
+                          if (totalTasks > 0) {
+                            stats.push({ icon: '📋', label: 'Tác vụ', kh: totalTasks, tt: completedTasks, accent: 'slate' });
+                          }
+                          const reportCount = allStageReports.length;
+                          if (reportCount > 0) {
+                            stats.push({ icon: '📝', label: 'Báo cáo', value: reportCount, unit: 'báo cáo', accent: 'violet' });
+                          }
+                        }
+
+                        if (stats.length === 0) {
+                          return <p className="text-xs text-slate-400 italic">Chưa có dữ liệu để gợi ý</p>;
+                        }
+
+                        const accentBg = { blue: 'bg-blue-50', cyan: 'bg-cyan-50', emerald: 'bg-emerald-50', amber: 'bg-amber-50', yellow: 'bg-yellow-50', violet: 'bg-violet-50', slate: 'bg-slate-50', teal: 'bg-teal-50' };
+                        const accentText = { blue: 'text-blue-700', cyan: 'text-cyan-700', emerald: 'text-emerald-700', amber: 'text-amber-700', yellow: 'text-yellow-700', slate: 'text-slate-700', violet: 'text-violet-700', teal: 'text-teal-700' };
+
+                        return (
+                          <div className="space-y-2">
+                            {stats.map((item, i) => (
+                              <div key={i} className={`flex items-center justify-between p-2 rounded-lg ${accentBg[item.accent] || accentBg.slate}`}>
+                                <span className={`text-xs font-semibold flex items-center gap-1.5 ${accentText[item.accent] || accentText.slate}`}>
+                                  <span>{item.icon}</span>
+                                  <span>{item.label}</span>
+                                </span>
+                                <span className={`text-sm font-bold ${accentText[item.accent] || accentText.slate}`}>
+                                  {item.value != null ? (
+                                    <>{item.value?.toLocaleString?.('vi-VN') ?? item.value}{item.unit && <span className="text-xs font-normal ml-0.5 opacity-70">{item.unit}</span>}</>
+                                  ) : (
+                                    <>{item.kh > 0 ? `${item.kh}` : '—'}<span className="text-slate-400 mx-1">/</span>{item.tt}</>
+                                  )}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </div>
                     <div className="bg-white rounded-xl p-4 border border-slate-100">
                       <p className="text-xs font-bold uppercase text-slate-500 mb-3">📐 Đo lường ({stageMeasurements.length})</p>
@@ -1305,10 +1555,93 @@ const SingleTaskCard = ({ task, batch, group, showBatch, showGroup, onClick }) =
   </div>
 );
 
+// ── Stat Card component (dùng chung) ─────────────────────────────────────────────
+const StatCard = ({ icon, label, value, unit, accent = 'slate', highlight }) => {
+  const accentStyles = {
+    blue: 'bg-blue-50 text-blue-700 border-blue-200',
+    cyan: 'bg-cyan-50 text-cyan-700 border-cyan-200',
+    emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    amber: 'bg-amber-50 text-amber-700 border-amber-200',
+    yellow: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+    violet: 'bg-violet-50 text-violet-700 border-violet-200',
+    slate: 'bg-slate-50 text-slate-700 border-slate-200',
+  };
+  return (
+    <div className={`rounded-xl p-3 border ${accentStyles[accent]} ${highlight ? 'ring-2 ring-emerald-400 ring-offset-1' : ''}`}>
+      <div className="flex items-center gap-1.5 mb-1">
+        <span className="text-base">{icon}</span>
+        <span className="text-[10px] font-bold uppercase tracking-wide opacity-80">{label}</span>
+      </div>
+      <p className="text-xl font-bold">
+        {value?.toLocaleString?.('vi-VN') ?? value}
+        {unit && <span className="text-xs font-normal ml-1 opacity-70">{unit}</span>}
+      </p>
+    </div>
+  );
+};
+
+// ── Tasks Section ─────────────────────────────────────────────────────────────
 const TasksSection = ({ tasks, groups, batches, taskStats, taskReportsByBatch, onOpenTaskDetail }) => {
   const [viewMode, setViewMode] = useState('batch'); // 'batch' | 'all'
   const [expandedBatch, setExpandedBatch] = useState({});
   const [taskFilter, setTaskFilter] = useState('all');
+
+  // ── Summary stats từ taskReports JSONB ────────────────────────────────────
+  const allReports = useMemo(() => Object.values(taskReportsByBatch || {}).flat(), [taskReportsByBatch]);
+
+  const summaryStats = useMemo(() => {
+    if (tasks.length === 0 && allReports.length === 0) return null;
+
+    // Đếm số task completed theo taskType (task.status)
+    const countByTaskType = (types) => tasks.filter(t =>
+      types.includes(t.taskType) && (t.status === 'Completed' || t.status === 'Approved')
+    ).length;
+
+    // Đếm số report đã duyệt theo taskType (từ taskReports)
+    const countReportsByType = (types) => allReports.filter(r => {
+      const tt = r.taskType || r.TaskType;
+      if (!types.includes(tt)) return false;
+      return ['Approved', 'Completed'].includes(r.approvalStatus || r.status);
+    }).length;
+
+    // Đếm task KHÁC (Observation, general) đã hoàn thành
+    const observationCount = tasks.filter(t => {
+      if (!['Completed', 'Approved'].includes(t.status)) return false;
+      const tt = t.taskType || '';
+      return !['Watering', 'Irrigation', 'Fertilizing', 'Fertilizer', 'Spraying', 'PestControl', 'Planting', 'Harvest', 'Harvesting'].includes(tt);
+    }).length;
+
+    // Tổng lượng nước: đọc từ resultData.waterAmount / luongNuocTong
+    const totalWater = allReports
+      .filter(r => ['Watering', 'Irrigation'].includes(r.taskType || r.TaskType))
+      .reduce((sum, r) => {
+        const rd = r.resultData || {};
+        return sum + (Number(rd.waterAmount ?? rd.luongNuocTong ?? r.waterAmount ?? 0) || 0);
+      }, 0);
+
+    // Sản lượng thu hoạch: đọc từ resultData.sanLuongKg / harvestWeight
+    const totalYield = allReports
+      .filter(r => ['Harvesting', 'Harvest'].includes(r.taskType || r.TaskType))
+      .reduce((sum, r) => {
+        const rd = r.resultData || {};
+        return sum + (Number(rd.sanLuongKg ?? rd.harvestWeight ?? r.sanLuongKg ?? r.harvestWeight ?? 0) || 0);
+      }, 0);
+
+    return {
+      wateringTT: countByTaskType(['Watering', 'Irrigation']),
+      fertilizeTT: countByTaskType(['Fertilizing', 'Fertilizer']),
+      sprayTT: countByTaskType(['Spraying', 'PestControl']),
+      observationTT: observationCount,
+      wateringReports: countReportsByType(['Watering', 'Irrigation']),
+      fertilizeReports: countReportsByType(['Fertilizing', 'Fertilizer']),
+      sprayReports: countReportsByType(['Spraying', 'PestControl']),
+      totalWater: Math.round(totalWater),
+      totalYield: Math.round(totalYield * 100) / 100,
+      reportCount: allReports.length,
+      completedCount: tasks.filter(t => ['Completed', 'Approved'].includes(t.status)).length,
+      total: tasks.length,
+    };
+  }, [tasks, allReports]);
 
   const tasksByBatch = useMemo(() => {
     const m = new Map(); batches.forEach(b => m.set(b.id, []));
@@ -1324,9 +1657,27 @@ const TasksSection = ({ tasks, groups, batches, taskStats, taskReportsByBatch, o
     return tasks.filter(t => t.status === taskFilter || (taskFilter === 'overdue' && t.dueDate && new Date(t.dueDate) < new Date() && !['Completed', 'Cancelled', 'Approved'].includes(t.status)));
   }, [tasks, taskFilter]);
 
+  // Đếm số cây thực tế đã trồng/ươm từ JSONB resultData của các report Planting/Nursery
   const plantCountForBatch = (batchId) => {
     const reports = taskReportsByBatch?.[batchId] || [];
-    return reports.filter(r => r.taskType === 'Planting' || r.taskType === 2).reduce((sum, r) => sum + (Number(r.actualPlantCount || r.plantCount) || 0), 0);
+    return reports.reduce((sum, r) => {
+      const tt = r.taskType || r.TaskType;
+      const isPlantingTask = tt === 'Planting' || tt === 'Nursery' ||
+        (r.taskTitle || '').toLowerCase().includes('trồng') ||
+        (r.taskTitle || '').includes('ươm') || (r.taskTitle || '').toLowerCase().includes('uom');
+      if (!isPlantingTask) return sum;
+      const rd = r.resultData || {};
+      const candidates = [
+        rd.soLuong, rd.actualPlantCount, rd.plantCount, rd.quantity,
+        rd.soLuongCay, rd.soLuongCayGieo, rd.soLuongCayTrong,
+        r.actualPlantCount, r.plantCount, r.soLuong, r.quantity
+      ];
+      for (const v of candidates) {
+        const n = Number(v);
+        if (!isNaN(n) && n > 0) return sum + n;
+      }
+      return sum;
+    }, 0);
   };
 
   const getBatch = (batchId) => batches.find(b => b.id === batchId);
@@ -1353,6 +1704,25 @@ const TasksSection = ({ tasks, groups, batches, taskStats, taskReportsByBatch, o
             </div>
           </div>
         </div>
+
+        {/* Summary stat cards (collapsible) */}
+        {summaryStats && (
+          <div className="mt-3 space-y-3">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+              <StatCard icon="💧" label="Tưới nước" value={summaryStats.wateringTT} unit="lần" accent="blue" />
+              <StatCard icon="🚿" label="Lượng nước" value={summaryStats.totalWater} unit="lít" accent="cyan" />
+              <StatCard icon="🧪" label="Bón phân" value={summaryStats.fertilizeTT} unit="lần" accent="emerald" />
+              <StatCard icon="🛡️" label="Phun thuốc" value={summaryStats.sprayTT} unit="lần" accent="amber" />
+            </div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+              <StatCard icon="🌾" label="Sản lượng" value={summaryStats.totalYield} unit="kg" accent="yellow" />
+              <StatCard icon="📝" label="Báo cáo" value={summaryStats.reportCount} unit="báo cáo" accent="violet" />
+              <StatCard icon="✅" label="Hoàn thành" value={summaryStats.completedCount} unit={`/ ${summaryStats.total}`} accent="emerald" highlight />
+              <StatCard icon="👁️" label="Quan sát" value={summaryStats.observationTT} unit="lần" accent="slate" />
+            </div>
+          </div>
+        )}
+
         {/* View mode tabs */}
         <div className="flex items-center gap-1 mt-3">
           <button onClick={() => setViewMode('batch')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${viewMode === 'batch' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>📦 Theo Lô</button>
@@ -1900,9 +2270,29 @@ const MeasurementsSection = ({ measurements, groups, form, setForm, onCreate, on
 
 // ── Batches Section ───────────────────────────────────────────────────────────
 const BatchesSection = ({ batches, groups, bedAssignments, form, setForm, onCreate, onDelete, saving, taskReportsByBatch }) => {
+  // Đếm số cây thực tế đã trồng/ươm từ JSONB resultData của các report Planting/Nursery
   const plantedCount = (batchId) => {
     const reports = taskReportsByBatch?.[batchId] || [];
-    return reports.reduce((sum, r) => sum + (Number(r.actualPlantCount || r.plantCount) || 0), 0);
+    return reports.reduce((sum, r) => {
+      // Chỉ tính report của task Planting/Nursery (ươm cây, gieo hạt)
+      const tt = r.taskType || r.TaskType;
+      const isPlantingTask = tt === 'Planting' || tt === 'Nursery' ||
+        (r.taskTitle || '').toLowerCase().includes('trồng') ||
+        (r.taskTitle || '').includes('ươm') || (r.taskTitle || '').toLowerCase().includes('uom');
+      if (!isPlantingTask) return sum;
+      const rd = r.resultData || {};
+      // Ưu tiên các key: soLuong, actualPlantCount, plantCount, quantity
+      const candidates = [
+        rd.soLuong, rd.actualPlantCount, rd.plantCount, rd.quantity,
+        rd.soLuongCay, rd.soLuongCayGieo, rd.soLuongCayTrong,
+        r.actualPlantCount, r.plantCount, r.soLuong, r.quantity
+      ];
+      for (const v of candidates) {
+        const n = Number(v);
+        if (!isNaN(n) && n > 0) return sum + n;
+      }
+      return sum;
+    }, 0);
   };
   return (
   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
@@ -2020,12 +2410,32 @@ const BatchesSection = ({ batches, groups, bedAssignments, form, setForm, onCrea
 
 // ── Design Section ───────────────────────────────────────────────────────────
 const DesignSection = ({ experiment }) => {
-  const raw = experiment.design || experiment.designParameters || experiment.designConfig;
+  // Parse design từ nhiều trường JSONB
+  const candidates = [
+    experiment.design,
+    experiment.designParameters,
+    experiment.designConfig,
+    experiment.designParametersJson,
+    experiment.experimentDesign
+  ];
   let parsed = null;
-  if (typeof raw === 'string') {
-    try { parsed = JSON.parse(raw); } catch { parsed = null; }
-  } else if (typeof raw === 'object' && raw !== null) {
-    parsed = raw;
+  for (const raw of candidates) {
+    if (raw == null) continue;
+    if (typeof raw === 'string') {
+      try { parsed = JSON.parse(raw); if (parsed) break; } catch { parsed = null; }
+    } else if (typeof raw === 'object') { parsed = raw; break; }
+  }
+
+  // Parse designParameters string nếu có (BE lưu thành string)
+  let designParams = null;
+  if (parsed && typeof parsed === 'object') {
+    // designParameters trong object có thể là string
+    const dp = parsed.designParameters || parsed.parameters;
+    if (typeof dp === 'string') {
+      try { designParams = JSON.parse(dp); } catch { designParams = dp; }
+    } else if (typeof dp === 'object') {
+      designParams = dp;
+    }
   }
 
   const type = experiment.designType || experiment.designName || parsed?.designType || parsed?.type || '';
@@ -2040,6 +2450,7 @@ const DesignSection = ({ experiment }) => {
     'Nested': { label: 'Nested', desc: 'Nested Design', color: 'amber', icon: '🔢' },
     'Ammi': { label: 'AMMI', desc: 'Additive Main Effects and Multiplicative Interaction', color: 'green', icon: '📈' },
     'FactorialRCBD': { label: 'Factorial RCBD', desc: 'Factorial in RCBD', color: 'emerald', icon: '🧮' },
+    'CompletelyRandomized': { label: 'CRD', desc: 'Completely Randomized Design', color: 'indigo', icon: '🎲' },
   };
   const tm = typeMeta[type] || { label: type || 'Thí nghiệm', desc: experiment.designDescription || '', color: 'slate', icon: '📐' };
   const colorMap = {
@@ -2055,31 +2466,55 @@ const DesignSection = ({ experiment }) => {
     slate: 'bg-slate-50 border-slate-200 text-slate-700',
   };
 
-  const getIcon = (key) => {
-    const map = {
-      replicates: '🔁', blocks: '🧱', rows: '➗', columns: '➗', factors: '✖️',
-      factorLevels: '🔢', treatmentFactors: '🧪', experimentalUnits: '📦',
-      plotSize: '📏', plantSpacing: '🌱', rowSpacing: '↔️', spacing: '↔️',
-      harvestArea: '🌾', plantDensity: '📊', duration: '📅',
-      numberOfTreatments: '🧪', treatmentCombinations: '🔀', controlTreatment: '✅',
-      treatments: '💊', variables: '📊', observations: '👁️',
-    };
-    return map[key] || '📋';
+  const FIELD_ICONS = {
+    replicates: '🔁', replicate: '🔁', replicationCount: '🔁', blocks: '🧱', block: '🧱',
+    rows: '➗', row: '➗', columns: '➗', column: '➗', factors: '✖️', factor: '✖️', factorLevels: '🔢',
+    treatmentFactors: '🧪', treatmentGroups: '🧪', experimentalUnits: '📦',
+    plotSize: '📏', plantSpacing: '🌱', rowSpacing: '↔️', spacing: '↔️',
+    harvestArea: '🌾', plantDensity: '📊', duration: '📅',
+    numberOfTreatments: '🧪', treatmentCombinations: '🔀', controlTreatment: '✅',
+    treatments: '💊', treatmentName: '💊', variables: '📊', observations: '👁️',
+    numberOfGroups: '👥', groupType: '👥', randomization: '🎲', alpha: 'α',
+    confidenceLevel: '📊', testType: '🧪', software: '💻',
+    randomizationMethod: '🎲'
   };
 
-  const formatValue = (val) => {
+  const formatVal = (val) => {
     if (val === null || val === undefined) return '—';
     if (typeof val === 'boolean') return val ? 'Có' : 'Không';
     if (typeof val === 'number') return val.toLocaleString('vi-VN');
-    if (typeof val === 'object') return JSON.stringify(val, null, 2);
-    return String(val);
+    if (typeof val === 'object') return Array.isArray(val) ? `${val.length} phần tử` : JSON.stringify(val).slice(0, 50);
+    return String(val).length > 80 ? String(val).slice(0, 80) + '…' : String(val);
   };
+
+  // Trường thiết kế với nhãn tiếng Việt
+  const designFieldDefs = [
+    { key: 'designType', label: 'Loại thiết kế', icon: '📐', type: 'text' },
+    { key: 'treatments', label: 'Số xử lý', icon: '💊', type: 'number' },
+    { key: 'replicationCount', label: 'Số lần lặp lại', icon: '🔁', type: 'number' },
+    { key: 'randomizationMethod', label: 'Phương pháp ngẫu nhiên', icon: '🎲', type: 'text' },
+    { key: 'blocks', label: 'Số khối', icon: '🧱', type: 'number' },
+    { key: 'rows', label: 'Số hàng', icon: '➗', type: 'number' },
+    { key: 'columns', label: 'Số cột', icon: '➗', type: 'number' },
+    { key: 'plotSize', label: 'Kích thước ô', icon: '📏', type: 'text' },
+    { key: 'plantSpacing', label: 'Khoảng cách cây', icon: '🌱', type: 'text' },
+    { key: 'rowSpacing', label: 'Khoảng cách hàng', icon: '↔️', type: 'text' },
+    { key: 'alpha', label: 'Mức ý nghĩa (α)', icon: 'α', type: 'text' },
+    { key: 'confidenceLevel', label: 'Mức tin cậy', icon: '📊', type: 'text' },
+    { key: 'testType', label: 'Phương pháp kiểm định', icon: '🧪', type: 'text' },
+    { key: 'software', label: 'Phần mềm phân tích', icon: '💻', type: 'text' },
+    { key: 'numberOfTreatments', label: 'Số nhân tố xử lý', icon: '✖️', type: 'number' },
+    { key: 'numberOfGroups', label: 'Số nhóm', icon: '👥', type: 'number' },
+    { key: 'factorLevels', label: 'Cấp nhân tố', icon: '🔢', type: 'text' },
+    { key: 'controlTreatment', label: 'Xử lý đối chứng', icon: '✅', type: 'text' },
+    { key: 'treatmentCombinations', label: 'Tổ hợp xử lý', icon: '🔀', type: 'text' },
+  ];
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
       <div className="px-6 py-4 border-b border-slate-100">
         <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">📐 Thiết Kế Thí Nghiệm</h2>
-        <p className="text-sm text-slate-500 mt-0.5">Phương pháp bố trí & thông số thiết kế</p>
+        <p className="text-sm text-slate-500 mt-0.5">Phương pháp bố trí & thông số thiết kế (render từ JSONB)</p>
       </div>
       <div className="p-6">
         {/* Header với loại thiết kế */}
@@ -2093,14 +2528,58 @@ const DesignSection = ({ experiment }) => {
           </div>
         )}
 
-        {parsed ? (
-          <div className="space-y-3">
-            {/* Nhóm các trường jsonb theo category */}
+        {/* Design Parameters Form - render trực quan từ JSONB */}
+        {designParams ? (
+          <div className="space-y-4">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">📋 Thông số thiết kế</p>
+            <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+              {designFieldDefs
+                .filter(f => designParams[f.key] != null && designParams[f.key] !== '')
+                .map(f => (
+                  <div key={f.key} className="bg-slate-50 rounded-xl p-3 border border-slate-200 hover:border-indigo-200 transition-colors">
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <span className="text-sm">{f.icon}</span>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{f.label}</p>
+                    </div>
+                    <p className="text-sm font-semibold text-slate-800">
+                      {f.type === 'number' ? (Number(designParams[f.key])).toLocaleString('vi-VN') : String(designParams[f.key])}
+                    </p>
+                  </div>
+                ))}
+            </div>
+            {/* Các trường không có trong định nghĩa */}
             {(() => {
-              const layout = parsed.layout || parsed.experimentalLayout || null;
-              const treatment = parsed.treatments || parsed.treatmentFactors || parsed.factorLevels || null;
-              const stats = parsed.statistical || parsed.analysis || null;
-              const field = parsed.fieldDesign || parsed.plotLayout || null;
+              const knownKeys = new Set(designFieldDefs.map(f => f.key));
+              const others = Object.entries(designParams).filter(([k, v]) =>
+                v != null && v !== '' && !knownKeys.has(k) && !['id', 'designType', 'type', 'designName'].includes(k)
+              );
+              if (others.length === 0) return null;
+              return (
+                <>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 pt-2">⚙️ Cấu hình bổ sung</p>
+                  <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+                    {others.map(([k, v]) => (
+                      <div key={k} className="bg-slate-50 rounded-xl p-3 border border-slate-200">
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          <span className="text-sm">{FIELD_ICONS[k] || '📋'}</span>
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{k.replace(/([A-Z])/g, ' $1').trim()}</p>
+                        </div>
+                        <p className="text-sm font-semibold text-slate-800">{formatVal(v)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        ) : parsed ? (
+          /* Fallback: hiển thị sections theo nhóm layout/treatment/stats như cũ */
+          <div className="space-y-4">
+            {(() => {
+              const layout = parsed.layout || parsed.experimentalLayout;
+              const treatment = parsed.treatments || parsed.treatmentFactors || parsed.factorLevels;
+              const stats = parsed.statistical || parsed.analysis;
+              const field = parsed.fieldDesign || parsed.plotLayout;
 
               const sections = [];
               if (layout) {
@@ -2117,15 +2596,15 @@ const DesignSection = ({ experiment }) => {
               }
               if (stats) {
                 const entries = Object.entries(stats).filter(([k, v]) => v !== null && v !== undefined && k !== 'id');
-                if (entries.length > 0) sections.push({ title: '📊 Thống Kê', items: entries });
+                if (entries.length > 0) sections.push({ title: '📊 Thống Kê Phân Tích', items: entries });
               }
-
-              // fallback: nếu không có layout/treatment cụ thể thì hiển thị toàn bộ
               if (sections.length === 0) {
-                const entries = Object.entries(parsed).filter(([k, v]) => v !== null && v !== undefined && k !== 'id' && k !== 'designType' && k !== 'type' && k !== 'designName');
+                const entries = Object.entries(parsed).filter(([k, v]) =>
+                  v !== null && v !== undefined && k !== 'id' && k !== 'designType' && k !== 'type' && k !== 'designName'
+                );
                 if (entries.length > 0) sections.push({ title: '⚙️ Cấu Hình Thiết Kế', items: entries });
               }
-
+              if (sections.length === 0) return <p className="text-xs text-slate-500 italic">JSONB thiết kế trống</p>;
               return sections.map(sec => (
                 <div key={sec.title}>
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">{sec.title}</p>
@@ -2133,10 +2612,10 @@ const DesignSection = ({ experiment }) => {
                     {sec.items.map(([key, value]) => (
                       <div key={key} className="bg-slate-50 rounded-xl p-3 border border-slate-200 hover:border-indigo-200 transition-colors">
                         <div className="flex items-center gap-1.5 mb-1.5">
-                          <span className="text-sm">{getIcon(key)}</span>
+                          <span className="text-sm">{FIELD_ICONS[key] || '📋'}</span>
                           <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{key.replace(/([A-Z])/g, ' $1').trim()}</p>
                         </div>
-                        <p className="text-sm font-semibold text-slate-800 leading-snug">{formatValue(value)}</p>
+                        <p className="text-sm font-semibold text-slate-800 leading-snug">{formatVal(value)}</p>
                       </div>
                     ))}
                   </div>
@@ -2150,6 +2629,7 @@ const DesignSection = ({ experiment }) => {
             <div>
               <p className="text-base font-bold text-slate-900">{type || experiment.designType}</p>
               {experiment.designDescription && <p className="text-sm text-slate-500 mt-1">{experiment.designDescription}</p>}
+              <p className="text-xs text-amber-600 mt-1 italic">⚠️ JSONB thiết kế chưa được thiết lập — chỉ hiển thị loại thiết kế</p>
             </div>
           </div>
         ) : (
