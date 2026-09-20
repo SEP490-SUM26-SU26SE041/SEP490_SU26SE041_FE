@@ -135,19 +135,28 @@ const PersonalTaskList = () => {
       if (images && images.length > 0) {
         const imageResults = await Promise.allSettled(
           images.map((img) => {
-            // Mỗi img có { file, previewUrl, caption, fileName, fileSize, imageId?, url? }
+            // Mỗi img có { file, previewUrl, caption, fileName, fileSize, imageId?, url?, ai? }
             // - Nếu có file (mới chọn từ máy) → gửi multipart với File
             // - Nếu không có file (ảnh đã upload trước đó) → gửi JSON với imageUrl
+            // 🆕 Nếu có AI result → gửi kèm metadata để BE lưu lại
+            const ai = img.ai || null;
+            const aiSummary = ai ? (ai.response?.disease || ai.response?.pestType || ai.response?.name || '') : '';
+            const aiCaption = img.caption || (aiSummary ? `🤖 ${aiSummary}` : '');
             if (img.file) {
               return taskImagesApi.upload({
                 file: img.file,
                 imageUrl: img.url, // optional URL nếu đã có Cloudinary
-                caption: img.caption || '',
+                caption: aiCaption,
                 capturedAt: img.uploadedAt || new Date().toISOString(),
                 experimentId: selectedTask.experimentId || selectedTask.experiment?.id,
                 batchId: selectedTask.batchId || selectedTask.batch?.id,
                 taskReportId: reportId,
-                taskId: selectedTask.id
+                taskId: selectedTask.id,
+                // 🆕 AI metadata
+                aiProvider: ai?.provider,
+                aiScanId: ai?.scanId,
+                aiStatus: ai?.status,
+                aiMetadata: ai?.response
               });
             }
             return taskImagesApi.create({
@@ -156,8 +165,13 @@ const PersonalTaskList = () => {
               experimentId: selectedTask.experimentId || selectedTask.experiment?.id,
               batchId: selectedTask.batchId || selectedTask.batch?.id,
               imageUrl: img.url,
-              caption: img.caption || '',
-              capturedAt: img.uploadedAt || new Date().toISOString()
+              caption: aiCaption,
+              capturedAt: img.uploadedAt || new Date().toISOString(),
+              // 🆕 AI metadata trong JSON
+              aiProvider: ai?.provider,
+              aiScanId: ai?.scanId,
+              aiStatus: ai?.status,
+              aiMetadata: ai?.response
             });
           })
         );

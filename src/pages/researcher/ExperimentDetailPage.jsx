@@ -2,10 +2,15 @@ import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom';
 import { experimentsApi, measurementRecordsApi, taskReportsApi, experimentRequestsApi } from '../../api/experimentApi';
 import { stagesApi, groupsApi, measurementsApi, batchesApi, schedulesApi, tasksApi } from '../../api/researcherApi';
+import { taskImagesApi } from '../../api/sharedTaskApi';
+import AiResultModal from '../../components/tasks/AiResultModal';
+import { skillsApi } from '../../api/skillsApi';
+import { tasksCountApi } from '../../api/skillsApi';
 import { bedAssignmentsApi } from '../../api/managerResourcesApi';
 import { userApi } from '../../api/researcherApi';
 import { aggregatePlantCountFromReports } from '../../utils/measurement';
 import { autoFillAllFields, autoFillFromDynamicSchema, computeResultsByGroup, isPerGroupStage, getAutoFillFieldKeys, buildGrowthResultSchema } from '../../utils/stageResultCompute';
+import { canGenerateTasksFromStage, canCreateTaskOnStage } from '../../utils/taskValidation';
 import { useToast } from '../../context/ToastContext';
 import ExperimentOverviewSummary from '../../components/researcher/ExperimentOverviewSummary';
 import StatisticsDashboard from '../../components/researcher/StatisticsDashboard';
@@ -191,6 +196,27 @@ const ExperimentDetailPage = ({ experimentId }) => {
   const [measurementForm, setMeasurementForm] = useState({ groupId: '', metricName: '', unit: '', targetValue: '', description: '' });
   const [scheduleForm, setScheduleForm] = useState({ experimentStageId: '', batchId: '', title: '', instruction: '', frequencyDays: 1, taskType: 'Watering', startDate: '', endDate: '' });
   const [batchForm, setBatchForm] = useState({ experimentBedAssignmentId: '', groupId: '', batchCode: '', plantingDate: '', expectedHarvestDate: '', plantCount: '', notes: '' });
+
+  // Create-task modal
+  const [taskModal, setTaskModal] = useState({ open: false, mode: 'manual' }); // 'manual' | 'byStage' | 'byExperiment'
+  const [taskForm, setTaskForm] = useState({ experimentStageId: '', batchId: '', careScheduleId: '', taskType: 'Watering', title: '', description: '', dueDate: '', requiredSkillDescription: '', skillRequirements: [] });
+  const [taskBulkForm, setTaskBulkForm] = useState({ experimentStageId: '', taskType: 'Watering', title: '', description: '', dueDate: '', requiredSkillDescription: '', skillRequirements: [] });
+  const [taskSubmitting, setTaskSubmitting] = useState(false);
+  const [skillCatalog, setSkillCatalog] = useState([]);
+
+  // Load skills for picker
+  useEffect(() => {
+    let cancelled = false;
+    skillsApi.getAll()
+      .then(data => { if (!cancelled) setSkillCatalog(Array.isArray(data) ? data : (data?.items || [])); })
+      .catch(() => { if (!cancelled) setSkillCatalog([]); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Edit experiment basic info
+  const [editExpModal, setEditExpModal] = useState({ open: false });
+  const [editExpForm, setEditExpForm] = useState({ title: '', objective: '', hypothesis: '', status: '', startDate: '', endDate: '' });
+  const [editExpSaving, setEditExpSaving] = useState(false);
 
   const navigateTo = (path) => {
     window.history.pushState(null, '', path);
@@ -404,20 +430,40 @@ const ExperimentDetailPage = ({ experimentId }) => {
   };
 
   const handleAssignTask = async (taskId, assigneeId, reason) => {
+    if (!assigneeId) { showToast('Vui lòng chọn người được giao', 'error'); return; }
     try {
       await tasksApi.assign({ taskId, assigneeId, reason: reason || null });
-      // Reload tasks để lấy assignee mới
+      showToast('Đã gán tác vụ', 'success');
       const updated = await tasksApi.getByExperiment(experimentId);
       setTasks(Array.isArray(updated) ? updated : []);
-    } catch (err) { throw err; }
+      setDrawerTask(null);
+    } catch (err) {
+      console.error('Assign task failed:', err);
+      showToast(err?.message || 'Lỗi gán tác vụ', 'error');
+      throw err;
+    }
   };
 
   const handleReassignTask = async (taskId, newAssigneeId, reason) => {
+    if (!newAssigneeId) { showToast('Vui lòng chọn người được chuyển giao', 'error'); return; }
+    // Defense: không cho chuyển cho cùng người đang giữ task
+    const currentTask = tasks.find(t => t.id === taskId);
+    const currentAssignee = currentTask?.assigneeId || currentTask?.assignedToId;
+    if (currentAssignee && newAssigneeId === currentAssignee) {
+      showToast('Không thể chuyển cho cùng người đang giữ task', 'error');
+      return;
+    }
     try {
       await tasksApi.reassign({ taskId, newAssigneeId, reason: reason || null });
+      showToast('Đã chuyển giao tác vụ', 'success');
       const updated = await tasksApi.getByExperiment(experimentId);
       setTasks(Array.isArray(updated) ? updated : []);
-    } catch (err) { throw err; }
+      setDrawerTask(null);
+    } catch (err) {
+      console.error('Reassign task failed:', err);
+      showToast(err?.message || 'Lỗi chuyển giao tác vụ', 'error');
+      throw err;
+    }
   };
 
   const handleCreateSchedule = async () => {
@@ -456,6 +502,117 @@ const ExperimentDetailPage = ({ experimentId }) => {
     if (!window.confirm('Xóa lô này?')) return;
     try { await batchesApi.remove(id); showToast('Đã xóa', 'success'); setBatches(prev => prev.filter(b => b.id !== id)); }
     catch (err) { showToast(err.message, 'error'); }
+  };
+
+  // ── Task creation (modal) ────────────────────────────────────────────
+  const handleCreateTask = async (payload) => {
+    // Validate stage còn active (giống form cũ trong ResearcherExperiments)
+    if (payload.experimentStageId) {
+      const st = stages.find(s => s.id === payload.experimentStageId);
+      const stageCheck = canCreateTaskOnStage(st);
+      if (!stageCheck.allowed) { showToast(stageCheck.reason, 'error'); return false; }
+    }
+    setTaskSubmitting(true);
+    try {
+      await tasksApi.create({ experimentId: experiment.id, ...payload });
+      showToast('Đã tạo tác vụ', 'success');
+      const updated = await tasksApi.getByExperiment(experiment.id);
+      setTasks(Array.isArray(updated) ? updated : []);
+      return true;
+    } catch (err) { showToast(err.message || 'Lỗi tạo tác vụ', 'error'); return false; }
+    finally { setTaskSubmitting(false); }
+  };
+
+  const handleBulkCreateTasksForStage = async (formData) => {
+    const stageId = formData.experimentStageId;
+    if (!stageId) { showToast('Vui lòng chọn giai đoạn', 'error'); return false; }
+    const targetStage = stages.find(s => s.id === stageId);
+    const stageCheck = canGenerateTasksFromStage(targetStage);
+    if (!stageCheck.allowed) { showToast(stageCheck.reason, 'error'); return false; }
+    setTaskSubmitting(true);
+    try {
+      await tasksApi.generateByStage(stageId);
+      showToast(`Đã tạo tác vụ tự động cho giai đoạn`, 'success');
+      const updated = await tasksApi.getByExperiment(experiment.id);
+      setTasks(Array.isArray(updated) ? updated : []);
+      return true;
+    } catch (err) { showToast(err.message || 'Lỗi tạo hàng loạt', 'error'); return false; }
+    finally { setTaskSubmitting(false); }
+  };
+
+  const handleBulkCreateTasksForAll = async () => {
+    if (stages.length === 0) { showToast('Thí nghiệm chưa có giai đoạn nào. Vui lòng thêm giai đoạn trước.', 'error'); return false; }
+    if (groups.length === 0) { showToast('Thí nghiệm chưa có nhóm nào. Vui lòng thêm nhóm trước.', 'error'); return false; }
+    if (experiment?.status && !['Active', 'Draft'].includes(experiment.status)) {
+      showToast(`Thí nghiệm đang ở trạng thái "${experiment.status}" — không thể generate tasks`, 'error');
+      return false;
+    }
+    setTaskSubmitting(true);
+    try {
+      await tasksApi.generateByExperiment(experiment.id);
+      showToast('Đã tạo tác vụ tự động cho thí nghiệm', 'success');
+      const updated = await tasksApi.getByExperiment(experiment.id);
+      setTasks(Array.isArray(updated) ? updated : []);
+      return true;
+    } catch (err) { showToast(err.message || 'Lỗi tạo hàng loạt', 'error'); return false; }
+    finally { setTaskSubmitting(false); }
+  };
+
+  // ── Rename group ─────────────────────────────────────────────────────
+  const handleRenameGroup = async (groupId, newName) => {
+    try {
+      await groupsApi.update(groupId, { groupName: newName });
+      showToast('Đã đổi tên nhóm', 'success');
+      // refresh groups
+      const data = await groupsApi.getByExperiment(experiment.id);
+      setGroups(Array.isArray(data) ? data : []);
+      return true;
+    } catch (err) { showToast(err.message || 'Lỗi đổi tên', 'error'); return false; }
+  };
+
+  const handleDeleteGroup = async (groupId) => {
+    if (!window.confirm('Xóa nhóm này? Các lô trong nhóm sẽ không thuộc nhóm nào.')) return;
+    try {
+      await groupsApi.remove(groupId);
+      showToast('Đã xóa nhóm', 'success');
+      const data = await groupsApi.getByExperiment(experiment.id);
+      setGroups(Array.isArray(data) ? data : []);
+    } catch (err) { showToast(err.message, 'error'); }
+  };
+
+  // ── Edit experiment basic info ──────────────────────────────────────
+  const openEditExperiment = () => {
+    setEditExpForm({
+      title: experiment.title || '',
+      objective: experiment.objective || '',
+      hypothesis: experiment.hypothesis || '',
+      status: experiment.status || 'Draft',
+      startDate: experiment.startDate ? experiment.startDate.slice(0, 10) : '',
+      endDate: experiment.endDate ? experiment.endDate.slice(0, 10) : ''
+    });
+    setEditExpModal({ open: true });
+  };
+
+  const handleSaveExperimentInfo = async () => {
+    if (!editExpForm.title.trim()) { showToast('Tiêu đề không được trống', 'error'); return; }
+    setEditExpSaving(true);
+    try {
+      const payload = {
+        title: editExpForm.title.trim(),
+        objective: editExpForm.objective || null,
+        hypothesis: editExpForm.hypothesis || null,
+        status: editExpForm.status,
+        startDate: editExpForm.startDate || null,
+        endDate: editExpForm.endDate || null
+      };
+      await experimentsApi.update(experiment.id, payload);
+      showToast('Đã lưu thay đổi', 'success');
+      // Reload experiment
+      const data = await experimentsApi.getById(experiment.id);
+      setExperiment(data || { ...experiment, ...payload });
+      setEditExpModal({ open: false });
+    } catch (err) { showToast(err.message || 'Lỗi lưu', 'error'); }
+    finally { setEditExpSaving(false); }
   };
 
   // ── Scroll tracking ───────────────────────────────────────────────────
@@ -610,6 +767,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
                   experiment={experiment} groups={groups} batches={batches}
                   measurements={measurements} measurementRecords={measurementRecords}
                   stages={stages} decisionSummary={decisionSummary} tasks={tasks} schedules={schedules}
+                  onEditExperiment={openEditExperiment}
                 />
               </SafeBoundary>
             </section>
@@ -644,6 +802,8 @@ const ExperimentDetailPage = ({ experimentId }) => {
                 <ExperimentHierarchyViewLazy
                   experiment={experiment} groups={groups} batchesByGroup={batchesByGroup}
                   stages={stages} measurements={measurements} recordsByBatch={recordsByBatch}
+                  onRenameGroup={handleRenameGroup}
+                  onDeleteGroup={handleDeleteGroup}
                 />
               </SafeBoundary>
             </section>
@@ -652,9 +812,14 @@ const ExperimentDetailPage = ({ experimentId }) => {
             <section id="section-tasks">
               <SafeBoundary>
                 <TasksSection
-                  tasks={tasks} groups={groups} batches={batches} taskStats={taskStats}
+                  tasks={tasks} groups={groups} batches={batches} stages={stages} taskStats={taskStats}
                   taskReportsByBatch={taskReportsByBatch}
                   onOpenTaskDetail={(t) => setDrawerTask(t)}
+                  onOpenCreateModal={(mode) => setTaskModal({ open: true, mode })}
+                  onCreateTaskForBatch={(batch) => {
+                    setTaskForm(f => ({ ...f, batchId: batch.id, title: '' }));
+                    setTaskModal({ open: true, mode: 'manual' });
+                  }}
                 />
               </SafeBoundary>
             </section>
@@ -728,10 +893,80 @@ const ExperimentDetailPage = ({ experimentId }) => {
           stages={stages}
           batches={batches}
           groups={groups}
+          tasks={tasks}
           taskReports={Object.values(taskReportsByBatch || {}).flat()}
           onAssign={handleAssignTask}
           onReassign={handleReassignTask}
           showToast={showToast}
+        />
+
+        {/* Edit Experiment Info Modal */}
+        <EditExperimentModal
+          open={editExpModal.open}
+          form={editExpForm}
+          setForm={setEditExpForm}
+          saving={editExpSaving}
+          onClose={() => setEditExpModal({ open: false })}
+          onSave={handleSaveExperimentInfo}
+        />
+
+        {/* Create Task Modal */}
+        <CreateTaskModal
+          open={taskModal.open}
+          mode={taskModal.mode}
+          onChangeMode={(m) => setTaskModal(prev => ({ ...prev, mode: m }))}
+          onClose={() => setTaskModal({ open: false, mode: 'manual' })}
+          stages={stages}
+          batches={batches}
+          schedules={schedules}
+          form={taskForm}
+          setForm={setTaskForm}
+          bulkForm={taskBulkForm}
+          setBulkForm={setTaskBulkForm}
+          submitting={taskSubmitting}
+          skillCatalog={skillCatalog}
+          onSubmitManual={async () => {
+            if (!taskForm.title.trim()) { showToast('Tiêu đề tác vụ không được trống', 'error'); return; }
+            const payload = {
+              experimentStageId: taskForm.experimentStageId || undefined,
+              batchId: taskForm.batchId || undefined,
+              careScheduleId: taskForm.careScheduleId || undefined,
+              taskType: taskForm.taskType,
+              title: taskForm.title.trim(),
+              description: taskForm.description || null,
+              dueDate: taskForm.dueDate || null,
+              requiredSkillDescription: taskForm.requiredSkillDescription || null,
+              skillRequirements: (taskForm.skillRequirements || [])
+                .filter(sr => sr && sr.skillId && Number(sr.requiredLevel) >= 1)
+                .map(sr => ({ skillId: sr.skillId, requiredLevel: Number(sr.requiredLevel) }))
+            };
+            if (!payload.experimentStageId) delete payload.experimentStageId;
+            if (!payload.batchId) delete payload.batchId;
+            if (!payload.careScheduleId) delete payload.careScheduleId;
+            if (!payload.dueDate) delete payload.dueDate;
+            if (!payload.description) delete payload.description;
+            if (!payload.requiredSkillDescription) delete payload.requiredSkillDescription;
+            if (payload.skillRequirements.length === 0) delete payload.skillRequirements;
+            const ok = await handleCreateTask(payload);
+            if (ok) {
+              setTaskForm({ experimentStageId: taskForm.experimentStageId, batchId: '', careScheduleId: '', taskType: 'Watering', title: '', description: '', dueDate: '', requiredSkillDescription: '', skillRequirements: [] });
+              setTaskModal({ open: false, mode: 'manual' });
+            }
+          }}
+          onSubmitByStage={async () => {
+            const ok = await handleBulkCreateTasksForStage(taskBulkForm);
+            if (ok) {
+              setTaskBulkForm({ experimentStageId: taskBulkForm.experimentStageId, taskType: 'Watering', title: '', description: '', dueDate: '', requiredSkillDescription: '', skillRequirements: [] });
+              setTaskModal({ open: false, mode: 'byStage' });
+            }
+          }}
+          onSubmitByExperiment={async () => {
+            const ok = await handleBulkCreateTasksForAll();
+            if (ok) {
+              setTaskBulkForm({ experimentStageId: '', taskType: 'Watering', title: '', description: '', dueDate: '', requiredSkillDescription: '', skillRequirements: [] });
+              setTaskModal({ open: false, mode: 'byExperiment' });
+            }
+          }}
         />
       </div>
     </Portal>
@@ -1581,8 +1816,8 @@ const StatCard = ({ icon, label, value, unit, accent = 'slate', highlight }) => 
 };
 
 // ── Tasks Section ─────────────────────────────────────────────────────────────
-const TasksSection = ({ tasks, groups, batches, taskStats, taskReportsByBatch, onOpenTaskDetail }) => {
-  const [viewMode, setViewMode] = useState('batch'); // 'batch' | 'all'
+const TasksSection = ({ tasks, groups, batches, stages, taskStats, taskReportsByBatch, onOpenTaskDetail, onOpenCreateModal, onCreateTaskForBatch }) => {
+  const [viewMode, setViewMode] = useState('batch'); // 'batch' | 'all' | 'calendar' | 'list'
   const [expandedBatch, setExpandedBatch] = useState({});
   const [taskFilter, setTaskFilter] = useState('all');
 
@@ -1702,6 +1937,27 @@ const TasksSection = ({ tasks, groups, batches, taskStats, taskReportsByBatch, o
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"></span>✅ {taskStats.completed}</span>
               {taskStats.overdue > 0 && <span className="flex items-center gap-1 text-rose-600"><span className="w-2 h-2 rounded-full bg-rose-500"></span>🚨 {taskStats.overdue}</span>}
             </div>
+            <div className="border-l border-slate-200 pl-2 ml-1 flex items-center gap-2">
+              <button onClick={() => onOpenCreateModal && onOpenCreateModal('manual')}
+                className="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 transition-colors shadow-sm">
+                ＋ Tạo Tác Vụ
+              </button>
+              <div className="relative group">
+                <button className="px-3 py-1.5 bg-violet-600 text-white rounded-lg text-xs font-bold hover:bg-violet-700 transition-colors shadow-sm">
+                  ⚡ Tạo Nhanh ▾
+                </button>
+                <div className="absolute right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden z-20 min-w-[180px] opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all">
+                  <button onClick={() => onOpenCreateModal && onOpenCreateModal('byStage')}
+                    className="block w-full text-left px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-violet-50">
+                    🎯 Theo giai đoạn
+                  </button>
+                  <button onClick={() => onOpenCreateModal && onOpenCreateModal('byExperiment')}
+                    className="block w-full text-left px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-violet-50 border-t border-slate-100">
+                    🌐 Cho toàn thực nghiệm
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1727,6 +1983,8 @@ const TasksSection = ({ tasks, groups, batches, taskStats, taskReportsByBatch, o
         <div className="flex items-center gap-1 mt-3">
           <button onClick={() => setViewMode('batch')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${viewMode === 'batch' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>📦 Theo Lô</button>
           <button onClick={() => setViewMode('all')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${viewMode === 'all' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>📋 Tất cả</button>
+          <button onClick={() => setViewMode('calendar')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${viewMode === 'calendar' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>🗓️ Lịch</button>
+          <button onClick={() => setViewMode('list')} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${viewMode === 'list' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>📆 Theo Ngày</button>
           <div className="ml-2 border-l border-slate-200 pl-2">
             <select value={taskFilter} onChange={e => setTaskFilter(e.target.value)} className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-semibold bg-white">
               <option value="all">Tất cả</option>
@@ -1769,6 +2027,12 @@ const TasksSection = ({ tasks, groups, batches, taskStats, taskReportsByBatch, o
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
+                      {onCreateTaskForBatch && (
+                        <span onClick={(e) => { e.stopPropagation(); onCreateTaskForBatch(batch); }}
+                          className="px-2.5 py-1 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 rounded-lg text-xs font-bold cursor-pointer" title="Tạo tác vụ mới cho lô này">
+                          ＋ Tác vụ
+                        </span>
+                      )}
                       <span className="px-2 py-1 bg-emerald-200 text-emerald-800 rounded-lg text-xs font-bold">{batchTasks.length}</span>
                       <span className="text-slate-400">{expandedBatch[batch.id] ? '▾' : '▸'}</span>
                     </div>
@@ -1786,6 +2050,12 @@ const TasksSection = ({ tasks, groups, batches, taskStats, taskReportsByBatch, o
               );
             })}
           </div>
+        ) : viewMode === 'calendar' ? (
+          /* ── View lịch tháng (mini grid + side panel) ── */
+          <TasksCalendarView tasks={filteredTasks} batches={batches} groups={groups} onOpenTaskDetail={onOpenTaskDetail} />
+        ) : viewMode === 'list' ? (
+          /* ── View danh sách nhóm theo ngày ── */
+          <TasksByDayList tasks={filteredTasks} batches={batches} groups={groups} onOpenTaskDetail={onOpenTaskDetail} />
         ) : (
           /* ── View tất cả (danh sách phẳng) ── */
           <div className="space-y-1.5">
@@ -1803,36 +2073,627 @@ const TasksSection = ({ tasks, groups, batches, taskStats, taskReportsByBatch, o
   );
 };
 
+// ── Color map cho trạng thái task (dùng tĩnh để Tailwind không purge) ─────────────
+const TASK_STATUS_COLORS = {
+  slate:   { dot: 'bg-slate-400',   pill: 'bg-slate-100 text-slate-700',   border: 'border-slate-200' },
+  blue:    { dot: 'bg-blue-500',    pill: 'bg-blue-100 text-blue-700',     border: 'border-blue-200' },
+  amber:   { dot: 'bg-amber-500',   pill: 'bg-amber-100 text-amber-700',   border: 'border-amber-200' },
+  emerald: { dot: 'bg-emerald-500', pill: 'bg-emerald-100 text-emerald-700', border: 'border-emerald-200' },
+  rose:    { dot: 'bg-rose-500',    pill: 'bg-rose-100 text-rose-700',     border: 'border-rose-200' }
+};
+const getTaskStatusKey = (st) => {
+  if (['Completed', 'Approved'].includes(st)) return 'emerald';
+  if (st === 'InProgress') return 'amber';
+  if (st === 'Assigned') return 'blue';
+  if (st === 'Cancelled' || st === 'Rejected') return 'rose';
+  return 'slate';
+};
+const TASK_STATUS_LABELS = { slate: 'Chờ', blue: 'Đã giao', amber: 'Đang làm', emerald: 'Hoàn thành', rose: 'Quá hạn/Hủy' };
+
+// ── Tasks Calendar View (mini grid + side panel — hiện đại) ───────────────────────
+const TasksCalendarView = ({ tasks, batches, groups, onOpenTaskDetail }) => {
+  const today = new Date();
+  const [cursor, setCursor] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  });
+
+  const isOverdue = (t) => t.dueDate && new Date(t.dueDate) < new Date() && !['Completed', 'Cancelled', 'Approved'].includes(t.status);
+
+  const tasksByDay = useMemo(() => {
+    const map = {};
+    tasks.forEach(t => {
+      if (!t.dueDate) return;
+      const d = new Date(t.dueDate);
+      d.setHours(0, 0, 0, 0);
+      const key = d.toISOString().slice(0, 10);
+      if (!map[key]) map[key] = [];
+      map[key].push(t);
+    });
+    return map;
+  }, [tasks]);
+
+  const tasksNoDate = useMemo(() => tasks.filter(t => !t.dueDate), [tasks]);
+
+  // Tính phạm vi tháng cần hiển thị (tháng cursor và tháng sau)
+  const [cursorLeft, setCursorLeft] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
+  const cursorRight = new Date(cursorLeft.getFullYear(), cursorLeft.getMonth() + 1, 1);
+
+  useEffect(() => {
+    setCursor(new Date(cursorLeft.getFullYear(), cursorLeft.getMonth(), 1));
+  }, [cursorLeft]);
+
+  // Nếu ngày chọn không thuộc 2 tháng hiện tại → reset về hôm nay
+  useEffect(() => {
+    const inRange = (cursorLeft <= selectedDate && selectedDate < new Date(cursorLeft.getFullYear(), cursorLeft.getMonth() + 2, 1));
+    if (!inRange) {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      setSelectedDate(d);
+    }
+  }, [cursorLeft, selectedDate]);
+
+  const goPrev = () => setCursorLeft(new Date(cursorLeft.getFullYear(), cursorLeft.getMonth() - 1, 1));
+  const goNext = () => setCursorLeft(new Date(cursorLeft.getFullYear(), cursorLeft.getMonth() + 1, 1));
+  const goToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); setCursorLeft(new Date(d.getFullYear(), d.getMonth(), 1)); setSelectedDate(d); };
+
+  const renderMonth = (monthDate) => {
+    const y = monthDate.getFullYear();
+    const m = monthDate.getMonth();
+    const firstDay = new Date(y, m, 1);
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const startWeekday = (firstDay.getDay() + 6) % 7; // 0 = Monday
+    const cells = [];
+    for (let i = 0; i < startWeekday; i++) cells.push(null);
+    for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+    return (
+      <div className="flex-1 min-w-0">
+        <div className="text-center mb-2">
+          <div className="text-sm font-bold text-slate-800">Tháng {m + 1}, {y}</div>
+        </div>
+        <div className="grid grid-cols-7 mb-1">
+          {['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'].map(w => (
+            <div key={w} className="text-[10px] font-bold text-slate-400 text-center py-1">{w}</div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-0.5">
+          {cells.map((day, idx) => {
+            if (!day) return <div key={`e-${idx}`} className="aspect-square" />;
+            const dayDate = new Date(y, m, day);
+            dayDate.setHours(0, 0, 0, 0);
+            const key = dayDate.toISOString().slice(0, 10);
+            const dayTasks = tasksByDay[key] || [];
+            const isToday = dayDate.getTime() === today.setHours(0, 0, 0, 0);
+            const isSelected = dayDate.getTime() === selectedDate.getTime();
+            const overdueCount = dayTasks.filter(isOverdue).length;
+
+            return (
+              <button key={key} onClick={() => setSelectedDate(dayDate)}
+                className={`relative aspect-square rounded-lg border transition-all flex flex-col items-center justify-start pt-1 px-1 group
+                  ${isSelected ? 'border-indigo-500 bg-indigo-50 shadow-sm' : 'border-slate-200 hover:border-indigo-300 hover:bg-slate-50'}
+                  ${isToday && !isSelected ? 'border-indigo-400' : ''}`}>
+                <span className={`text-[11px] font-bold leading-none ${isToday ? 'text-indigo-700' : overdueCount > 0 ? 'text-rose-600' : 'text-slate-700'}`}>{day}</span>
+                {dayTasks.length > 0 && (
+                  <div className="flex items-center gap-0.5 mt-1 flex-wrap justify-center max-w-full">
+                    {dayTasks.slice(0, 3).map(t => (
+                      <span key={t.id} className={`w-1.5 h-1.5 rounded-full ${TASK_STATUS_COLORS[getTaskStatusKey(t.status)].dot}`}></span>
+                    ))}
+                    {dayTasks.length > 3 && <span className="text-[8px] font-bold text-slate-500">+{dayTasks.length - 3}</span>}
+                  </div>
+                )}
+                {overdueCount > 0 && (
+                  <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-rose-500 ring-2 ring-white"></span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const selectedKey = selectedDate.toISOString().slice(0, 10);
+  const selectedTasks = (tasksByDay[selectedKey] || []).slice().sort((a, b) => {
+    const aOver = isOverdue(a) ? 0 : 1;
+    const bOver = isOverdue(b) ? 0 : 1;
+    return aOver - bOver;
+  });
+
+  const formatDay = (d) => {
+    const weekday = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][d.getDay()];
+    return `${weekday}, ${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}`;
+  };
+
+  const isTodaySelected = selectedDate.toDateString() === new Date().toDateString();
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
+      {/* Cột trái: 2 mini-months */}
+      <div className="lg:col-span-3 bg-white border border-slate-200 rounded-xl p-3">
+        {/* Toolbar */}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-1">
+            <button onClick={goPrev} className="w-7 h-7 flex items-center justify-center hover:bg-slate-100 rounded-lg text-slate-600 text-sm">‹</button>
+            <button onClick={goToday} className={`px-3 py-1 rounded-lg text-xs font-bold ${isTodaySelected ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>Hôm nay</button>
+            <button onClick={goNext} className="w-7 h-7 flex items-center justify-center hover:bg-slate-100 rounded-lg text-slate-600 text-sm">›</button>
+          </div>
+          <div className="flex items-center gap-2 text-[9px] font-bold text-slate-500">
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-400" />Chờ</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" />Giao</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />Đang</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" />Xong</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500" />Quá hạn</span>
+          </div>
+        </div>
+        <div className="flex gap-4">
+          {renderMonth(cursorLeft)}
+          {renderMonth(cursorRight)}
+        </div>
+      </div>
+
+      {/* Cột phải: chi tiết ngày được chọn */}
+      <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl flex flex-col max-h-[600px]">
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between sticky top-0 bg-white">
+          <div>
+            <div className="text-[10px] font-bold uppercase text-slate-400 tracking-wide">{isTodaySelected ? '📍 Hôm nay' : 'Đã chọn'}</div>
+            <div className="text-sm font-bold text-slate-800">{formatDay(selectedDate)}</div>
+          </div>
+          <div className="text-right">
+            <div className="text-2xl font-black text-indigo-600 leading-none">{selectedTasks.length}</div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase">tác vụ</div>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          {selectedTasks.length === 0 ? (
+            <div className="text-center py-8">
+              <div className="text-3xl mb-1">🌱</div>
+              <div className="text-xs text-slate-400 font-semibold">Không có tác vụ nào trong ngày này</div>
+            </div>
+          ) : (
+            selectedTasks.map(t => {
+              const overdue = isOverdue(t);
+              const statusKey = getTaskStatusKey(t.status);
+              const palette = TASK_STATUS_COLORS[statusKey];
+              const statusLabel = overdue ? 'Quá hạn' : TASK_STATUS_LABELS[statusKey];
+              return (
+                <button key={t.id} onClick={() => onOpenTaskDetail && onOpenTaskDetail(t)}
+                  className={`w-full text-left p-2.5 rounded-lg border transition-all hover:shadow-sm hover:-translate-y-0.5
+                    ${overdue ? 'border-rose-300 bg-rose-50/50' : 'border-slate-200 bg-white hover:border-indigo-300'}`}>
+                  <div className="flex items-start gap-2">
+                    <span className={`mt-1 w-2 h-2 rounded-full ${palette.dot} shrink-0`}></span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${palette.pill} uppercase`}>{statusLabel}</span>
+                        <span className="text-[10px] font-semibold text-slate-400">{t.taskType}</span>
+                        {overdue && <span className="text-[9px] font-bold text-rose-600">⚠️ QUÁ HẠN</span>}
+                      </div>
+                      <div className="text-xs font-bold text-slate-800 truncate">{t.title}</div>
+                      <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-500">
+                        {t.dueDate && <span>⏰ {new Date(t.dueDate).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>}
+                        {t.assignedToName && <span>👤 {t.assignedToName}</span>}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </div>
+
+        {tasksNoDate.length > 0 && (
+          <div className="border-t border-slate-100 px-3 py-2 bg-amber-50/60">
+            <div className="text-[10px] font-bold text-amber-700 mb-1.5">⚠️ {tasksNoDate.length} tác vụ chưa có hạn</div>
+            <div className="space-y-1 max-h-20 overflow-y-auto">
+              {tasksNoDate.slice(0, 3).map(t => (
+                <button key={t.id} onClick={() => onOpenTaskDetail && onOpenTaskDetail(t)}
+                  className="w-full text-left px-2 py-1 rounded bg-white border border-amber-200 hover:border-amber-400 text-[10px] font-semibold text-slate-700 truncate">
+                  {t.title}
+                </button>
+              ))}
+              {tasksNoDate.length > 3 && <div className="text-[10px] text-amber-700 italic">+{tasksNoDate.length - 3} khác…</div>}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ── Tasks By Day List (nhóm theo ngày — cuộn dọc) ──────────────────────────────────
+const TasksByDayList = ({ tasks, batches, onOpenTaskDetail }) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const isOverdue = (t) => t.dueDate && new Date(t.dueDate) < new Date() && !['Completed', 'Cancelled', 'Approved'].includes(t.status);
+
+  const grouped = useMemo(() => {
+    const map = {};
+    const noDate = [];
+    tasks.forEach(t => {
+      if (!t.dueDate) { noDate.push(t); return; }
+      const d = new Date(t.dueDate);
+      d.setHours(0, 0, 0, 0);
+      const key = d.toISOString().slice(0, 10);
+      if (!map[key]) map[key] = { date: d, items: [] };
+      map[key].items.push(t);
+    });
+    Object.values(map).forEach(g => {
+      g.items.sort((a, b) => {
+        const aO = isOverdue(a) ? 0 : 1;
+        const bO = isOverdue(b) ? 0 : 1;
+        if (aO !== bO) return aO - bO;
+        return (new Date(a.dueDate) - new Date(b.dueDate));
+      });
+    });
+    const sortedKeys = Object.keys(map).sort();
+    return { days: sortedKeys.map(k => map[k]), noDate };
+  }, [tasks]);
+
+  const formatDayHeader = (d) => {
+    const diff = Math.round((d - today) / (1000 * 60 * 60 * 24));
+    let label = '';
+    if (diff === 0) label = '📍 Hôm nay';
+    else if (diff === 1) label = '🌅 Ngày mai';
+    else if (diff === -1) label = '⏪ Hôm qua';
+    else if (diff > 1 && diff <= 7) label = `📅 ${diff} ngày nữa`;
+    else if (diff < -1 && diff >= -7) label = `📅 ${-diff} ngày trước`;
+    const weekday = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'][d.getDay()];
+    return { label, weekday, date: `${d.getDate()}/${d.getMonth() + 1}/${d.getFullYear()}` };
+  };
+
+  if (tasks.length === 0) {
+    return <div className="text-center py-12 text-slate-400 text-sm">Không có tác vụ nào</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {grouped.days.map(({ date, items }) => {
+        const { label, weekday, date: dateStr } = formatDayHeader(date);
+        const overdueCount = items.filter(isOverdue).length;
+        return (
+          <div key={date.toISOString()} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+            <div className="px-4 py-2.5 bg-gradient-to-r from-slate-50 to-white border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="text-center">
+                  <div className="text-[10px] font-bold text-slate-500 uppercase">{weekday}</div>
+                  <div className="text-lg font-black text-slate-800 leading-none">{date.getDate()}</div>
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-slate-800">{dateStr}</div>
+                  {label && <div className="text-[10px] font-semibold text-indigo-600">{label}</div>}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {overdueCount > 0 && (
+                  <span className="text-[10px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full">⚠️ {overdueCount} quá hạn</span>
+                )}
+                <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">{items.length} tác vụ</span>
+              </div>
+            </div>
+            <div className="divide-y divide-slate-100">
+              {items.map(t => {
+                const statusKey = getTaskStatusKey(t.status);
+                const palette = TASK_STATUS_COLORS[statusKey];
+                const overdue = isOverdue(t);
+                return (
+                  <button key={t.id} onClick={() => onOpenTaskDetail && onOpenTaskDetail(t)}
+                    className={`w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center gap-3 transition-colors ${overdue ? 'bg-rose-50/30' : ''}`}>
+                    <span className={`w-2 h-2 rounded-full ${palette.dot} shrink-0`}></span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-slate-800 truncate">{t.title}</span>
+                        {overdue && <span className="text-[9px] font-bold text-rose-600">⚠️</span>}
+                      </div>
+                      <div className="flex items-center gap-3 mt-0.5 text-[10px] text-slate-500">
+                        <span className="font-semibold text-slate-600">{t.taskType}</span>
+                        {t.dueDate && <span>⏰ {new Date(t.dueDate).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span>}
+                        {t.assignedToName && <span>👤 {t.assignedToName}</span>}
+                      </div>
+                    </div>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${palette.pill} shrink-0`}>
+                      {t.status}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+
+      {grouped.noDate.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 bg-amber-100/50 border-b border-amber-200 flex items-center gap-2">
+            <span className="text-base">⚠️</span>
+            <div>
+              <div className="text-sm font-bold text-amber-800">Chưa có hạn chót</div>
+              <div className="text-[10px] text-amber-700">{grouped.noDate.length} tác vụ</div>
+            </div>
+          </div>
+          <div className="divide-y divide-amber-100">
+            {grouped.noDate.map(t => {
+              const palette = TASK_STATUS_COLORS[getTaskStatusKey(t.status)];
+              return (
+                <button key={t.id} onClick={() => onOpenTaskDetail && onOpenTaskDetail(t)}
+                  className="w-full text-left px-4 py-2 hover:bg-amber-100/30 flex items-center gap-3">
+                  <span className={`w-2 h-2 rounded-full ${palette.dot} shrink-0`}></span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-slate-800 truncate">{t.title}</div>
+                    <div className="text-[10px] text-slate-500">{t.taskType}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ── Task Detail Drawer (chi tiết task + assign/reassign) ──────────────────────────
-const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, taskReports, onAssign, onReassign, showToast }) => {
+const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskReports, onAssign, onReassign, showToast }) => {
   const [assignModal, setAssignModal] = useState(null); // 'assign' | 'reassign' | null
   const [assigneeId, setAssigneeId] = useState('');
   const [reason, setReason] = useState('');
-  const [users, setUsersApi] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [skillMatches, setSkillMatches] = useState({}); // { userId: { matched, required, score } }
+  const [userWorkload, setUserWorkload] = useState({}); // { userId: { today, pending, inProgress } }
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [assignments, setAssignments] = useState([]);
+  const [loadingAssignments, setLoadingAssignments] = useState(false);
+  // 🆕 Ảnh theo report + AI modal
+  const [reportImages, setReportImages] = useState({}); // { [reportId]: TaskImage[] }
+  const [loadingImages, setLoadingImages] = useState(false);
+  const [aiModalImage, setAiModalImage] = useState(null);
+  const savingRef = useRef(false);
+  useEffect(() => { savingRef.current = saving; }, [saving]);
 
+  const skills = useMemo(() => {
+    if (!task) return [];
+    const raw = task.requiredSkills || task.skillRequirements || task.skills || task.skillNames || [];
+    if (!Array.isArray(raw)) return [];
+    return raw.map(s => (typeof s === 'string' ? s : s?.skillName || s?.name || '')).filter(Boolean);
+  }, [task?.id, task?.requiredSkills, task?.skillRequirements, task?.skills, task?.skillNames]);
+
+  // Load lịch sử phân công từ API riêng /tasks/{id}/assignments
   useEffect(() => {
     let alive = true;
-    if (assignModal) {
+    if (task?.id) {
+      setLoadingAssignments(true);
+      tasksApi.getAssignments(task.id)
+        .then(res => {
+          if (!alive) return;
+          console.log('[TaskDetailDrawer] assignments raw:', res);
+          const arr = Array.isArray(res) ? res : (res?.items || res?.data || []);
+          console.log('[TaskDetailDrawer] assignments parsed:', arr);
+          setAssignments(arr);
+        })
+        .catch(err => console.warn('Load assignments failed:', err))
+        .finally(() => alive && setLoadingAssignments(false));
+    }
+    return () => { alive = false; };
+  }, [task?.id]);
+
+  // 🆕 Load ảnh của tất cả report thuộc task này
+  useEffect(() => {
+    let alive = true;
+    if (!taskReports || taskReports.length === 0) {
+      setReportImages({});
+      return;
+    }
+    setLoadingImages(true);
+    (async () => {
+      const results = await Promise.allSettled(
+        taskReports.map(r => {
+          if (!r.id) return Promise.resolve({ reportId: r.id || r.reportId, images: [] });
+          return taskImagesApi.getByTaskReport(r.id)
+            .then(imgs => ({ reportId: r.id, images: Array.isArray(imgs) ? imgs : (Array.isArray(imgs?.data) ? imgs.data : []) }))
+            .catch(() => ({ reportId: r.id, images: [] }));
+        })
+      );
+      if (!alive) return;
+      const map = {};
+      results.forEach((res, i) => {
+        if (res.status === 'fulfilled') {
+          map[res.value.reportId] = res.value.images;
+        }
+      });
+      setReportImages(map);
+    })();
+    return () => { alive = false; setLoadingImages(false); };
+  }, [task?.id, taskReports?.length]);
+
+  // Lấy user skill từ skillMatches API + tính workload cục bộ từ tasks prop
+  useEffect(() => {
+    let alive = true;
+    if (assignModal && task) {
       setLoadingUsers(true);
-      userApi.list({ role: 'Student,Technician' })
-        .then(r => { if (alive) setUsersApi(Array.isArray(r) ? r : (r?.items || r?.data || [])); })
+      setSkillMatches({});
+      setUserWorkload({});
+      setUsers([]);
+      setAssigneeId('');
+
+      Promise.all([
+        userApi.getUsersByRole('Student').catch(() => []),
+        userApi.getUsersByRole('Technician').catch(() => [])
+      ])
+        .then(([students, technicians]) => {
+          if (!alive) return null;
+          console.log('[AssignModal] API students:', students?.length, 'technicians:', technicians?.length);
+          // API trả tất cả users, không lọc được ở BE → lọc ở FE
+          const merged = [
+            ...(Array.isArray(students) ? students : []),
+            ...(Array.isArray(technicians) ? technicians : [])
+          ];
+          const seen = new Set();
+          const uniq = merged.filter(u => {
+            if (!u?.id || seen.has(u.id)) return false;
+            seen.add(u.id);
+            return true;
+          }).filter(u => u.role === 'Student' || u.role === 'Technician');
+
+          console.log('[AssignModal] Filtered users (Student/Technician):', uniq.length, uniq.map(u => u.role));
+          // Set users NGAY ở đây (không đợi skill matches)
+          if (alive) setUsers(uniq);
+
+          // ── Gọi API count-by-user (BE tự đếm cho cả Student + Technician) ──
+          const todayStr = new Date().toISOString().slice(0, 10);
+          return tasksApi.countByUser({ roles: 'Student,Technician', date: todayStr })
+            .then(countData => {
+              if (!alive) return;
+              console.log('[AssignModal] count-by-user raw:', countData);
+              // countData có thể là:
+              //   - { users: [{ userId, totalTasks, pendingTasks, ... }], totalUsers, totalTasks }
+              //   - [{ userId, total, today, pending, inProgress, completed }]
+              //   - { items: [...] } / { data: [...] }
+              //   - { [userId]: { total, today, ... } } (object map)
+              const arr = Array.isArray(countData)
+                ? countData
+                : (Array.isArray(countData?.users) ? countData.users
+                  : (Array.isArray(countData?.items) ? countData.items
+                    : (Array.isArray(countData?.data) ? countData.data : null)));
+              const wl = {};
+              const num = (v) => Number(v || 0);
+              if (arr) {
+                arr.forEach(item => {
+                  const uid = item.userId || item.id || item.assignedToId;
+                  if (!uid) return;
+                  wl[uid] = {
+                    total: num(item.totalTasks ?? item.total),
+                    today: num(item.todayTasks ?? item.today ?? item.todayCount),
+                    pending: num(item.pendingTasks ?? item.pending ?? item.pendingCount),
+                    inProgress: num(item.inProgressTasks ?? item.inProgress ?? item.inProgressCount),
+                    completed: num(item.completedTasks ?? item.completed ?? item.completedCount),
+                    overdue: num(item.overdueTasks ?? item.overdue),
+                    cancelled: num(item.cancelledTasks ?? item.cancelled),
+                  };
+                });
+              } else if (countData && typeof countData === 'object') {
+                // Map object { userId: { total, today, ... } }
+                Object.entries(countData).forEach(([uid, v]) => {
+                  if (v && typeof v === 'object' && (v.totalTasks !== undefined || v.total !== undefined)) {
+                    wl[uid] = {
+                      total: num(v.totalTasks ?? v.total),
+                      today: num(v.todayTasks ?? v.today ?? v.todayCount),
+                      pending: num(v.pendingTasks ?? v.pending ?? v.pendingCount),
+                      inProgress: num(v.inProgressTasks ?? v.inProgress ?? v.inProgressCount),
+                      completed: num(v.completedTasks ?? v.completed ?? v.completedCount),
+                      overdue: num(v.overdueTasks ?? v.overdue),
+                      cancelled: num(v.cancelledTasks ?? v.cancelled),
+                    };
+                  }
+                });
+              }
+              console.log('[AssignModal] userWorkload mapped:', wl, '(total users:', Object.keys(wl).length, ')');
+              if (alive) setUserWorkload(wl);
+            })
+            .catch(err => {
+              if (!alive) return;
+              console.warn('[AssignModal] count-by-user failed → fallback FE:', err?.message);
+              // Fallback: tính cục bộ nếu BE lỗi
+              const taskDue = task.dueDate ? new Date(task.dueDate) : null;
+              const fallbackDateStr = taskDue ? taskDue.toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+              const wl = {};
+              uniq.forEach(u => {
+                const userTasks = (tasks || []).filter(t =>
+                  (t.assigneeId || t.assignedToId) === u.id &&
+                  !['Completed', 'Cancelled', 'Approved'].includes(t.status)
+                );
+                const todayCount = userTasks.filter(t => {
+                  if (!t.dueDate) return false;
+                  return t.dueDate.slice(0, 10) === fallbackDateStr;
+                }).length;
+                wl[u.id] = {
+                  total: userTasks.length,
+                  today: todayCount,
+                  pending: userTasks.filter(t => t.status === 'Pending' || t.status === 'Assigned').length,
+                  inProgress: userTasks.filter(t => t.status === 'InProgress').length,
+                  completed: userTasks.filter(t => t.status === 'Completed').length,
+                };
+              });
+              if (alive) setUserWorkload(wl);
+            });
+
+          // ⚠️ LUÔN gọi skill-matches (BE sẽ trả rỗng nếu task không yêu cầu skill)
+          return userApi.getSkillMatches(task.id).catch(err => {
+            console.warn('[AssignModal] skill-matches failed:', err?.message);
+            return [];
+          });
+        })
+        .then(skillsResult => {
+          if (!alive) return;
+          // skillMatches: API trả về array [{ userId, skillName, matched }]
+          console.log('[AssignModal] skill-matches raw:', skillsResult);
+          if (Array.isArray(skillsResult) && skillsResult.length > 0) {
+            const sm = {};
+            skillsResult.forEach(m => {
+              if (!sm[m.userId]) sm[m.userId] = { matched: [], required: skills, score: 0 };
+              if (m.matched) sm[m.userId].matched.push(m.skillName || m.skill);
+              sm[m.userId].score = sm[m.userId].matched.length;
+            });
+            if (alive) setSkillMatches(sm);
+          } else if (alive) {
+            // Không có đề xuất từ BE → set rỗng
+            setSkillMatches({});
+          }
+          // Users đã được set ở then() trên
+        })
         .catch(err => console.warn('Load users failed:', err))
         .finally(() => alive && setLoadingUsers(false));
     }
     return () => { alive = false; };
-  }, [assignModal]);
+  }, [assignModal, task?.id, skills]);
+
+  // ── Helpers cho modal gán ─────────────────────────────────────────────
+  const getWorkload = (userId) => userWorkload[userId] || { total: 0, today: 0, pending: 0, inProgress: 0 };
+  const getUserMatchedSkills = (userId) => skillMatches[userId]?.matched || [];
+  const getUserScore = (userId) => skillMatches[userId]?.score || 0;
+
+  // Sort: ưu tiên skill match cao nhất, sau đó workload thấp nhất
+  // ⚠️ Phải đặt TRƯỚC early return để hook order không đổi
+  const sortedUsers = useMemo(() => {
+    if (!users.length) return [];
+    return [...users].sort((a, b) => {
+      const sa = skillMatches[a.id]?.score || 0;
+      const sb = skillMatches[b.id]?.score || 0;
+      if (sa !== sb) return sb - sa;
+      const wa = getWorkload(a.id).total;
+      const wb = getWorkload(b.id).total;
+      return wa - wb;
+    });
+  }, [users, skillMatches, userWorkload]);
+
+  // Đề xuất gán tốt nhất (top 1)
+  const topRecommended = useMemo(() => {
+    if (!sortedUsers.length) return null;
+    const top = sortedUsers[0];
+    const score = getUserScore(top.id);
+    const matched = getUserMatchedSkills(top.id);
+    const wl = getWorkload(top.id);
+    let reason;
+    if (skills.length > 0 && score === skills.length) {
+      reason = `Đủ ${score}/${skills.length} kỹ năng • ${wl.total} task đang có`;
+    } else if (skills.length > 0 && score > 0) {
+      reason = `Khớp ${score}/${skills.length} kỹ năng • ${wl.total} task đang có`;
+    } else {
+      reason = `Workload nhẹ: ${wl.total} task đang có (${wl.today} hôm nay)`;
+    }
+    return { user: top, score, matched, wl, reason };
+  }, [sortedUsers, skillMatches, userWorkload, skills]);
 
   if (!task) return null;
 
-  const batch = batches.find(b => b.id === (task.batchId || task.batch?.id));
-  const group = groups.find(g => g.id === (task.groupId || batch?.groupId || task.batch?.groupId));
+  const batch = batches.find(b => b.id === (task.batchId || task.batch?.id));  const group = groups.find(g => g.id === (task.groupId || batch?.groupId || task.batch?.groupId));
   const stage = stages.find(s => s.id === (task.experimentStageId || task.stageId));
 
   const reports = (taskReports || []).filter(r => r.taskId === task.id);
-  const assignments = task.assignments || [];
-  const skills = task.requiredSkills || task.skillRequirements || [];
+  // assignments đã được load qua API riêng (useEffect ở trên)
 
   const statusMap = {
     Pending: { label: 'Chờ', bg: 'bg-blue-50 text-blue-700 border-blue-200' },
@@ -1861,12 +2722,17 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, taskReports,
       }
       setAssignModal(null);
       setAssigneeId(''); setReason('');
+      onClose && onClose();
     } catch (err) {
-      showToast(err.message || 'Lỗi', 'error');
+      const msg = err?.message || (assignModal === 'assign' ? 'Lỗi gán tác vụ' : 'Lỗi chuyển giao');
+      if (showToast) showToast(msg, 'error');
     } finally {
-      setSaving(false);
+      if (savingRef.current !== false) setSaving(false);
     }
   };
+
+  const selectedWorkload = getWorkload(assigneeId);
+  const selectedMatchedSkills = getUserMatchedSkills(assigneeId);
 
   return (
     <>
@@ -1927,70 +2793,353 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, taskReports,
             </div>
           )}
 
-          {/* Reports */}
+          {/* 🆕 Reports + Ảnh + AI Scan */}
           <div>
-            <p className="text-xs font-bold uppercase text-slate-400 mb-2">📋 Báo cáo ({reports.length})</p>
+            <p className="text-xs font-bold uppercase text-slate-400 mb-2">
+              📋 Báo cáo ({reports.length})
+              {loadingImages && <span className="ml-2 inline-block w-2 h-2 bg-blue-500 rounded-full animate-pulse" />}
+            </p>
             {reports.length === 0 ? (
               <p className="text-xs text-slate-400 italic text-center py-3">Chưa có báo cáo</p>
             ) : (
-              <div className="space-y-1.5">
-                {reports.map(r => (
-                  <div key={r.id || r.reportId} className="bg-slate-50 rounded-lg p-2.5 border border-slate-100 text-xs">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-slate-800">{r.taskType || '—'}</span>
-                      <span className="text-slate-500">{r.submittedAt ? new Date(r.submittedAt).toLocaleString('vi-VN') : ''}</span>
+              <div className="space-y-3">
+                {reports.map(r => {
+                  const imgs = reportImages[r.id] || [];
+                  const hasAi = imgs.some(img => img.aiProvider || img.aiStatus === 'Completed' || img.aiPredictedLabel);
+                  return (
+                    <div key={r.id || r.reportId} className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                      {/* Report info */}
+                      <div className="flex items-start justify-between gap-2 mb-2">
+                        <div>
+                          <p className="font-semibold text-slate-800 text-sm">{r.taskType || 'Báo cáo'}</p>
+                          <p className="text-slate-600 text-[11px] mt-0.5">{r.reportText || r.notes || ''}</p>
+                        </div>
+                        <span className="text-[10px] text-slate-400 font-mono shrink-0">
+                          {r.submittedAt ? new Date(r.submittedAt).toLocaleString('vi-VN') : ''}
+                        </span>
+                      </div>
+
+                      {/* Plant count */}
+                      {(r.actualPlantCount || r.plantCount) && (
+                        <p className="text-emerald-700 font-bold text-xs mb-2">🌱 {r.actualPlantCount || r.plantCount} cây</p>
+                      )}
+
+                      {/* Ảnh + AI results */}
+                      {imgs.length > 0 ? (
+                        <div>
+                          <p className="text-[10px] font-bold uppercase text-slate-400 mb-1.5 flex items-center gap-1">
+                            🖼️ Ảnh ({imgs.length}){hasAi && <span className="text-emerald-600 normal-case ml-1">· có AI scan</span>}
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {imgs.map((img, i) => {
+                              const hasAiResult = img.aiStatus === 'Completed' || img.aiPredictedLabel || img.aiAnalysis;
+                              const hasAiPending = img.aiStatus === 'Pending';
+                              const hasAnyAi = img.aiProvider || hasAiResult || hasAiPending;
+                              return (
+                                <button
+                                  key={img.id || i}
+                                  onClick={() => hasAnyAi ? setAiModalImage(img) : window.open(img.imageUrl || img.url, '_blank')}
+                                  className="relative w-14 h-14 rounded-lg overflow-hidden border border-slate-200 hover:opacity-80 transition shrink-0 cursor-pointer"
+                                  title={img.caption || img.aiPredictedLabel || `Ảnh ${i + 1}`}
+                                >
+                                  <img src={img.imageUrl || img.url} alt={img.caption || ''}
+                                    className="w-full h-full object-cover" />
+                                  {/* AI badges */}
+                                  {hasAiPending && (
+                                    <div className="absolute inset-0 bg-amber-500/70 flex items-center justify-center">
+                                      <span className="text-white text-[9px] font-bold animate-pulse">⟳</span>
+                                    </div>
+                                  )}
+                                  {hasAiResult && (
+                                    <div className="absolute top-0.5 right-0.5 w-3.5 h-3.5 bg-emerald-500 rounded-full flex items-center justify-center shadow"
+                                      title="✓ Có kết quả AI">
+                                      <span className="text-white text-[7px] font-bold">✓</span>
+                                    </div>
+                                  )}
+                                  {img.aiProvider && (
+                                    <div className="absolute bottom-0 left-0 right-0 bg-black/70 px-0.5 py-0.5">
+                                      <span className="text-white text-[7px] font-bold leading-tight block truncate">
+                                        {img.aiPredictedLabel || img.aiProvider.split('Onnx')[0]}
+                                      </span>
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {loadingImages && imgs.length === 0 && (
+                            <p className="text-[10px] text-slate-400 italic">⏳ Đang tải ảnh...</p>
+                          )}
+                        </div>
+                      ) : (
+                        !loadingImages && <p className="text-[10px] text-slate-400 italic">Không có ảnh</p>
+                      )}
                     </div>
-                    {(r.actualPlantCount || r.plantCount) && (
-                      <p className="text-emerald-700 font-bold mt-1">🌱 {r.actualPlantCount || r.plantCount} cây</p>
-                    )}
-                    {r.notes && <p className="text-slate-600 mt-0.5 line-clamp-2">{r.notes}</p>}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
 
           {/* Lịch sử chuyển giao */}
-          {assignments.length > 0 && (
-            <div>
-              <p className="text-xs font-bold uppercase text-slate-400 mb-2">🔄 Lịch sử chuyển giao</p>
+          <div>
+            <p className="text-xs font-bold uppercase text-slate-400 mb-2">
+              🔄 Lịch sử phân công ({assignments.length})
+            </p>
+            {loadingAssignments ? (
+              <p className="text-xs text-slate-400 italic text-center py-2">⏳ Đang tải...</p>
+            ) : assignments.length === 0 ? (
+              <p className="text-xs text-slate-400 italic text-center py-2">Chưa có lịch sử phân công</p>
+            ) : (
               <div className="space-y-1.5">
-                {assignments.map((a, i) => (
-                  <div key={i} className="flex items-center gap-2 bg-slate-50 rounded-lg p-2 text-xs border border-slate-100">
-                    <span className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold">{i + 1}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-slate-800">{a.fromUserName || 'Hệ thống'} → {a.toUserName || '—'}</p>
-                      <p className="text-slate-500 text-[10px]">{a.assignedAt ? new Date(a.assignedAt).toLocaleString('vi-VN') : ''}</p>
-                      {a.reason && <p className="text-slate-600 italic text-[10px]">"{a.reason}"</p>}
+                {assignments.map((a, i) => {
+                  const from = a.fromUserName || a.assignedByName || a.assignedBy?.fullName || 'Hệ thống';
+                  const to = a.toUserName || a.assigneeName || a.assignee?.fullName || a.assignedToName || '—';
+                  const when = a.assignedAt || a.createdAt || a.reassignedAt;
+                  const reason = a.reason || a.note || a.notes;
+                  const action = a.action || a.type || 'assign';
+                  const actionLabel = action === 'reassign' || action === 'reassigned' ? '🔄 Chuyển giao' : '📌 Gán';
+                  return (
+                    <div key={a.id || a.assignmentId || i} className="flex items-start gap-2 bg-slate-50 rounded-lg p-2.5 text-xs border border-slate-100">
+                      <span className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold shrink-0">{i + 1}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="px-1.5 py-0.5 bg-violet-100 text-violet-700 rounded text-[10px] font-bold">{actionLabel}</span>
+                          <span className="font-semibold text-slate-800">{from}</span>
+                          <span className="text-slate-400">→</span>
+                          <span className="font-semibold text-emerald-700">{to}</span>
+                        </div>
+                        {when && (
+                          <p className="text-slate-500 text-[10px] mt-0.5">📅 {new Date(when).toLocaleString('vi-VN')}</p>
+                        )}
+                        {reason && (
+                          <p className="text-slate-600 italic text-[10px] mt-0.5">💬 "{reason}"</p>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
+
+      {/* 🆕 Modal chi tiết AI */}
+      {aiModalImage && (
+        <AiResultModal
+          image={aiModalImage}
+          onClose={() => setAiModalImage(null)}
+          onRetry={async (imageId) => {
+            try {
+              const { taskImagesAiApi } = await import('../../api/sharedTaskApi');
+              await taskImagesAiApi.retry(imageId);
+              showToast?.('Đã gửi retry AI scan!', 'success');
+              setAiModalImage(null);
+            } catch (e) {
+              showToast?.('Không thể retry: ' + (e?.message || 'Lỗi'), 'error');
+            }
+          }}
+        />
+      )}
 
       {/* Modal chọn người giao */}
       {assignModal && (
         <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onClick={() => setAssignModal(null)}>
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <h3 className="font-bold text-lg text-slate-900 mb-1">{assignModal === 'assign' ? '📌 Gán tác vụ' : '🔄 Chuyển giao tác vụ'}</h3>
-            <p className="text-sm text-slate-600 mb-4 truncate">"{task.title}"</p>
-            <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Người thực hiện *</label>
-            <select value={assigneeId} onChange={e => setAssigneeId(e.target.value)} disabled={loadingUsers}
-              className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white mb-3">
-              <option value="">{loadingUsers ? 'Đang tải...' : '— Chọn người —'}</option>
-              {users.map(u => <option key={u.id} value={u.id}>{u.fullName || u.name} ({u.role})</option>)}
-            </select>
-            <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Lý do (tùy chọn)</label>
-            <textarea value={reason} onChange={e => setReason(e.target.value)} rows={2} placeholder="Nhập lý do..."
-              className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm mb-4" />
-            <div className="flex gap-2">
-              <button onClick={() => setAssignModal(null)} className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-sm font-bold">Hủy</button>
-              <button onClick={handleConfirm} disabled={saving || !assigneeId} className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-sm font-bold">
-                {saving ? 'Đang lưu...' : (assignModal === 'assign' ? 'Xác nhận gán' : 'Xác nhận chuyển giao')}
-              </button>
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl flex flex-col max-h-[90vh]" onClick={e => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-200 shrink-0">
+              <h3 className="font-bold text-lg text-slate-900">
+                {assignModal === 'assign' ? '📌 Gán tác vụ' : '🔄 Chuyển giao tác vụ'}
+              </h3>
+              <p className="text-sm text-slate-600 truncate mt-0.5">"{task.title}"</p>
+              {task.dueDate && (
+                <p className="text-xs text-amber-600 mt-0.5">
+                  📅 Hạn: {new Date(task.dueDate).toLocaleDateString('vi-VN')}
+                </p>
+              )}
+            </div>
+
+            {/* User Stats Strip */}
+            {assigneeId && (
+              <div className="px-6 py-3 bg-indigo-50 border-b border-indigo-100 shrink-0">
+                <div className="flex items-center gap-3 text-xs">
+                  {skills.length > 0 && selectedMatchedSkills.length > 0 && (
+                    <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded font-bold">
+                      ✅ Khớp: {selectedMatchedSkills.join(', ')}
+                    </span>
+                  )}
+                  {skills.length > 0 && selectedMatchedSkills.length < skills.length && (
+                    <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded font-bold">
+                      ⚠️ Thiếu: {skills.filter(s => !selectedMatchedSkills.includes(typeof s === 'string' ? s : s.skillName || s.name)).join(', ')}
+                    </span>
+                  )}
+                  <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded font-bold">
+                    📋 Hôm nay: <b className={selectedWorkload.today > 0 ? 'text-amber-700' : 'text-emerald-700'}>{selectedWorkload.today}</b> task
+                  </span>
+                  <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded font-bold">
+                    ⏳ Đang chờ: {selectedWorkload.pending}
+                  </span>
+                  <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded font-bold">
+                    🔄 Đang làm: {selectedWorkload.inProgress}
+                  </span>
+                  <span className="px-2 py-1 bg-slate-100 text-slate-600 rounded font-bold">
+                    📊 Tổng: {selectedWorkload.total}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* User List */}
+            <div className="flex-1 overflow-y-auto px-6 py-3 space-y-2">
+              {loadingUsers ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                  <span className="ml-2 text-sm text-slate-500">Đang tải danh sách người dùng...</span>
+                </div>
+              ) : sortedUsers.length === 0 ? (
+                <p className="text-sm text-slate-400 text-center py-6">Không có Student/Technician nào.</p>
+              ) : (
+                <>
+                  {/* Kỹ năng yêu cầu - chỉ hiển thị nếu task CÓ yêu cầu skill */}
+                  {skills.length > 0 && (
+                    <div className="flex items-center gap-1 flex-wrap mb-2">
+                      <p className="text-[10px] font-bold uppercase text-slate-400">Kỹ năng yêu cầu:</p>
+                      {skills.map((sk, i) => (
+                        <span key={i} className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 rounded text-[10px] font-semibold">
+                          {typeof sk === 'string' ? sk : sk.skillName || sk.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {/* Đề xuất gán (top 1 user theo score) */}
+                  {topRecommended && (
+                    <div className="flex items-center gap-2 mb-3 p-2 bg-emerald-50 border border-emerald-200 rounded-lg">
+                      <span className="text-lg">⭐</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] font-bold uppercase text-emerald-700">Đề xuất tốt nhất</p>
+                        <p className="text-sm font-bold text-emerald-900">{topRecommended.fullName || topRecommended.name}</p>
+                        <p className="text-[10px] text-emerald-700">
+                          {topRecommended.reason}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setAssigneeId(topRecommended.user.id)}
+                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shrink-0"
+                      >
+                        Chọn
+                      </button>
+                    </div>
+                  )}
+                  {sortedUsers.map(u => {
+                    const score = getUserScore(u.id);
+                    const matched = getUserMatchedSkills(u.id);
+                    const wl = getWorkload(u.id);
+                    const isSelected = assigneeId === u.id;
+                    const scorePct = skills.length > 0 ? (score / skills.length) * 100 : 100;
+                    const scoreColor = scorePct === 100 ? 'bg-emerald-500' : scorePct >= 50 ? 'bg-amber-500' : 'bg-rose-400';
+                    const wlTodayClass = wl.today === 0 ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : wl.today >= 3 ? 'text-rose-700 bg-rose-50 border-rose-200' : 'text-amber-700 bg-amber-50 border-amber-200';
+                    return (
+                      <button
+                        key={u.id}
+                        onClick={() => setAssigneeId(u.id)}
+                        className={`w-full text-left rounded-xl p-3 border transition-all ${isSelected
+                          ? 'border-indigo-400 bg-indigo-50 ring-2 ring-indigo-300'
+                          : 'border-slate-200 bg-white hover:border-indigo-200 hover:bg-indigo-50/30'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-bold text-slate-900">{u.fullName || u.name || '—'}</span>
+                              <span className={`px-1.5 py-0.5 text-[10px] font-bold rounded ${u.role === 'Technician' ? 'bg-violet-100 text-violet-700' : 'bg-blue-100 text-blue-700'}`}>
+                                {u.role}
+                              </span>
+                              {u.email && <span className="text-[10px] text-slate-400 truncate">{u.email}</span>}
+                            </div>
+                            {/* Skill match bar */}
+                            {skills.length > 0 && (
+                              <div className="flex items-center gap-1.5 mt-1">
+                                <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden max-w-[120px]">
+                                  <div className={`h-full rounded-full transition-all ${scoreColor}`} style={{ width: `${scorePct}%` }} />
+                                </div>
+                                <span className="text-[10px] font-bold text-slate-500">{score}/{skills.length} skill</span>
+                                {score === skills.length && <span className="text-[10px] font-bold text-emerald-600">✅ Đủ</span>}
+                              </div>
+                            )}
+                            {/* Matched skills chips */}
+                            {skills.length > 0 && matched.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {matched.map((sk, i) => (
+                                  <span key={i} className="px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded text-[10px] font-semibold">✓ {sk}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          {/* Workload badges */}
+                          <div className="shrink-0 flex flex-col items-end gap-1 min-w-[64px]">
+                            {/* Tổng task lớn nổi bật */}
+                            <div className={`px-2 py-1 rounded-lg text-xs font-extrabold border-2 ${wl.total === 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-300' :
+                              wl.total >= 5 ? 'bg-rose-50 text-rose-700 border-rose-300' :
+                              wl.total >= 3 ? 'bg-amber-50 text-amber-700 border-amber-300' :
+                              'bg-blue-50 text-blue-700 border-blue-300'
+                              }`}>
+                              📋 {wl.total} task
+                            </div>
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${wlTodayClass}`}>
+                              📅 {wl.today} hôm nay
+                            </span>
+                            <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-bold">
+                              ⏳ {wl.pending} chờ
+                            </span>
+                            <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-bold">
+                              🔄 {wl.inProgress} làm
+                            </span>
+                            {/* Workload progress bar (capacity giả định = 5) */}
+                            <div className="w-full mt-0.5">
+                              <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full transition-all ${wl.total === 0 ? 'bg-emerald-400' :
+                                    wl.total >= 5 ? 'bg-rose-500' :
+                                    wl.total >= 3 ? 'bg-amber-500' :
+                                    'bg-blue-500'
+                                    }`}
+                                  style={{ width: `${Math.min(100, (wl.total / 5) * 100)}%` }}
+                                />
+                              </div>
+                              <p className="text-[9px] text-slate-400 text-right mt-0.5">capacity 5</p>
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </>
+              )}
+            </div>
+
+            {/* Reason + Actions */}
+            <div className="px-6 py-4 border-t border-slate-200 shrink-0 space-y-3">
+              <div>
+                <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Lý do (tùy chọn)</label>
+                <textarea
+                  value={reason}
+                  onChange={e => setReason(e.target.value)}
+                  rows={2}
+                  placeholder="Nhập lý do gán/chuyển giao..."
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm resize-none"
+                />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setAssignModal(null)} className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-sm font-bold">Hủy</button>
+                <button
+                  onClick={handleConfirm}
+                  disabled={saving || !assigneeId}
+                  className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-sm font-bold"
+                >
+                  {saving ? 'Đang lưu...' : (assignModal === 'assign' ? '✅ Xác nhận gán' : '✅ Xác nhận chuyển giao')}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2688,4 +3837,309 @@ const BedsSection = ({ bedAssignments, availableBeds, areas, batches }) => {
   );
 };
 
+const SkillRequirementsPicker = ({ value = [], onChange, catalog = [] }) => {
+  const [skillId, setSkillId] = useState('');
+  const [level, setLevel] = useState(3);
+
+  const add = () => {
+    if (!skillId) return;
+    if (value.some(sr => sr.skillId === skillId)) {
+      // đã có - cập nhật level
+      onChange(value.map(sr => sr.skillId === skillId ? { ...sr, requiredLevel: Number(level) } : sr));
+    } else {
+      onChange([...value, { skillId, requiredLevel: Number(level) }]);
+    }
+    setSkillId('');
+  };
+
+  const remove = (idx) => onChange(value.filter((_, i) => i !== idx));
+  const updateLevel = (idx, lv) => onChange(value.map((sr, i) => i === idx ? { ...sr, requiredLevel: Number(lv) } : sr));
+
+  return (
+    <div className="bg-indigo-50/40 border border-indigo-100 rounded-xl p-3">
+      <div className="flex items-center justify-between mb-2">
+        <label className="text-xs font-bold text-indigo-900">🎓 Kỹ năng yêu cầu (cấp độ)</label>
+        <span className="text-[10px] italic text-indigo-500">{value.length} skill đã chọn</span>
+      </div>
+
+      {/* Chips */}
+      {value.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {value.map((sr, idx) => {
+            const skill = catalog.find(s => String(s.id) === String(sr.skillId));
+            return (
+              <div key={`${sr.skillId}-${idx}`}
+                className="inline-flex items-center gap-2 bg-white border border-indigo-200 rounded-full pl-2 pr-1 py-1 text-xs">
+                <span className="font-semibold text-indigo-900">{skill?.skillName || skill?.name || `Skill #${sr.skillId}`}</span>
+                <select value={sr.requiredLevel} onChange={e => updateLevel(idx, e.target.value)}
+                  className="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-1 rounded-full border-0 focus:outline-none">
+                  {[1, 2, 3, 4, 5].map(lv => <option key={lv} value={lv}>Lv {lv}</option>)}
+                </select>
+                <button type="button" onClick={() => remove(idx)} className="text-indigo-400 hover:text-rose-500 px-1 font-bold leading-none">✕</button>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-[11px] text-slate-500 italic mb-2">Chưa chọn kỹ năng nào.</p>
+      )}
+
+      {/* Add new */}
+      <div className="grid grid-cols-12 gap-2">
+        <select value={skillId} onChange={e => setSkillId(e.target.value)}
+          className="col-span-7 px-3 py-2 border border-indigo-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+          <option value="">— Chọn kỹ năng —</option>
+          {catalog
+            .filter(s => !value.some(sr => sr.skillId === s.id))
+            .map(s => <option key={s.id} value={s.id}>{s.skillName || s.name}</option>)}
+        </select>
+        <select value={level} onChange={e => setLevel(e.target.value)}
+          className="col-span-3 px-3 py-2 border border-indigo-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+          {[1, 2, 3, 4, 5].map(lv => <option key={lv} value={lv}>Level {lv}</option>)}
+        </select>
+        <button type="button" onClick={add} disabled={!skillId}
+          className="col-span-2 px-3 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 disabled:opacity-40">
+          ＋ Thêm
+        </button>
+      </div>
+    </div>
+  );
+};
+
+const CreateTaskModal = ({ open, mode, onClose, onChangeMode, stages = [], batches = [], schedules = [], form, setForm, bulkForm, setBulkForm, submitting, onSubmitManual, onSubmitByStage, onSubmitByExperiment, skillCatalog = [] }) => {
+  if (!open) return null;
+
+  const tabs = [
+    { id: 'manual', label: '✍️ Tạo thủ công', desc: 'Tạo 1 tác vụ với thông tin chi tiết' },
+    { id: 'byStage', label: '🎯 Theo giai đoạn', desc: 'Tạo tác vụ cho các lô thuộc 1 giai đoạn' },
+    { id: 'byExperiment', label: '🌐 Toàn thực nghiệm', desc: 'Tạo tác vụ cho tất cả lô trong thực nghiệm' },
+  ];
+
+  const typeOptions = [
+    { v: 'Watering', label: '💧 Tưới nước' },
+    { v: 'Fertilizing', label: '🧪 Bón phân' },
+    { v: 'Spraying', label: '🛡️ Phun thuốc' },
+    { v: 'Observation', label: '👁️ Quan sát' },
+    { v: 'Inspection', label: '🔍 Kiểm tra' },
+    { v: 'Planting', label: '🌱 Trồng' },
+    { v: 'Harvest', label: '🌾 Thu hoạch' },
+    { v: 'Other', label: '📋 Khác' },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-bold text-slate-900">📌 Tạo Tác Vụ Mới</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Chọn chế độ tạo phù hợp với nhu cầu</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500">✕</button>
+        </div>
+
+        {/* Tabs */}
+        <div className="px-6 pt-4 grid grid-cols-3 gap-2">
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => onChangeMode && onChangeMode(t.id)}
+              type="button"
+              className={`text-left p-3 rounded-xl border-2 transition-all ${mode === t.id ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 bg-white hover:bg-slate-50'}`}>
+              <div className={`text-xs font-bold ${mode === t.id ? 'text-indigo-700' : 'text-slate-700'}`}>{t.label}</div>
+              <div className="text-[10px] text-slate-500 mt-0.5">{t.desc}</div>
+            </button>
+          ))}
+        </div>
+
+        <div className="px-6 py-4 overflow-y-auto flex-1">
+          {mode === 'manual' ? (
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">Tiêu đề *</label>
+                <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })}
+                  placeholder="VD: Tưới nước buổi sáng"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Loại</label>
+                  <select value={form.taskType} onChange={e => setForm({ ...form, taskType: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+                    {typeOptions.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Hạn chót</label>
+                  <input type="date" value={form.dueDate}
+                    min={new Date().toISOString().split('T')[0]}
+                    onChange={e => setForm({ ...form, dueDate: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Giai đoạn</label>
+                  <select value={form.experimentStageId} onChange={e => setForm({ ...form, experimentStageId: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+                    <option value="">— Không chọn —</option>
+                    {stages.map(s => <option key={s.id} value={s.id}>{s.stageName || `Stage #${s.id}`}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Lô</label>
+                  <select value={form.batchId} onChange={e => setForm({ ...form, batchId: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+                    <option value="">— Không chọn —</option>
+                    {batches.map(b => <option key={b.id} value={b.id}>{b.batchCode || `Batch #${b.id}`}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">Lịch chăm sóc</label>
+                <select value={form.careScheduleId || ''} onChange={e => setForm({ ...form, careScheduleId: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+                  <option value="">— Tùy chọn —</option>
+                  {(form.batchId ? schedules.filter(sc => !sc.batchId || sc.batchId === form.batchId) : schedules)
+                    .map(sc => <option key={sc.id} value={sc.id}>{sc.title || sc.scheduleName || `Schedule #${sc.id}`}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">Mô tả</label>
+                <textarea value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
+                  rows={2}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-600 mb-1">Yêu cầu kỹ năng (mô tả)</label>
+                <input value={form.requiredSkillDescription} onChange={e => setForm({ ...form, requiredSkillDescription: e.target.value })}
+                  placeholder="VD: Biết sử dụng bình phun"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              </div>
+              <SkillRequirementsPicker
+                value={form.skillRequirements || []}
+                onChange={(arr) => setForm({ ...form, skillRequirements: arr })}
+                catalog={skillCatalog}
+              />
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="bg-violet-50 border border-violet-200 rounded-xl p-3 text-xs text-violet-800 space-y-1">
+                <p>ℹ️ {mode === 'byStage'
+                  ? 'Hệ thống sẽ tự động generate các tác vụ phù hợp với giai đoạn đã chọn dựa trên cấu hình schedules và stages.'
+                  : 'Hệ thống sẽ tự động generate tác vụ cho tất cả các giai đoạn đang hoạt động của thực nghiệm.'}</p>
+                <p className="font-semibold">Không cần nhập thêm — chỉ cần chọn giai đoạn (hoặc bỏ trống) và bấm nút.</p>
+              </div>
+              {mode === 'byStage' && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Giai đoạn *</label>
+                  <select value={bulkForm.experimentStageId} onChange={e => setBulkForm({ ...bulkForm, experimentStageId: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+                    <option value="">— Chọn giai đoạn —</option>
+                    {stages.map(s => {
+                      const chk = canGenerateTasksFromStage(s);
+                      return (
+                        <option key={s.id} value={s.id} disabled={!chk.allowed}>
+                          {s.stageName || `Stage #${s.id}`} {chk.allowed ? '' : `— ${chk.reason}`}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Hủy</button>
+          {mode === 'manual' && (
+            <button onClick={onSubmitManual} disabled={submitting}
+              className="px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-lg">
+              {submitting ? '⏳ Đang tạo...' : 'Tạo tác vụ'}
+            </button>
+          )}
+          {mode === 'byStage' && (
+            <button onClick={onSubmitByStage} disabled={submitting}
+              className="px-4 py-2 text-sm font-bold text-white bg-violet-600 hover:bg-violet-700 disabled:opacity-50 rounded-lg">
+              {submitting ? '⏳ Đang tạo hàng loạt...' : '🎯 Tạo cho giai đoạn'}
+            </button>
+          )}
+          {mode === 'byExperiment' && (
+            <button onClick={onSubmitByExperiment} disabled={submitting}
+              className="px-4 py-2 text-sm font-bold text-white bg-violet-600 hover:bg-violet-700 disabled:opacity-50 rounded-lg">
+              {submitting ? '⏳ Đang tạo hàng loạt...' : '🌐 Tạo cho toàn thực nghiệm'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default ExperimentDetailPage;
+
+const EditExperimentModal = ({ open, form, setForm, saving, onClose, onSave }) => {
+  if (!open) return null;
+  const today = new Date().toISOString().split('T')[0];
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-bold text-slate-900">✏️ Chỉnh sửa thông tin thực nghiệm</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Cập nhật tiêu đề, mục tiêu, ngày tháng, trạng thái</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500">✕</button>
+        </div>
+        <div className="px-6 py-4 overflow-y-auto flex-1 space-y-3">
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Tiêu đề *</label>
+            <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Mục tiêu</label>
+            <textarea value={form.objective} onChange={e => setForm({ ...form, objective: e.target.value })} rows={3}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-600 mb-1">Giả thuyết</label>
+            <textarea value={form.hypothesis} onChange={e => setForm({ ...form, hypothesis: e.target.value })} rows={2}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Trạng thái</label>
+              <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+                <option value="Draft">Draft</option>
+                <option value="Planning">Planning</option>
+                <option value="Active">Active</option>
+                <option value="InProgress">InProgress</option>
+                <option value="Paused">Paused</option>
+                <option value="Completed">Completed</option>
+                <option value="Cancelled">Cancelled</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Ngày bắt đầu</label>
+              <input type="date" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })}
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-600 mb-1">Ngày kết thúc</label>
+              <input type="date" value={form.endDate} min={form.startDate || undefined}
+                onChange={e => setForm({ ...form, endDate: e.target.value })}
+                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+            </div>
+          </div>
+        </div>
+        <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Hủy</button>
+          <button onClick={onSave} disabled={saving}
+            className="px-4 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-lg">
+            {saving ? '⏳ Đang lưu...' : '💾 Lưu thay đổi'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};

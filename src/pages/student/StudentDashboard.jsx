@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useToast } from '../../context/ToastContext';
-import { tasksApi, taskReportsApi, taskImagesApi, measurementRecordsApi } from '../../api/sharedTaskApi';
+import { tasksApi, taskReportsApi, taskImagesApi, taskImagesAiApi, measurementRecordsApi, getAiProvider } from '../../api/sharedTaskApi';
+import AiResultModal from '../../components/tasks/AiResultModal';
 import { experimentsApi } from '../../api/studentTechApi';
 import { canSubmitReport } from '../../utils/taskValidation';
 import { authLogoutSync } from '../../utils/authLogout';
@@ -503,7 +504,8 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
                 experimentId: task.experimentId || task.experiment?.id,
                 batchId: task.batchId || task.batch?.id,
                 taskReportId: reportId,
-                taskId: task.id
+                taskId: task.id,
+                aiProvider: img.aiProvider || undefined
               });
             }
             return taskImagesApi.create({
@@ -602,7 +604,8 @@ const StudentTaskDetailModal = ({ task, onClose, onUpdated }) => {
                 experimentId: task.experimentId || task.experiment?.id,
                 batchId: task.batchId || task.batch?.id,
                 taskReportId: reportId,
-                taskId: task.id
+                taskId: task.id,
+                aiProvider: img.aiProvider || undefined
               });
             }
             return taskImagesApi.create({
@@ -1628,6 +1631,8 @@ const StudentReportsTab = () => {
   // reportId → List<TaskImage> fetch từ API /task-images/task/{reportId}
   const [reportImagesByReportId, setReportImagesByReportId] = useState({});
   const [imagesLoading, setImagesLoading] = useState(false);
+  // 🆕 Modal chi tiết AI cho ảnh đã scan
+  const [aiDetailImage, setAiDetailImage] = useState(null);
 
   useEffect(() => {
     const load = async () => {
@@ -1850,23 +1855,67 @@ const StudentReportsTab = () => {
               )}
 
               {imageList.length > 0 && (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {imageList.map((img, i) => (
-                    <a key={img.id || i} href={img.imageUrl || img.url} target="_blank" rel="noopener noreferrer"
-                      className="block w-16 h-16 rounded-lg overflow-hidden border border-slate-200 hover:opacity-80 relative group"
-                      title={img.caption || ''}>
-                      <img src={img.imageUrl || img.url} alt={img.caption || `img-${i}`} className="w-full h-full object-cover" />
-                      {img.caption && (
-                        <span className="absolute bottom-0 left-0 right-0 px-1 py-0.5 bg-black/70 text-white text-[9px] truncate opacity-0 group-hover:opacity-100">
-                          {img.caption}
-                        </span>
-                      )}
-                    </a>
-                  ))}
+                <div className="mt-3">
+                  <p className="text-[10px] text-slate-400 font-bold uppercase mb-2 flex items-center gap-1">
+                    🖼️ Hình ảnh{imageList.some(img => img.aiStatus === 'Completed' || img.aiPredictedLabel) && (
+                      <span className="ml-1 text-emerald-600 normal-case font-semibold">· có AI scan</span>
+                    )}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {imageList.map((img, i) => {
+                      const hasAiResult = img.aiStatus === 'Completed' || img.aiPredictedLabel || img.aiAnalysis;
+                      const hasAiPending = img.aiStatus === 'Pending';
+                      const hasAnyAi = img.aiProvider || hasAiResult || hasAiPending;
+                      return (
+                        <button key={img.id || i}
+                          onClick={() => hasAnyAi ? setAiDetailImage(img) : window.open(img.imageUrl || img.url, '_blank')}
+                          className="block w-16 h-16 rounded-lg overflow-hidden border border-slate-200 hover:opacity-80 relative group shrink-0 cursor-pointer"
+                          title={img.caption || img.aiPredictedLabel || 'Xem ảnh'}>
+                          <img src={img.imageUrl || img.url} alt={img.caption || `img-${i}`} className="w-full h-full object-cover" />
+                          {/* AI badge */}
+                          {hasAiPending && (
+                            <div className="absolute inset-0 bg-amber-500/70 flex items-center justify-center">
+                              <span className="text-white text-[10px] font-bold animate-pulse">⟳</span>
+                            </div>
+                          )}
+                          {hasAiResult && (
+                            <div className="absolute top-0.5 right-0.5 w-4 h-4 bg-emerald-500 rounded-full flex items-center justify-center shadow"
+                              title={`AI: ${img.aiPredictedLabel || img.aiStatus}`}>
+                              <span className="text-white text-[8px]">✓</span>
+                            </div>
+                          )}
+                          {img.aiProvider && (
+                            <div className="absolute bottom-0 left-0 right-0 bg-black/70 px-0.5 py-0.5">
+                              <span className="text-white text-[7px] font-bold leading-tight block truncate">
+                                🤖 {img.aiPredictedLabel || img.aiProvider.split('Onnx')[0]}
+                              </span>
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
               {imagesLoading && imageList.length === 0 && (
                 <p className="text-[10px] text-slate-400 italic mt-2">⏳ Đang tải ảnh từ server...</p>
+              )}
+
+              {/* 🆕 Modal chi tiết kết quả AI */}
+              {aiDetailImage && (
+                <AiResultModal
+                  image={aiDetailImage}
+                  onClose={() => setAiDetailImage(null)}
+                  onRetry={async (imageId) => {
+                    try {
+                      await taskImagesAiApi.retry(imageId);
+                      showToast('Đã gửi yêu cầu retry AI scan! Vui lòng đợi kết quả.', 'success');
+                      onClose();
+                    } catch (e) {
+                      showToast('Không thể retry: ' + (e?.message || 'Lỗi không xác định'), 'error');
+                    }
+                  }}
+                />
               )}
             </div>
           );

@@ -348,6 +348,14 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
     if (!manualForm.farmId) errs.farmId = 'Vui lòng chọn nông trại';
     if (!manualForm.title.trim() || manualForm.title.trim().length < 5) errs.title = 'Tiêu đề phải có ít nhất 5 ký tự';
     if (!manualForm.objective.trim() || manualForm.objective.trim().length < 10) errs.objective = 'Mục tiêu phải có ít nhất 10 ký tự';
+
+    // Validate ngày
+    if (manualForm.startDate && manualForm.endDate) {
+      if (new Date(manualForm.endDate) < new Date(manualForm.startDate)) {
+        errs.endDate = 'Ngày kết thúc phải sau ngày bắt đầu';
+      }
+    }
+
     if (Object.keys(errs).length > 0) {
       setManualFormErrors(errs);
       return;
@@ -603,13 +611,18 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-on-surface-variant mb-1">Ngày Bắt Đầu</label>
-              <input type="date" value={manualForm.startDate} onChange={e => setManualForm({ ...manualForm, startDate: e.target.value })}
-                className="w-full px-3 py-2.5 border border-outline-variant rounded-xl bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              <input type="date" value={manualForm.startDate} min={new Date().toISOString().split('T')[0]}
+                onChange={e => setManualForm({ ...manualForm, startDate: e.target.value })}
+                className={`w-full px-3 py-2.5 border rounded-xl bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 ${manualFormErrors.startDate ? 'border-rose-400 bg-rose-50' : 'border-outline-variant'}`} />
+              {manualFormErrors.startDate && <p className="text-xs text-rose-600 mt-1">{manualFormErrors.startDate}</p>}
             </div>
             <div>
               <label className="block text-xs font-bold text-on-surface-variant mb-1">Ngày Kết Thúc</label>
-              <input type="date" value={manualForm.endDate} onChange={e => setManualForm({ ...manualForm, endDate: e.target.value })}
-                className="w-full px-3 py-2.5 border border-outline-variant rounded-xl bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              <input type="date" value={manualForm.endDate}
+                min={manualForm.startDate || new Date().toISOString().split('T')[0]}
+                onChange={e => setManualForm({ ...manualForm, endDate: e.target.value })}
+                className={`w-full px-3 py-2.5 border rounded-xl bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 ${manualFormErrors.endDate ? 'border-rose-400 bg-rose-50' : 'border-outline-variant'}`} />
+              {manualFormErrors.endDate && <p className="text-xs text-rose-600 mt-1">{manualFormErrors.endDate}</p>}
             </div>
           </div>
 
@@ -832,12 +845,17 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-on-surface-variant mb-1">Ngày Bắt Đầu Dự Kiến</label>
-              <input type="date" value={form.expectedStartDate} onChange={e => setForm(f => ({ ...f, expectedStartDate: e.target.value }))}
-                className="w-full px-3 py-2.5 border border-outline-variant rounded-xl bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              <input type="date" value={form.expectedStartDate}
+                min={new Date().toISOString().split('T')[0]}
+                onChange={e => setForm(f => ({ ...f, expectedStartDate: e.target.value }))}
+                className={`w-full px-3 py-2.5 border rounded-xl bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 ${formErrors.expectedStartDate ? 'border-rose-400 bg-rose-50' : 'border-outline-variant'}`} />
+              {formErrors.expectedStartDate && <p className="text-xs text-rose-600 mt-1">{formErrors.expectedStartDate}</p>}
             </div>
             <div>
               <label className="block text-xs font-bold text-on-surface-variant mb-1">Ngày Kết Thúc Dự Kiến</label>
-              <input type="date" value={form.expectedEndDate} onChange={e => setForm(f => ({ ...f, expectedEndDate: e.target.value }))}
+              <input type="date" value={form.expectedEndDate}
+                min={form.expectedStartDate || new Date().toISOString().split('T')[0]}
+                onChange={e => setForm(f => ({ ...f, expectedEndDate: e.target.value }))}
                 className={`w-full px-3 py-2.5 border rounded-xl bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 ${formErrors.expectedEndDate ? 'border-rose-400 bg-rose-50' : 'border-outline-variant'}`} />
               {formErrors.expectedEndDate && <p className="text-xs text-rose-600 mt-1">{formErrors.expectedEndDate}</p>}
             </div>

@@ -267,7 +267,7 @@ export const taskImagesApi = {
   create: (payload) =>
     apiClient.request('/task-images', { method: 'POST', body: payload }).then(u),
   getByTaskReport: (reportId) =>
-    apiClient.request(`/task-images/task/${reportId}`).then(u),
+    apiClient.request(`/task-images/task/${reportId}/detail?includeAnalysis=true`).then(u),
   getByBatch: (batchId) =>
     apiClient.request(`/task-images/batch/${batchId}`).then(u),
   remove: (id) =>

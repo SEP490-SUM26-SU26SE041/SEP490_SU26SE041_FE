@@ -144,6 +144,7 @@ const TaskReportForm = ({
   // P0 fix: ẩn nút submit nội bộ — parent sẽ tự render action phù hợp
   // (ví dụ Student Dashboard đặt nút Hoàn Thành & Gửi Báo Cáo cuối form)
   hideSubmit = false,
+  taskReportId, // 🆕 để truyền xuống ImageUploader → AI scan cần biết report đã save chưa
   onSubmit,
   color = 'indigo',
   submitLabel = 'Gửi Báo Cáo'
@@ -518,6 +519,7 @@ const TaskReportForm = ({
           experimentId={task?.experimentId}
           batchId={task?.batchId}
           taskId={task?.id}
+          taskReportId={taskReportId}
           disabled={disabled}
         />
       )}
