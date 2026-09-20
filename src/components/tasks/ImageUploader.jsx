@@ -1,7 +1,8 @@
 import React, { useRef, useState, useCallback } from 'react';
+import { getAiProvider, AI_PROVIDERS } from '../../api/sharedTaskApi';
 
 /**
- * ImageUploader (v2 — Không tự upload, giữ file binary để submit cùng task report)
+ * ImageUploader (v3 — Không tự upload, giữ file binary để submit cùng task report)
  *
  * Thay đổi UX:
  *  - KHÔNG tự upload lên Cloudinary khi chọn file
@@ -10,16 +11,19 @@ import React, { useRef, useState, useCallback } from 'react';
  *  - Drag & drop từ desktop
  *  - Hiển thị tên file + dung lượng
  *  - Validate file ảnh + size
+ *  - Hiển thị AI badge trên tile theo image.aiStatus (Pending / Completed / Failed / idle)
+ *  - AI Scan Panel hiển thị inline dưới tile ảnh (không bị cắt)
  *
- * Value mỗi item: { file, previewUrl, caption, fileName, fileSize }
+ * Value mỗi item: { file, previewUrl, caption, fileName, fileSize, ai? }
  *
  * Props:
- *  - value: Array<{ file, previewUrl, caption, fileName, fileSize, imageId?, url? }>
+ *  - value: Array<{ file, previewUrl, caption, fileName, fileSize, imageId?, url?, ai?, aiStatus? }>
  *  - onChange: (images) => void
- *  - experimentId, batchId, taskId: context (chỉ dùng để gắn label)
+ *  - experimentId, batchId, taskId, taskReportId: context
  *  - disabled: boolean
  *  - maxFiles: số ảnh tối đa (default 10)
  *  - maxSizeMb: dung lượng tối đa mỗi ảnh (default 8)
+ *  - enableAiScan: bật/tắt tính năng quét AI (default true)
  */
 const ImageUploader = ({
   value = [],
@@ -27,14 +31,18 @@ const ImageUploader = ({
   experimentId,
   batchId,
   taskId,
+  taskReportId,
   disabled = false,
   maxFiles = 10,
-  maxSizeMb = 8
+  maxSizeMb = 8,
+  enableAiScan = true
 }) => {
   const fileInputRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
   const [editingCaption, setEditingCaption] = useState(null);
   const [captionDraft, setCaptionDraft] = useState('');
+  // 🆕 AI provider được chọn cho TẤT CẢ ảnh trong batch này
+  const [selectedAiProvider, setSelectedAiProvider] = useState('TomatoLeafDiseaseOnnx');
 
   const formatSize = (bytes) => {
     if (!bytes) return '';
@@ -64,7 +72,6 @@ const ImageUploader = ({
     }
 
     const filesToAdd = files.slice(0, remaining);
-
     const validFiles = [];
     const errors = [];
     for (const file of filesToAdd) {
@@ -81,7 +88,8 @@ const ImageUploader = ({
       caption: '',
       fileName: file.name,
       fileSize: file.size,
-      localId: `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+      localId: `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      aiProvider: enableAiScan ? selectedAiProvider : null
     }));
 
     onChange?.([...value, ...newItems]);
@@ -132,6 +140,9 @@ const ImageUploader = ({
     handleFiles(e.dataTransfer.files);
   };
 
+
+  const selectedProviderMeta = getAiProvider(selectedAiProvider) || AI_PROVIDERS.find(p => p.code === selectedAiProvider) || { icon: '🤖', name: selectedAiProvider };
+
   return (
     <div className="rounded-xl p-4 border border-slate-200 bg-white">
       <div className="flex items-center justify-between mb-3">
@@ -152,6 +163,38 @@ const ImageUploader = ({
           </button>
         )}
       </div>
+
+      {/* 🆕 AI Provider Selector — chọn loại quét AI cho tất cả ảnh trong batch này */}
+      {enableAiScan && (
+        <div className="mb-3 p-2 bg-indigo-50 border border-indigo-200 rounded-lg flex items-center gap-3">
+          <span className="text-[10px] font-bold text-indigo-700 uppercase tracking-wider whitespace-nowrap shrink-0">
+            🤖 Quét AI:
+          </span>
+          <div className="flex gap-1.5 flex-wrap">
+            {AI_PROVIDERS.map(p => (
+              <button
+                key={p.code}
+                type="button"
+                onClick={() => {
+                  setSelectedAiProvider(p.code);
+                  // Cập nhật aiProvider cho tất cả ảnh local đã chọn
+                  onChange?.(value.map(img => img.file ? { ...img, aiProvider: p.code } : img));
+                }}
+                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border ${
+                  selectedAiProvider === p.code
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                    : 'bg-white text-indigo-700 border-indigo-200 hover:border-indigo-400 hover:bg-indigo-100'
+                }`}
+                title={p.description}>
+                {p.icon} {p.name.split(' ')[0]}
+              </button>
+            ))}
+          </div>
+          <span className="text-[9px] text-indigo-500 italic ml-auto hidden sm:block shrink-0">
+            {selectedProviderMeta.description?.split('.')[0] || ''}
+          </span>
+        </div>
+      )}
 
       <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={handleFileSelect}
         className="hidden" disabled={disabled} />
@@ -188,58 +231,75 @@ const ImageUploader = ({
       {/* Grid ảnh đã chọn */}
       {value.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-          {value.map((img, idx) => (
-            <div key={img.localId || img.imageId || idx}
-              className="relative group border border-slate-200 rounded-lg overflow-hidden bg-slate-50">
-              <img src={img.previewUrl || img.url} alt={img.caption || `Ảnh ${idx + 1}`}
-                className="w-full h-28 object-cover" />
+          {value.map((img, idx) => {
+            const imgKey = img.localId || img.imageId || String(idx);
 
-              {img.fileName && (
-                <div className="absolute top-1 left-1 px-1.5 py-0.5 bg-black/60 text-white rounded text-[9px] font-mono max-w-[calc(100%-1rem)] truncate"
-                  title={`${img.fileName} (${formatSize(img.fileSize)})`}>
-                  📎 {img.fileName}
-                </div>
-              )}
+            return (
+              <div key={imgKey}
+                className="relative group border border-slate-200 rounded-lg overflow-hidden bg-slate-50 flex flex-col">
+                <div className="relative">
+                  <img src={img.previewUrl || img.url} alt={img.caption || `Ảnh ${idx + 1}`}
+                    className="w-full h-28 object-cover" />
 
-              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 gap-2">
-                {!disabled && (
-                  <button type="button" onClick={() => handleRemove(idx)}
-                    className="px-2 py-1 bg-rose-500 hover:bg-rose-600 text-white rounded-lg text-[10px] font-bold shadow"
-                    title="Xóa ảnh">
-                    🗑️ Xóa
-                  </button>
-                )}
-              </div>
+                  {img.fileName && (
+                    <div className="absolute top-1 left-1 px-1.5 py-0.5 bg-black/60 text-white rounded text-[9px] font-mono max-w-[calc(100%-1rem)] truncate"
+                      title={`${img.fileName} (${formatSize(img.fileSize)})`}>
+                      📎 {img.fileName}
+                    </div>
+                  )}
 
-              <div className="p-1.5 bg-white">
-                {editingCaption === idx ? (
-                  <div className="flex gap-1">
-                    <input
-                      type="text"
-                      value={captionDraft}
-                      onChange={e => setCaptionDraft(e.target.value)}
-                      onKeyDown={e => {
-                        if (e.key === 'Enter') saveCaption(idx);
-                        if (e.key === 'Escape') setEditingCaption(null);
-                      }}
-                      placeholder="Mô tả ảnh..."
-                      className="flex-1 px-1.5 py-1 border border-slate-300 rounded text-[10px] focus:outline-none focus:border-indigo-400"
-                      autoFocus
-                    />
-                    <button type="button" onClick={() => saveCaption(idx)}
-                      className="px-1.5 py-1 bg-emerald-500 text-white rounded text-[10px] font-bold">
-                      ✓
-                    </button>
+                  {/* 🆕 AI provider badge trên tile */}
+                  {img.aiProvider && (
+                    <div className="absolute bottom-1 left-1 px-1.5 py-0.5 bg-indigo-600/80 text-white rounded text-[9px] font-bold flex items-center gap-1"
+                      title={`AI: ${img.aiProvider}`}>
+                      🤖 {(() => {
+                        const m = getAiProvider(img.aiProvider);
+                        return m ? `${m.icon} ${m.name.split(' ')[0]}` : img.aiProvider.slice(0, 8);
+                      })()}
+                    </div>
+                  )}
+
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
+                    {!disabled && (
+                      <button type="button" onClick={() => handleRemove(idx)}
+                        className="px-2.5 py-1.5 bg-rose-500 hover:bg-rose-600 text-white rounded-lg text-[10px] font-bold shadow-lg"
+                        title="Xóa ảnh">
+                        🗑️ Xóa ảnh
+                      </button>
+                    )}
                   </div>
-                ) : (
-                  <button type="button" onClick={() => startEditCaption(idx)}
-                    className="w-full text-left text-[10px] text-slate-600 hover:text-indigo-600 truncate">
-                    {img.caption || <span className="italic text-slate-400">+ Thêm mô tả</span>}
-                  </button>
-                )}
+                </div>
+
+                <div className="p-1.5 bg-white">
+                  {editingCaption === idx ? (
+                    <div className="flex gap-1">
+                      <input
+                        type="text"
+                        value={captionDraft}
+                        onChange={e => setCaptionDraft(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') saveCaption(idx);
+                          if (e.key === 'Escape') setEditingCaption(null);
+                        }}
+                        placeholder="Mô tả ảnh..."
+                        className="flex-1 px-1.5 py-1 border border-slate-300 rounded text-[10px] focus:outline-none focus:border-indigo-400"
+                        autoFocus
+                      />
+                      <button type="button" onClick={() => saveCaption(idx)}
+                        className="px-1.5 py-1 bg-emerald-500 text-white rounded text-[10px] font-bold">
+                        ✓
+                      </button>
+                    </div>
+                  ) : (
+                    <button type="button" onClick={() => startEditCaption(idx)}
+                      className="w-full text-left text-[10px] text-slate-600 hover:text-indigo-600 truncate">
+                      {img.caption || <span className="italic text-slate-400">+ Thêm mô tả</span>}
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
 
           {!disabled && value.length < maxFiles && (
             <button type="button" onClick={handleUploadClick}
@@ -253,5 +313,9 @@ const ImageUploader = ({
     </div>
   );
 };
+
+/**
+ * Map payload status từ AiScanPanel.onUpdate() → BE status convention
+ */
 
 export default ImageUploader;

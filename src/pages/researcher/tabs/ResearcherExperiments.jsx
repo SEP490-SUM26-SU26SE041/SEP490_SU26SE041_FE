@@ -1709,12 +1709,14 @@ const OverviewTab = ({ exp, editExp, setEditExp, showEditExp, setShowEditExp, on
           </div>
           <div>
             <label className="text-[10px] font-bold uppercase text-on-surface-variant">Ngày Bắt Đầu</label>
-            <input type="date" value={editExp.startDate || ''} onChange={e => setEditExp({ ...editExp, startDate: e.target.value })}
+            <input type="date" value={editExp.startDate || ''}
+              min={editExp.status === 'Draft' ? new Date().toISOString().split('T')[0] : undefined}
+              onChange={e => setEditExp({ ...editExp, startDate: e.target.value })}
               className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white" />
           </div>
           <div>
             <label className="text-[10px] font-bold uppercase text-on-surface-variant">Ngày Kết Thúc</label>
-            <input type="date" value={editExp.endDate || ''} onChange={e => setEditExp({ ...editExp, endDate: e.target.value })}
+            <input type="date" value={editExp.endDate || ''} min={editExp.startDate || undefined} onChange={e => setEditExp({ ...editExp, endDate: e.target.value })}
               className="w-full px-3 py-2 border border-outline-variant rounded-lg text-sm bg-white" />
           </div>
         </div>

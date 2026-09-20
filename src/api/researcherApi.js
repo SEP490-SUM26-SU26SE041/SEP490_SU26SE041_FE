@@ -69,5 +69,17 @@ export const tasksApi = {
   getById: (id) => apiClient.request('/tasks/' + id).then(u),
   create: (payload) => apiClient.request('/tasks', { method: 'POST', body: payload }),
   update: (id, payload) => apiClient.request('/tasks/' + id, { method: 'PUT', body: payload }),
-  remove: (id) => apiClient.request('/tasks/' + id, { method: 'DELETE' })
+  remove: (id) => apiClient.request('/tasks/' + id, { method: 'DELETE' }),
+  generateByExperiment: (id) => apiClient.request(`/tasks/generate-by-experiment/${id}`, { method: 'POST' }),
+  generateByStage: (id) => apiClient.request(`/tasks/generate-by-stage/${id}`, { method: 'POST' }),
+  assign: (payload) => apiClient.request('/tasks/assign', { method: 'POST', body: payload }),
+  reassign: (payload) => apiClient.request('/tasks/reassign', { method: 'POST', body: payload }),
+  getAssignments: (taskId) => apiClient.request(`/tasks/${taskId}/assignments`).then(u),
+  countByUser: ({ roles, date } = {}) => {
+    const params = new URLSearchParams();
+    if (roles) params.append('roles', roles);
+    if (date) params.append('date', date);
+    const qs = params.toString();
+    return apiClient.request('/tasks/count-by-user' + (qs ? `?${qs}` : '')).then(u);
+  }
 };

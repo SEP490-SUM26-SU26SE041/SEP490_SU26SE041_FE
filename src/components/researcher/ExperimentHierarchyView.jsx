@@ -15,7 +15,9 @@ const ExperimentHierarchyView = ({
   batchesByGroup = new Map(),
   stages = [],
   measurements = [],
-  recordsByBatch = new Map()
+  recordsByBatch = new Map(),
+  onRenameGroup,
+  onDeleteGroup
 }) => {
   const unassignedBatches = batchesByGroup.get('_unassigned') || [];
 
@@ -58,6 +60,8 @@ const ExperimentHierarchyView = ({
                   stages={stages}
                   measurements={measurements}
                   recordsByBatch={recordsByBatch}
+                  onRenameGroup={onRenameGroup}
+                  onDeleteGroup={onDeleteGroup}
                 />
               ))
             )}
@@ -112,8 +116,11 @@ const ExperimentHierarchyView = ({
 };
 
 // ── LEVEL 2: Group ────────────────────────────────────────────────────────
-const GroupNode = ({ group, batches, stages, measurements, recordsByBatch }) => {
+const GroupNode = ({ group, batches, stages, measurements, recordsByBatch, onRenameGroup, onDeleteGroup }) => {
   const [expanded, setExpanded] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [draftName, setDraftName] = useState(group.groupName || '');
+  const [savingRename, setSavingRename] = useState(false);
   const groupTypeColor = group.groupType === 'Control'
     ? 'bg-blue-100 text-blue-700 border-blue-200'
     : group.groupType === 'Treatment'
@@ -144,6 +151,17 @@ const GroupNode = ({ group, batches, stages, measurements, recordsByBatch }) => 
     return measurementStats;
   }, [group, batches, measurements, recordsByBatch]);
 
+  const isUnassigned = group.id === '_unassigned';
+
+  const submitRename = async () => {
+    if (!draftName.trim() || draftName.trim() === group.groupName) { setEditing(false); return; }
+    setSavingRename(true);
+    const ok = await onRenameGroup?.(group.id, draftName.trim());
+    setSavingRename(false);
+    if (ok) setEditing(false);
+    else setDraftName(group.groupName || '');
+  };
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50/40 overflow-hidden">
       <button onClick={() => setExpanded(!expanded)}
@@ -154,10 +172,30 @@ const GroupNode = ({ group, batches, stages, measurements, recordsByBatch }) => 
           </div>
           <div className="text-left min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <p className="font-bold text-slate-900 text-sm">{group.groupName || 'Nhóm'}</p>
+              {editing ? (
+                <input value={draftName} autoFocus
+                  onChange={e => setDraftName(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') submitRename(); if (e.key === 'Escape') { setEditing(false); setDraftName(group.groupName || ''); } }}
+                  onClick={e => e.stopPropagation()}
+                  className="px-2 py-0.5 border border-indigo-300 rounded text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
+              ) : (
+                <p className="font-bold text-slate-900 text-sm">{group.groupName || 'Nhóm'}</p>
+              )}
               <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border ${groupTypeColor}`}>
                 {group.groupType || 'N/A'}
               </span>
+              {editing && (
+                <>
+                  <button onClick={e => { e.stopPropagation(); submitRename(); }} disabled={savingRename}
+                    className="text-[10px] font-bold text-emerald-700 bg-emerald-100 hover:bg-emerald-200 px-2 py-0.5 rounded disabled:opacity-50">
+                    {savingRename ? '...' : '✓ Lưu'}
+                  </button>
+                  <button onClick={e => { e.stopPropagation(); setEditing(false); setDraftName(group.groupName || ''); }}
+                    className="text-[10px] font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 px-2 py-0.5 rounded">
+                    ✕ Hủy
+                  </button>
+                </>
+              )}
             </div>
             <p className="text-[11px] text-slate-500 truncate">{group.treatmentDescription || '—'}</p>
           </div>
@@ -167,6 +205,20 @@ const GroupNode = ({ group, batches, stages, measurements, recordsByBatch }) => 
             <span className="text-[10px] text-slate-500 font-medium">{batches.length} lô</span>
             <span className="text-[10px] text-slate-500 font-medium">{stats.length} chỉ số</span>
           </div>
+          {!isUnassigned && (
+            <div className="flex items-center gap-1 border-l border-slate-200 pl-2">
+              <span onClick={e => { e.stopPropagation(); setEditing(true); }}
+                className="p-1 hover:bg-indigo-100 rounded cursor-pointer text-slate-500 hover:text-indigo-600"
+                title="Đổi tên nhóm">
+                ✏️
+              </span>
+              <span onClick={e => { e.stopPropagation(); onDeleteGroup?.(group.id); }}
+                className="p-1 hover:bg-rose-100 rounded cursor-pointer text-slate-500 hover:text-rose-600"
+                title="Xóa nhóm">
+                🗑️
+              </span>
+            </div>
+          )}
           <span className="text-slate-400 text-sm">{expanded ? '▾' : '▸'}</span>
         </div>
       </button>

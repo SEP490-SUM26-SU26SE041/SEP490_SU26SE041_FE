@@ -173,7 +173,8 @@ const ExperimentOverviewSummary = ({
   measurements = [],
   measurementRecords = [],
   stages = [],
-  decisionSummary = []
+  decisionSummary = [],
+  onEditExperiment
 }) => {
   const completedStages = stages.filter(s => s.status === 'Completed').length;
   const activeStages = stages.filter(s => s.status === 'Active' || s.status === 'InProgress').length;
@@ -208,11 +209,19 @@ const ExperimentOverviewSummary = ({
               <p className="text-sm text-indigo-100/90 mt-2 max-w-3xl">{experiment.objective}</p>
             )}
           </div>
-          <div className="flex flex-col items-end gap-1 shrink-0">
-            <span className="text-[10px] uppercase tracking-widest text-indigo-200/80 font-bold">Trạng thái</span>
-            <span className="px-3 py-1 bg-white/20 backdrop-blur-sm rounded-full text-xs font-bold">
-              {experiment.status || 'Draft'}
-            </span>
+          <div className="flex flex-col items-end gap-2 shrink-0">
+            <div className="flex flex-col items-end gap-1">
+              <span className="text-[10px] uppercase tracking-widest text-indigo-200/80 font-bold">Trạng thái</span>
+              <span className="px-3 py-1 bg-white/20 backdrop-blur-sm rounded-full text-xs font-bold">
+                {experiment.status || 'Draft'}
+              </span>
+            </div>
+            {onEditExperiment && (
+              <button onClick={onEditExperiment}
+                className="px-3 py-1.5 bg-white/20 hover:bg-white/30 backdrop-blur-sm rounded-lg text-xs font-bold border border-white/20">
+                ✏️ Chỉnh sửa
+              </button>
+            )}
           </div>
         </div>
       </div>
