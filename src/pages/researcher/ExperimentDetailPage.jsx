@@ -1160,7 +1160,54 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
 
     if (stageType === 'Growing' || stageType === 'Growth') {
       const stageRecs = measurementRecords.filter(r => r.stageId === stage.id || r.experimentStageId === stage.id);
-      if (stageRecs.length > 0) {
+      // Map batchId → groupId (qua batches)
+      const batchToGroup = new Map();
+      batches.forEach(b => batchToGroup.set(b.id, b.groupId || '_unassigned'));
+
+      // Lấy danh sách measurement definitions dùng trong stage này (có target → highlight)
+      const stageDefIds = new Set(stageRecs.map(r => r.measurementDefinitionId).filter(Boolean));
+      const stageDefs = measurements.filter(m => stageDefIds.has(m.id));
+
+      if (stageRecs.length === 0) {
+        // Không có dữ liệu đo lường nào trong stage này
+      } else if (stageDefs.length > 0) {
+        // 🆕 Liệt kê từng metric × từng nhóm
+        stageDefs.forEach(def => {
+          const defRecs = stageRecs.filter(r => r.measurementDefinitionId === def.id);
+          if (defRecs.length === 0) return;
+          const target = def.targetValue !== null && def.targetValue !== undefined && def.targetValue !== ''
+            ? Number(def.targetValue) : null;
+
+          // Group records theo groupId
+          const byGroup = new Map();
+          defRecs.forEach(r => {
+            const gid = batchToGroup.get(r.batchId) || '_unassigned';
+            if (!byGroup.has(gid)) byGroup.set(gid, []);
+            const val = Number(r.value);
+            if (!Number.isNaN(val) && val > 0) byGroup.get(gid).push(val);
+          });
+
+          // Tạo 1 hint per group
+          byGroup.forEach((values, gid) => {
+            const avg = Number((values.reduce((s, v) => s + v, 0) / values.length).toFixed(2));
+            const groupObj = groups.find(g => g.id === gid);
+            const groupLabel = groupObj?.groupName || (gid === '_unassigned' ? 'Chưa gán nhóm' : 'Nhóm');
+            const targetStr = target !== null && !Number.isNaN(target) ? ` · 🎯${target}` : '';
+            hints.push({
+              icon: '📏',
+              label: `${def.metricName || def.name || 'Chỉ số'} (${groupLabel})`,
+              value: `${avg}${def.unit || ''}`,
+              source: `${values.length} mẫu${targetStr}`,
+              key: def.metricKey || def.key,
+              numericValue: avg,
+              groupId: gid,
+              hasTarget: target !== null,
+              target
+            });
+          });
+        });
+      } else {
+        // Fallback: không có def metadata, group theo value (như cũ)
         const heights = stageRecs.map(r => Number(r.value)).filter(v => !isNaN(v) && v > 0);
         if (heights.length > 0) {
           const avg = Number((heights.reduce((s, v) => s + v, 0) / heights.length).toFixed(1));
@@ -1327,268 +1374,6 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                       <p className="text-sm text-slate-800">{s.objective}</p>
                     </div>
                   )}
-                  <div className="grid grid-cols-2 gap-4">
-                    {/* Thống kê theo từng loại giai đoạn - dựa vào schedules + task reports + measurement records */}
-                    <div className="bg-white rounded-xl p-4 border border-slate-100">
-                      <p className="text-xs font-bold uppercase text-slate-500 mb-3 flex items-center gap-1">💡 Gợi ý đánh giá</p>
-                      {(() => {
-                        const stageType = s.stageType;
-                        // Lấy schedules của giai đoạn này
-                        const stageSchedules = schedules.filter(sc =>
-                          (sc.experimentStageId === s.id || sc.stageId === s.id)
-                        );
-                        // Lấy batches liên quan
-                        const stageBatchIds = new Set();
-                        stageSchedules.forEach(sc => { if (sc.batchId) stageBatchIds.add(sc.batchId); });
-                        stageTasks.forEach(t => { if (t.batchId) stageBatchIds.add(t.batchId); });
-                        if (stageBatchIds.size === 0) batches.forEach(b => stageBatchIds.add(b.id));
-
-                        // Tổng hợp tất cả reports của stage này
-                        const allStageReports = [...stageBatchIds].flatMap(bid => taskReportsByBatch?.[bid] || []);
-                        const allStageMeasurements = measurementRecords.filter(r =>
-                          (r.stageId === s.id || r.experimentStageId === s.id) &&
-                          [...stageBatchIds].some(bid => r.batchId === bid || r.bedId === bid)
-                        );
-
-                        // Helper: đếm schedule theo taskType
-                        const countScheduleByType = (types) => stageSchedules.filter(sc =>
-                          types.includes(sc.taskType || sc.TaskType)
-                        ).length;
-
-                        // Helper: đếm task completed theo taskType
-                        const countTaskByType = (types) => stageTasks.filter(t =>
-                          types.includes(t.taskType) && ['Completed', 'Approved'].includes(t.status)
-                        ).length;
-
-                        // Helper: đếm report đã duyệt theo taskType
-                        const countReportByType = (types) => allStageReports.filter(r => {
-                          const tt = r.taskType || r.TaskType;
-                          if (!types.includes(tt)) return false;
-                          return ['Approved', 'Completed'].includes(r.approvalStatus || r.status);
-                        }).length;
-
-                        // Helper: đọc số từ resultData JSONB
-                        const getResultDataVal = (r, keys) => {
-                          const rd = r.resultData || {};
-                          for (const k of keys) {
-                            if (rd[k] !== undefined && rd[k] !== null && rd[k] !== '') return Number(rd[k]);
-                            if (r[k] !== undefined && r[k] !== null && r[k] !== '') return Number(r[k]);
-                          }
-                          return null;
-                        };
-
-                        const stats = [];
-
-                        // ── Nursery / Planting: số cây đã trồng/ươm ──
-                        if (stageType === 'Nursery' || stageType === 'Planting') {
-                          // Số cây từ task report Planting
-                          const plantingReports = allStageReports.filter(r => {
-                            const tt = r.taskType || r.TaskType;
-                            return tt === 'Planting' || tt === 'Nursery' || (r.taskTitle || '').toLowerCase().includes('trồng') || (r.taskTitle || '').toLowerCase().includes('ươm');
-                          });
-                          const actualPlants = plantingReports.reduce((sum, r) => {
-                            const v = getResultDataVal(r, ['soLuong', 'plantCount', 'actualPlantCount', 'quantity']);
-                            return sum + (v || 0);
-                          }, 0);
-
-                          // Số cây kế hoạch (từ batch.plantCount hoặc schedule)
-                          const planPlants = batches
-                            .filter(b => stageBatchIds.has(b.id))
-                            .reduce((sum, b) => sum + (Number(b.plantCount) || 0), 0);
-
-                          stats.push({ icon: '🌱', label: 'Số cây thực tế', value: actualPlants, unit: 'cây', accent: 'emerald' });
-                          if (planPlants > 0) stats.push({ icon: '📋', label: 'Số cây kế hoạch', value: planPlants, unit: 'cây', accent: 'blue' });
-                          stats.push({ icon: '📝', label: 'Báo cáo trồng', value: plantingReports.length, unit: 'báo cáo', accent: 'violet' });
-                        }
-                        // ── Care: tưới, bón phân, phun thuốc, lượng nước ──
-                        else if (stageType === 'Care') {
-                          const khWater = countScheduleByType(['Watering', 'Irrigation']);
-                          const ttWater = countTaskByType(['Watering', 'Irrigation']);
-                          if (khWater > 0 || ttWater > 0) {
-                            stats.push({ icon: '💧', label: 'Tưới nước', kh: khWater, tt: ttWater, accent: 'blue' });
-                          }
-
-                          const khFert = countScheduleByType(['Fertilizing', 'Fertilizer']);
-                          const ttFert = countTaskByType(['Fertilizing', 'Fertilizer']);
-                          if (khFert > 0 || ttFert > 0) {
-                            stats.push({ icon: '🧪', label: 'Bón phân', kh: khFert, tt: ttFert, accent: 'emerald' });
-                          }
-
-                          const khSpray = countScheduleByType(['Spraying', 'PestControl']);
-                          const ttSpray = countTaskByType(['Spraying', 'PestControl']);
-                          if (khSpray > 0 || ttSpray > 0) {
-                            stats.push({ icon: '🛡️', label: 'Phun thuốc', kh: khSpray, tt: ttSpray, accent: 'amber' });
-                          }
-
-                          // Tổng lượng nước từ resultData
-                          const totalWater = allStageReports
-                            .filter(r => ['Watering', 'Irrigation'].includes(r.taskType || r.TaskType))
-                            .reduce((sum, r) => {
-                              const v = getResultDataVal(r, ['waterAmount', 'luongNuocTong', 'amount']);
-                              return sum + (v || 0);
-                            }, 0);
-                          if (totalWater > 0) {
-                            stats.push({ icon: '🚿', label: 'Tổng lượng nước', value: Math.round(totalWater), unit: 'lít', accent: 'cyan' });
-                          }
-                        }
-                        // ── Growing / Growth: chỉ số tăng trưởng từ measurement records ──
-                        else if (stageType === 'Growing' || stageType === 'Growth') {
-                          // Đếm task Observation đã hoàn thành
-                          const obsCount = countTaskByType(['Observation']);
-                          if (obsCount > 0) stats.push({ icon: '👁️', label: 'Quan sát tăng trưởng', value: obsCount, unit: 'lần', accent: 'slate' });
-
-                          // Chỉ số tăng trưởng trung bình từ measurement records
-                          const growMetrics = {};
-                          allStageMeasurements.forEach(m => {
-                            if (!m.metricName || !m.value) return;
-                            if (!growMetrics[m.metricName]) growMetrics[m.metricName] = [];
-                            const v = Number(m.value);
-                            if (!isNaN(v) && v > 0) growMetrics[m.metricName].push(v);
-                          });
-                          Object.entries(growMetrics).forEach(([metric, values]) => {
-                            if (values.length === 0) return;
-                            const avg = (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1);
-                            const unit = allStageMeasurements.find(m => m.metricName === metric)?.unit || '';
-                            stats.push({ icon: '📏', label: `TB ${metric}`, value: avg, unit: unit, accent: 'teal' });
-                          });
-
-                          // Tổng lượng nước (nếu có)
-                          const totalWater = allStageReports
-                            .filter(r => ['Watering', 'Irrigation'].includes(r.taskType || r.TaskType))
-                            .reduce((sum, r) => {
-                              const v = getResultDataVal(r, ['waterAmount', 'luongNuocTong']);
-                              return sum + (v || 0);
-                            }, 0);
-                          if (totalWater > 0) stats.push({ icon: '🚿', label: 'Tổng lượng nước', value: Math.round(totalWater), unit: 'lít', accent: 'cyan' });
-                        }
-                        // ── Harvest / Harvesting: sản lượng ──
-                        else if (stageType === 'Harvest' || stageType === 'Harvesting') {
-                          const harvestReports = allStageReports.filter(r =>
-                            ['Harvest', 'Harvesting'].includes(r.taskType || r.TaskType)
-                          );
-                          const totalKg = harvestReports.reduce((sum, r) => {
-                            const v = getResultDataVal(r, ['sanLuongKg', 'harvestWeight', 'yieldKg', 'sanLuongTan']);
-                            if (v !== null) {
-                              // Nếu là tấn → *1000
-                              return sum + (v * (getResultDataVal(r, ['sanLuongTan']) !== null ? 1000 : 1));
-                            }
-                            return sum;
-                          }, 0);
-                          if (totalKg > 0) {
-                            stats.push({ icon: '⚖️', label: 'Sản lượng thu hoạch', value: Math.round(totalKg), unit: 'kg', accent: 'yellow' });
-                          }
-                          const plantCount = harvestReports.reduce((sum, r) => {
-                            const v = getResultDataVal(r, ['soLuongCayThuHoach', 'plantCount', 'soLuong']);
-                            return sum + (v || 0);
-                          }, 0);
-                          if (plantCount > 0) {
-                            stats.push({ icon: '🌱', label: 'Số cây thu hoạch', value: plantCount, unit: 'cây', accent: 'emerald' });
-                          }
-                          stats.push({ icon: '📝', label: 'Báo cáo thu hoạch', value: harvestReports.length, unit: 'báo cáo', accent: 'violet' });
-                        }
-                        // ── Evaluation: tỷ lệ hoàn thành, đậu quả, sống ──
-                        else if (stageType === 'Evaluation') {
-                          const completedTasks = stageTasks.filter(t => ['Completed', 'Approved'].includes(t.status)).length;
-                          const totalTasks = stageTasks.length;
-                          if (totalTasks > 0) {
-                            const rate = Math.round((completedTasks / totalTasks) * 100);
-                            stats.push({ icon: '📊', label: 'Tỷ lệ hoàn thành', value: rate, unit: '%', accent: 'blue' });
-                          }
-                          // Lấy chỉ số từ resultData
-                          const evReports = allStageReports.filter(r => {
-                            const rd = r.resultData || {};
-                            return rd.tiLeDauQua || rd.tiLeSong || rd.danhGia;
-                          });
-                          evReports.forEach(r => {
-                            const rd = r.resultData || {};
-                            if (rd.tiLeDauQua) stats.push({ icon: '🌿', label: 'Tỷ lệ đậu quả', value: rd.tiLeDauQua, unit: '%', accent: 'emerald' });
-                            if (rd.tiLeSong) stats.push({ icon: '💚', label: 'Tỷ lệ sống', value: rd.tiLeSong, unit: '%', accent: 'teal' });
-                          });
-                        }
-                        // ── Preparation: diện tích, nhân công ──
-                        else if (stageType === 'Preparation') {
-                          const prepReports = allStageReports;
-                          const area = prepReports.reduce((sum, r) => {
-                            const v = getResultDataVal(r, ['dienTichChuanBi', 'area']);
-                            return sum + (v || 0);
-                          }, 0);
-                          if (area > 0) stats.push({ icon: '📐', label: 'Diện tích chuẩn bị', value: Math.round(area), unit: 'm²', accent: 'slate' });
-                          const workers = prepReports.reduce((sum, r) => {
-                            const v = getResultDataVal(r, ['nhanCong', 'workers']);
-                            return sum + (v || 0);
-                          }, 0);
-                          if (workers > 0) stats.push({ icon: '👷', label: 'Số nhân công', value: workers, unit: 'người', accent: 'amber' });
-                        }
-                        // ── PostHarvest: khối lượng bảo quản, hao hụt ──
-                        else if (stageType === 'PostHarvest') {
-                          const phReports = allStageReports;
-                          const stored = phReports.reduce((sum, r) => {
-                            const v = getResultDataVal(r, ['khoiLuongBaoQuan', 'storedWeight', 'mass']);
-                            return sum + (v || 0);
-                          }, 0);
-                          if (stored > 0) stats.push({ icon: '📦', label: 'Khối lượng bảo quản', value: Math.round(stored), unit: 'kg', accent: 'slate' });
-                          const loss = phReports.reduce((sum, r) => {
-                            const v = getResultDataVal(r, ['tyLeHaoHut', 'lossRate']);
-                            return sum + (v || 0);
-                          }, 0) / (phReports.length || 1);
-                          if (loss > 0) stats.push({ icon: '📉', label: 'Tỷ lệ hao hụt TB', value: loss.toFixed(1), unit: '%', accent: 'amber' });
-                        }
-                        // ── Default: hiển thị task stats chung ──
-                        else {
-                          const totalTasks = stageTasks.length;
-                          const completedTasks = stageTasks.filter(t => ['Completed', 'Approved'].includes(t.status)).length;
-                          if (totalTasks > 0) {
-                            stats.push({ icon: '📋', label: 'Tác vụ', kh: totalTasks, tt: completedTasks, accent: 'slate' });
-                          }
-                          const reportCount = allStageReports.length;
-                          if (reportCount > 0) {
-                            stats.push({ icon: '📝', label: 'Báo cáo', value: reportCount, unit: 'báo cáo', accent: 'violet' });
-                          }
-                        }
-
-                        if (stats.length === 0) {
-                          return <p className="text-xs text-slate-400 italic">Chưa có dữ liệu để gợi ý</p>;
-                        }
-
-                        const accentBg = { blue: 'bg-blue-50', cyan: 'bg-cyan-50', emerald: 'bg-emerald-50', amber: 'bg-amber-50', yellow: 'bg-yellow-50', violet: 'bg-violet-50', slate: 'bg-slate-50', teal: 'bg-teal-50' };
-                        const accentText = { blue: 'text-blue-700', cyan: 'text-cyan-700', emerald: 'text-emerald-700', amber: 'text-amber-700', yellow: 'text-yellow-700', slate: 'text-slate-700', violet: 'text-violet-700', teal: 'text-teal-700' };
-
-                        return (
-                          <div className="space-y-2">
-                            {stats.map((item, i) => (
-                              <div key={i} className={`flex items-center justify-between p-2 rounded-lg ${accentBg[item.accent] || accentBg.slate}`}>
-                                <span className={`text-xs font-semibold flex items-center gap-1.5 ${accentText[item.accent] || accentText.slate}`}>
-                                  <span>{item.icon}</span>
-                                  <span>{item.label}</span>
-                                </span>
-                                <span className={`text-sm font-bold ${accentText[item.accent] || accentText.slate}`}>
-                                  {item.value != null ? (
-                                    <>{item.value?.toLocaleString?.('vi-VN') ?? item.value}{item.unit && <span className="text-xs font-normal ml-0.5 opacity-70">{item.unit}</span>}</>
-                                  ) : (
-                                    <>{item.kh > 0 ? `${item.kh}` : '—'}<span className="text-slate-400 mx-1">/</span>{item.tt}</>
-                                  )}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                    <div className="bg-white rounded-xl p-4 border border-slate-100">
-                      <p className="text-xs font-bold uppercase text-slate-500 mb-3">📐 Đo lường ({stageMeasurements.length})</p>
-                      {stageMeasurements.length === 0 ? <p className="text-xs text-slate-400 italic">Chưa có chỉ số</p> : (
-                        <div className="grid grid-cols-2 gap-2">
-                          {stageMeasurements.slice(0, 4).map(m => (
-                            <div key={m.id} className="bg-slate-50 rounded-lg p-2">
-                              <p className="text-[10px] font-bold text-slate-600 uppercase truncate">{m.metricName}</p>
-                              <p className="text-sm font-mono font-bold text-slate-900">{m.targetValue ?? '—'}{m.unit}</p>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
                   {/* Result Editor */}
                   <div className="bg-white rounded-xl p-5 border border-slate-100">
                     <div className="flex items-center justify-between mb-4">
@@ -1649,27 +1434,67 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                           if (hints.length === 0) return null;
                           return (
                             <div className="bg-gradient-to-r from-amber-50 to-yellow-50 rounded-xl p-4 border border-amber-200">
-                              <div className="flex items-center justify-between mb-2">
-                                <p className="text-xs font-bold text-amber-800 flex items-center gap-1.5">💡 Gợi ý tự động từ dữ liệu</p>
+                              <div className="flex items-center justify-between mb-3">
+                                <p className="text-xs font-bold text-amber-800 flex items-center gap-1.5">
+                                  💡 Gợi ý tự động từ dữ liệu
+                                  <span className="text-[10px] font-normal text-amber-600 italic">
+                                    ({hints.length} chỉ số)
+                                  </span>
+                                </p>
                                 <span className="text-[10px] text-amber-600 italic">Click để điền vào form</span>
                               </div>
                               <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
-                                {hints.map((h, i) => (
-                                  <button key={i} onClick={() => {
-                                    if (h.key) {
-                                      if (editData._isPerGroup) {
-                                        // Điền vào tất cả các nhóm
-                                        groups.forEach(g => updateField(h.key, String(h.numericValue ?? ''), g.id));
-                                      } else {
-                                        updateField(h.key, String(h.numericValue ?? ''));
-                                      }
-                                      showToast(`Đã điền ${h.label}`, 'success');
+                                {hints.map((h, i) => {
+                                  // 🆕 Tính % so với target để highlight
+                                  let targetColor = 'border-amber-100';
+                                  let targetBadge = null;
+                                  if (h.hasTarget && h.numericValue !== undefined) {
+                                    const pct = (h.numericValue / h.target) * 100;
+                                    if (pct >= 100) {
+                                      targetColor = 'border-emerald-300';
+                                      targetBadge = <span className="text-[9px] font-bold text-emerald-700">✓ Đạt</span>;
+                                    } else if (pct >= 80) {
+                                      targetColor = 'border-amber-300';
+                                      targetBadge = <span className="text-[9px] font-bold text-amber-700">≈ Gần</span>;
+                                    } else {
+                                      targetColor = 'border-rose-300';
+                                      targetBadge = <span className="text-[9px] font-bold text-rose-700">✗ Dưới</span>;
                                     }
-                                  }} className="bg-white rounded-lg p-2 border border-amber-100 hover:border-amber-300 hover:shadow-sm transition-all text-left">
-                                    <p className="text-[10px] text-slate-500 uppercase">{h.icon} {h.label}</p>
-                                    <p className="text-sm font-bold text-amber-700">{h.value}{h.source && <span className="text-[10px] text-slate-500 ml-1">({h.source})</span>}</p>
-                                  </button>
-                                ))}
+                                  }
+                                  return (
+                                    <button key={i} onClick={() => {
+                                      if (h.key) {
+                                        if (editData._isPerGroup || h.groupId) {
+                                          // Điền vào nhóm cụ thể
+                                          const targetGroupId = h.groupId && h.groupId !== '_unassigned'
+                                            ? h.groupId
+                                            : (groups[0]?.id);
+                                          if (targetGroupId) {
+                                            updateField(h.key, String(h.numericValue ?? ''), targetGroupId);
+                                          }
+                                        } else {
+                                          updateField(h.key, String(h.numericValue ?? ''));
+                                        }
+                                        showToast(`Đã điền ${h.label}`, 'success');
+                                      }
+                                    }} className={`bg-white rounded-lg p-2 border-2 ${targetColor} hover:shadow-md transition-all text-left`}>
+                                      <div className="flex items-start justify-between gap-1">
+                                        <p className="text-[10px] text-slate-500 uppercase flex items-center gap-1 flex-1 min-w-0">
+                                          <span>{h.icon}</span>
+                                          <span className="truncate" title={h.label}>{h.label}</span>
+                                        </p>
+                                        {targetBadge}
+                                      </div>
+                                      <p className={`text-sm font-bold mt-0.5 ${h.hasTarget ? 'text-amber-700' : 'text-slate-700'}`}>
+                                        {h.value}
+                                      </p>
+                                      {h.hasTarget && (
+                                        <p className="text-[9px] text-slate-500 mt-0.5">🎯 Mục tiêu: <span className="font-bold">{h.target}{h.unit || ''}</span></p>
+                                      )}
+                                      {h.source && <p className="text-[9px] text-slate-400 mt-0.5">{h.source}</p>}
+                                    </button>
+                                  );
+                                })}
                               </div>
                             </div>
                           );

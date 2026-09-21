@@ -2,11 +2,12 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useToast } from '../../context/ToastContext';
 import { authLogoutSync } from '../../utils/authLogout';
-import { tasksApi, taskReportsApi, taskImagesApi, measurementRecordsApi } from '../../api/sharedTaskApi';
+import { tasksApi, taskReportsApi, taskImagesApi, taskImagesAiApi, measurementRecordsApi, getAiProvider } from '../../api/sharedTaskApi';
 import { measurementDefinitionsApi, batchesApi } from '../../api/experimentApi';
 import TaskReportForm, { buildReportPayload } from '../../components/tasks/TaskReportForm';
 import ImageUploader from '../../components/tasks/ImageUploader';
 import BulkMeasurementForm from '../../components/technician/BulkMeasurementForm';
+import AiResultModal from '../../components/tasks/AiResultModal';
 import NotificationBell from '../../components/notifications/NotificationBell';
 import {
   extractMeasurementsFromReport, buildMeasurementPayloads, createMeasurementsFromTaskReport,
@@ -336,6 +337,8 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
   const [imagesLoading, setImagesLoading] = useState(false);
   // MeasurementDefinitions của experiment hiện tại
   const [definitions, setDefinitions] = useState([]);
+  // 🆕 AI scan modal
+  const [aiDetailImage, setAiDetailImage] = useState(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -845,18 +848,42 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
 
                       {imageList.length > 0 && (
                         <div className="flex flex-wrap gap-1.5 mt-2">
-                          {imageList.map((img, i) => (
-                            <a key={img.id || i} href={img.imageUrl || img.url} target="_blank" rel="noopener noreferrer"
-                              className="block w-12 h-12 rounded-md overflow-hidden border border-green-200 hover:opacity-80 relative group"
-                              title={img.caption || ''}>
-                              <img src={img.imageUrl || img.url} alt={img.caption || `img-${i}`} className="w-full h-full object-cover" />
-                              {img.caption && (
-                                <span className="absolute bottom-0 left-0 right-0 px-1 py-0.5 bg-black/70 text-white text-[8px] truncate opacity-0 group-hover:opacity-100">
-                                  {img.caption}
-                                </span>
-                              )}
-                            </a>
-                          ))}
+                          {imageList.map((img, i) => {
+                            const hasAiResult = img.aiStatus === 'Completed' || img.aiPredictedLabel || img.aiAnalysis;
+                            const hasAiPending = img.aiStatus === 'Pending';
+                            const hasAnyAi = img.aiProvider || hasAiResult || hasAiPending;
+                            return (
+                              <button key={img.id || i}
+                                onClick={() => hasAnyAi ? setAiDetailImage(img) : window.open(img.imageUrl || img.url, '_blank')}
+                                className="block w-12 h-12 rounded-md overflow-hidden border border-green-200 hover:opacity-80 relative group"
+                                title={img.caption || img.aiPredictedLabel || 'Xem ảnh'}>
+                                <img src={img.imageUrl || img.url} alt={img.caption || `img-${i}`} className="w-full h-full object-cover" />
+                                {hasAiPending && (
+                                  <div className="absolute inset-0 bg-amber-500/70 flex items-center justify-center">
+                                    <span className="text-white text-[10px] font-bold animate-pulse">⟳</span>
+                                  </div>
+                                )}
+                                {hasAiResult && (
+                                  <div className="absolute top-0.5 right-0.5 w-3.5 h-3.5 bg-emerald-500 rounded-full flex items-center justify-center shadow"
+                                    title={`AI: ${img.aiPredictedLabel || img.aiStatus}`}>
+                                    <span className="text-white text-[7px]">✓</span>
+                                  </div>
+                                )}
+                                {img.aiProvider && !hasAiResult && (
+                                  <div className="absolute bottom-0 left-0 right-0 bg-black/70 px-0.5 py-0.5">
+                                    <span className="text-white text-[7px] font-bold leading-tight block truncate">
+                                      🤖 {img.aiPredictedLabel || img.aiProvider.split('Onnx')[0]}
+                                    </span>
+                                  </div>
+                                )}
+                                {img.caption && !hasAnyAi && (
+                                  <span className="absolute bottom-0 left-0 right-0 px-1 py-0.5 bg-black/70 text-white text-[8px] truncate opacity-0 group-hover:opacity-100">
+                                    {img.caption}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
                         </div>
                       )}
                       {imagesLoading && imageList.length === 0 && (
@@ -889,8 +916,6 @@ const TaskDetailModal = ({ task, onClose, onUpdated }) => {
           )}
         </div>
       </div>
-      {/* Footer action NGOÀI form — đã bỏ, do form đã có 2 nút Đóng + Hoàn Thành & Gửi Báo Cáo
-          bên trong (xem tab "Báo Cáo" phía trên). Khi ở các tab khác, dùng nút X ở header để đóng. */}
     </div>
     </Portal>
   );
@@ -907,6 +932,10 @@ const TechReportsTab = () => {
   // reportId → List<TaskImage> fetch từ API /task-images/task/{reportId}
   const [reportImagesByReportId, setReportImagesByReportId] = useState({});
   const [imagesLoading, setImagesLoading] = useState(false);
+  // 🆕 AI scan modal
+  const [aiDetailImage, setAiDetailImage] = useState(null);
+  // 🆕 MeasurementDefinitions để resolve metric names
+  const [definitions, setDefinitions] = useState([]);
 
   useEffect(() => {
     const load = async () => {
@@ -944,6 +973,22 @@ const TechReportsTab = () => {
     };
     load();
   }, []);
+
+  /**
+   * 🆕 Load MeasurementDefinitions của tất cả experiment liên quan để resolve metric names.
+   */
+  useEffect(() => {
+    const expIds = [...new Set(tasks.map(t => t.experimentId).filter(Boolean))];
+    if (expIds.length === 0) return;
+    let cancelled = false;
+    Promise.all(expIds.map(id => measurementDefinitionsApi.getByExperiment(id).catch(() => [])))
+      .then(results => {
+        if (cancelled) return;
+        const all = results.flat();
+        setDefinitions(Array.isArray(all) ? all : []);
+      });
+    return () => { cancelled = true; };
+  }, [tasks]);
 
   /**
    * Load ảnh từ API GET /task-images/task/{reportId} cho các report.
@@ -1000,15 +1045,33 @@ const TechReportsTab = () => {
     [reports, selectedTask]
   );
 
-  // Resolve metric label - trả về key nguyên bản nếu không match 'def_' pattern.
-  // TechReportsTab không load definitions riêng nên dùng bản đơn giản này.
+  // 🆕 definitionMap để resolve metric names từ MeasurementDefinitions
+  const definitionMap = useMemo(() => {
+    const m = new Map();
+    for (const d of definitions) m.set(d.id, d);
+    return m;
+  }, [definitions]);
+
+  // 🆕 Resolve metric label — hỗ trợ cả 'def_<uuid>' và metricName trực tiếp từ report
   const resolveMetricLabel = (key) => {
     if (typeof key !== 'string') return String(key);
     if (key.startsWith('def_')) {
       const defId = key.slice(4);
+      const def = definitionMap.get(defId);
+      if (def?.metricName) return def.unit ? `${def.metricName} (${def.unit})` : def.metricName;
       return `Chỉ số #${defId.slice(0, 8)}`;
     }
     return key;
+  };
+
+  // 🆕 Resolve metric label từ report.measurements (BE trả metricName trực tiếp)
+  const resolveFromMeasurement = (m) => {
+    if (m?.metricName) return m.unit ? `${m.metricName} (${m.unit})` : m.metricName;
+    if (m?.definitionId) {
+      const def = definitionMap.get(m.definitionId);
+      if (def?.metricName) return def.unit ? `${def.metricName} (${def.unit})` : def.metricName;
+    }
+    return m?.metricName || m?.definitionId?.slice(0, 8) || '—';
   };
 
   return (
@@ -1076,18 +1139,42 @@ const TechReportsTab = () => {
             {/* Ảnh từ API /task-images/task/{reportId} */}
             {imageList.length > 0 && (
               <div className="flex flex-wrap gap-2">
-                {imageList.map((img, i) => (
-                  <a key={img.id || i} href={img.imageUrl || img.url} target="_blank" rel="noopener noreferrer"
-                    className="block w-16 h-16 rounded-lg overflow-hidden border border-slate-200 hover:opacity-80 relative group"
-                    title={img.caption || ''}>
-                    <img src={img.imageUrl || img.url} alt={img.caption || `img-${i}`} className="w-full h-full object-cover" />
-                    {img.caption && (
-                      <span className="absolute bottom-0 left-0 right-0 px-1 py-0.5 bg-black/70 text-white text-[9px] truncate opacity-0 group-hover:opacity-100">
-                        {img.caption}
-                      </span>
-                    )}
-                  </a>
-                ))}
+                {imageList.map((img, i) => {
+                  const hasAiResult = img.aiStatus === 'Completed' || img.aiPredictedLabel || img.aiAnalysis;
+                  const hasAiPending = img.aiStatus === 'Pending';
+                  const hasAnyAi = img.aiProvider || hasAiResult || hasAiPending;
+                  return (
+                    <button key={img.id || i}
+                      onClick={() => hasAnyAi ? setAiDetailImage(img) : window.open(img.imageUrl || img.url, '_blank')}
+                      className="block w-16 h-16 rounded-lg overflow-hidden border border-slate-200 hover:opacity-80 relative group"
+                      title={img.caption || img.aiPredictedLabel || 'Xem ảnh'}>
+                      <img src={img.imageUrl || img.url} alt={img.caption || `img-${i}`} className="w-full h-full object-cover" />
+                      {hasAiPending && (
+                        <div className="absolute inset-0 bg-amber-500/70 flex items-center justify-center">
+                          <span className="text-white text-[10px] font-bold animate-pulse">⟳</span>
+                        </div>
+                      )}
+                      {hasAiResult && (
+                        <div className="absolute top-0.5 right-0.5 w-3.5 h-3.5 bg-emerald-500 rounded-full flex items-center justify-center shadow"
+                          title={`AI: ${img.aiPredictedLabel || img.aiStatus}`}>
+                          <span className="text-white text-[7px]">✓</span>
+                        </div>
+                      )}
+                      {img.aiProvider && !hasAiResult && (
+                        <div className="absolute bottom-0 left-0 right-0 bg-black/70 px-0.5 py-0.5">
+                          <span className="text-white text-[7px] font-bold leading-tight block truncate">
+                            🤖 {img.aiPredictedLabel || img.aiProvider.split('Onnx')[0]}
+                          </span>
+                        </div>
+                      )}
+                      {img.caption && !hasAnyAi && (
+                        <span className="absolute bottom-0 left-0 right-0 px-1 py-0.5 bg-black/70 text-white text-[9px] truncate opacity-0 group-hover:opacity-100">
+                          {img.caption}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )}
             {imagesLoading && imageList.length === 0 && (
@@ -1096,6 +1183,35 @@ const TechReportsTab = () => {
           </div>
           );
         })
+      )}
+
+      {/* 🆕 Modal chi tiết kết quả AI */}
+      {aiDetailImage && (
+        <AiResultModal
+          image={aiDetailImage}
+          taskReportId={aiDetailImage.taskReportId || aiDetailImage.reportId}
+          onClose={() => setAiDetailImage(null)}
+          onImageUpdated={(updated) => {
+            const rid = updated.taskReportId || updated.reportId;
+            if (rid) {
+              setReportImagesByReportId(prev => ({
+                ...prev,
+                [rid]: (prev[rid] || []).map(img =>
+                  (img.id || img.plantImageId) === (updated.id || updated.plantImageId) ? updated : img
+                ),
+              }));
+            }
+          }}
+          onRetry={async (imageId) => {
+            try {
+              await taskImagesAiApi.retry(imageId);
+              showToast('Đã gửi yêu cầu retry!', 'success');
+            } catch (e) {
+              showToast('Không thể retry: ' + (e?.message || 'Lỗi'), 'error');
+              throw e;
+            }
+          }}
+        />
       )}
     </div>
   );
