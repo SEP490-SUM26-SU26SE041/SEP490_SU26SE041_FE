@@ -1905,14 +1905,28 @@ const StudentReportsTab = () => {
               {aiDetailImage && (
                 <AiResultModal
                   image={aiDetailImage}
+                  taskReportId={aiDetailImage.taskReportId || selectedReport?.id}
                   onClose={() => setAiDetailImage(null)}
+                  onImageUpdated={(updated) => {
+                    // Cập nhật cache reportImagesByReportId
+                    const rid = updated.taskReportId || selectedReport?.id;
+                    if (rid) {
+                      setReportImagesByReportId(prev => ({
+                        ...prev,
+                        [rid]: (prev[rid] || []).map(img =>
+                          (img.id || img.plantImageId) === (updated.id || updated.plantImageId) ? updated : img
+                        ),
+                      }));
+                    }
+                  }}
                   onRetry={async (imageId) => {
                     try {
                       await taskImagesAiApi.retry(imageId);
-                      showToast('Đã gửi yêu cầu retry AI scan! Vui lòng đợi kết quả.', 'success');
-                      onClose();
+                      showToast('Đã gửi yêu cầu retry AI scan! Modal sẽ tự reload kết quả.', 'success');
+                      // KHÔNG onClose — để modal tự polling
                     } catch (e) {
                       showToast('Không thể retry: ' + (e?.message || 'Lỗi không xác định'), 'error');
+                      throw e; // re-throw để modal hiển thị error
                     }
                   }}
                 />
