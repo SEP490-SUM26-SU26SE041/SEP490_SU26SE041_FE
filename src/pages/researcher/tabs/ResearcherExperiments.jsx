@@ -4047,14 +4047,27 @@ const BatchesTab = ({ batches = [], bedAssignments = [], groups = [], form, setF
               const bedDisplay = b.bedCode || b.bedName || ba?.bedCode || ba?.bedName || '—';
               const areaFarm = [b.areaName, b.farmName].filter(Boolean).join(' / ') || ba ? [ba?.areaName, ba?.farmName].filter(Boolean).join(' / ') : '';
               const isIncomplete = !b.experimentBedAssignmentId || !b.groupId || !b.plantingDate;
+              // 🆕 Chi tiết field nào thiếu để hiển thị tooltip rõ ràng
+              const missingFields = [
+                !b.experimentBedAssignmentId && 'Luống',
+                !b.groupId && 'Nhóm',
+                !b.plantingDate && 'Ngày trồng',
+                !b.plantCount && 'Số cây dự kiến'
+              ].filter(Boolean);
+              const missingHint = missingFields.length > 0 ? `Thiếu: ${missingFields.join(', ')}` : '';
               return (
                 <tr key={b.id} className={`hover:bg-surface-container/20 ${isIncomplete ? 'bg-amber-50/40' : ''}`}>
                   <td className="px-4 py-3 font-bold font-mono">
                     {b.batchCode || '—'}
                     {isIncomplete && (
-                      <span className="ml-1.5 inline-block px-1.5 py-0.5 text-[9px] font-bold bg-amber-200 text-amber-800 rounded-full" title="Thiếu thông tin — bấm ✏️ để bổ sung">
+                      <button
+                        type="button"
+                        onClick={() => onEdit?.(b)}
+                        title={missingHint + ' — bấm để bổ sung'}
+                        className="ml-1.5 inline-block px-1.5 py-0.5 text-[9px] font-bold bg-amber-200 text-amber-800 rounded-full hover:bg-amber-300 hover:ring-2 hover:ring-amber-400 transition-all"
+                      >
                         ⚠️ Thiếu
-                      </span>
+                      </button>
                     )}
                   </td>
                   <td className="px-4 py-3">
@@ -4067,7 +4080,20 @@ const BatchesTab = ({ batches = [], bedAssignments = [], groups = [], form, setF
                   </td>
                   <td className="px-4 py-3 font-mono">{b.plantingDate || '—'}</td>
                   <td className="px-4 py-3 font-mono">{b.expectedHarvestDate || '—'}</td>
-                  <td className="px-4 py-3 font-bold">{b.plantCount || '—'}</td>
+                  <td className="px-4 py-3 font-bold">
+                    {b.plantCount ? (
+                      <span className="text-emerald-700">{b.plantCount} cây</span>
+                    ) : (
+                      <span
+                        className="inline-flex items-center gap-1 text-amber-600 italic cursor-pointer hover:text-amber-700 hover:underline"
+                        onClick={() => onEdit?.(b)}
+                        title="Bấm để nhập số cây dự kiến"
+                      >
+                        <span>✏️</span>
+                        <span>Chưa có</span>
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">{renderActualCountCell(b)}</td>
                   <td className="px-4 py-3 text-on-surface-variant max-w-[160px]">
                     <div className="truncate" title={b.notes || ''}>{b.notes || '—'}</div>
@@ -4076,8 +4102,12 @@ const BatchesTab = ({ batches = [], bedAssignments = [], groups = [], form, setF
                     <div className="flex justify-end gap-1">
                       {onEdit && (
                         <button onClick={() => onEdit(b)} title="Chỉnh sửa thông tin lô"
-                          className="px-2 py-1 text-amber-600 hover:bg-amber-50 rounded-lg text-xs font-bold">
-                          ✏️ Sửa
+                          className={`px-2 py-1 rounded-lg text-xs font-bold flex items-center gap-1 ${
+                            isIncomplete
+                              ? 'text-white bg-amber-500 hover:bg-amber-600 shadow-sm animate-pulse-once'
+                              : 'text-amber-600 hover:bg-amber-50'
+                          }`}>
+                          ✏️ {isIncomplete ? 'Bổ sung' : 'Sửa'}
                         </button>
                       )}
                       <button onClick={() => onDelete(b.id)} className="px-2 py-1 text-rose-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg text-xs font-bold">✕</button>
