@@ -1,6 +1,6 @@
 // ── Shared AiResultModal Component ──────────────────────────────────────────────
-import React from 'react';
-import { getAiProvider } from '../../api/sharedTaskApi';
+import React, { useEffect, useRef, useState } from 'react';
+import { getAiProvider, taskImagesApi } from '../../api/sharedTaskApi';
 
 const fmtPct = (v) => {
   if (v == null) return '—';
@@ -48,9 +48,96 @@ const SEVERITY_STYLE = {
  *  - image: TaskImage từ BE
  *  - onClose: () => void
  *  - onRetry: (imageId) => Promise<void> — optional
+ *  - taskReportId: id của TaskReport — dùng để poll lại detail sau retry
+ *  - onImageUpdated: (updatedImage) => void — callback khi poll có data mới (để parent cập nhật list)
  */
-const AiResultModal = ({ image, onClose, onRetry }) => {
-  if (!image) return null;
+const AiResultModal = ({ image: imageProp, onClose, onRetry, taskReportId, onImageUpdated }) => {
+  if (!imageProp) return null;
+
+  // ── Local state: polling sau retry ────────────────────────────────────────
+  const [image, setImage] = useState(imageProp);
+  const [polling, setPolling] = useState(false);
+  const [pollError, setPollError] = useState(null);
+  const [pollElapsed, setPollElapsed] = useState(0);
+  const pollRef = useRef(null);
+  const elapsedRef = useRef(null);
+  const onImageUpdatedRef = useRef(onImageUpdated);
+
+  // Sync prop image khi parent truyền image mới (lần đầu hoặc sau khi parent fetch lại)
+  useEffect(() => { setImage(imageProp); }, [imageProp]);
+
+  // Giữ ref mới nhất của callback để dùng trong poll interval
+  useEffect(() => { onImageUpdatedRef.current = onImageUpdated; }, [onImageUpdated]);
+
+  // Cleanup interval khi unmount
+  useEffect(() => () => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (elapsedRef.current) clearInterval(elapsedRef.current);
+  }, []);
+
+  // ── startPolling: gọi API mỗi 5s, stop khi Completed/Failed hoặc timeout 2 phút ──
+  const startPolling = (imageId) => {
+    if (!taskReportId) {
+      console.warn('[AiResultModal] startPolling: thiếu taskReportId prop');
+      setPolling(false);
+      return;
+    }
+    const POLL_MS = 5000;
+    const TIMEOUT_MS = 120000;
+    const startedAt = Date.now();
+
+    // Stop polling cũ nếu có
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (elapsedRef.current) clearInterval(elapsedRef.current);
+
+    const tick = async () => {
+      try {
+        const list = await taskImagesApi.getByTaskReport(taskReportId);
+        const arr = Array.isArray(list) ? list : (Array.isArray(list?.data) ? list.data : []);
+        const updated = arr.find(x => (x.id || x.plantImageId) === imageId);
+        if (!updated) return;
+        const st = String(updated.aiStatus || updated.status || '').toLowerCase();
+        const ai2 = updated.aiAnalysis || updated.ai_analysis;
+        const fs = ai2?.finalStatus || updated.finalStatus;
+
+        // Cập nhật local image ngay để UI mượt
+        setImage(updated);
+
+        // Completed? → stop
+        const isDone =
+          (st === 'completed' || st === 'success' || st === 'failed' || st === 'error') ||
+          (fs && String(fs).toLowerCase() !== 'pending');
+        if (isDone) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          if (elapsedRef.current) clearInterval(elapsedRef.current);
+          pollRef.current = null;
+          elapsedRef.current = null;
+          setPolling(false);
+          // Báo parent cập nhật list state
+          onImageUpdatedRef.current?.(updated);
+        }
+      } catch (err) {
+        console.warn('[AiResultModal] poll error:', err?.message);
+        setPollError(err?.message || 'Lỗi khi poll');
+        // KHÔNG stop polling — tiếp tục thử lần sau
+      }
+
+      // Timeout check
+      if (Date.now() - startedAt > TIMEOUT_MS) {
+        if (pollRef.current) clearInterval(pollRef.current);
+        if (elapsedRef.current) clearInterval(elapsedRef.current);
+        pollRef.current = null;
+        elapsedRef.current = null;
+        setPolling(false);
+        setPollError('Quá thời gian chờ (2 phút). Vui lòng thử lại.');
+      }
+    };
+
+    // Gọi ngay lần đầu + interval
+    tick();
+    pollRef.current = setInterval(tick, POLL_MS);
+    elapsedRef.current = setInterval(() => setPollElapsed(s => s + 1), 1000);
+  };
 
   // ── Extract fields từ BE response ──────────────────────────────────────────
   const ai = image.aiAnalysis || image.ai_analysis || null;
@@ -476,11 +563,49 @@ const AiResultModal = ({ image, onClose, onRetry }) => {
               </p>
               <button
                 type="button"
-                onClick={() => onRetry?.(image.id || plantImageId)}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold shadow flex items-center gap-1.5 transition"
+                disabled={polling}
+                onClick={() => {
+                  if (!onRetry) return;
+                  const imageId = image.id || plantImageId;
+                  setPollError(null);
+                  setPolling(true);
+                  setPollElapsed(0);
+                  Promise.resolve(onRetry(imageId))
+                    .then(() => startPolling(imageId))
+                    .catch((err) => {
+                      console.error('[AiResultModal] retry error:', err);
+                      setPollError(err?.message || 'Retry thất bại');
+                      setPolling(false);
+                    });
+                }}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:bg-rose-400 text-white rounded-lg text-xs font-bold shadow flex items-center gap-1.5 transition"
               >
-                <span>⟳</span> Retry AI Scan
+                <span className={polling ? 'animate-spin' : ''}>⟳</span> {polling ? 'Đang retry...' : 'Retry AI Scan'}
               </button>
+            </div>
+          )}
+
+          {/* Polling indicator */}
+          {polling && (
+            <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className="inline-block w-3 h-3 border-2 border-sky-500 border-t-transparent rounded-full animate-spin"></span>
+                <p className="text-[11px] text-sky-700 font-bold">
+                  Đang chờ AI xử lý... ({pollElapsed}s / 120s)
+                </p>
+              </div>
+              <div className="w-full bg-sky-100 rounded-full h-1.5 overflow-hidden">
+                <div
+                  className="h-full bg-sky-500 transition-all duration-1000"
+                  style={{ width: `${Math.min(100, (pollElapsed / 120) * 100)}%` }}
+                />
+              </div>
+              <p className="text-[10px] text-sky-600">
+                Tự động reload kết quả mỗi 5 giây. Bạn có thể đóng modal và quay lại sau.
+              </p>
+              {pollError && (
+                <p className="text-[10px] text-rose-600 font-semibold">⚠ {pollError}</p>
+              )}
             </div>
           )}
 

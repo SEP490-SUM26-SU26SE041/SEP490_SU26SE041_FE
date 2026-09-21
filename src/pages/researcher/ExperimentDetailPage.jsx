@@ -2929,15 +2929,28 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
       {aiModalImage && (
         <AiResultModal
           image={aiModalImage}
+          taskReportId={aiModalImage.taskReportId}
           onClose={() => setAiModalImage(null)}
+          onImageUpdated={(updated) => {
+            const rid = updated.taskReportId || aiModalImage.taskReportId;
+            if (rid) {
+              setReportImages(prev => ({
+                ...prev,
+                [rid]: (prev[rid] || []).map(img =>
+                  (img.id || img.plantImageId) === (updated.id || updated.plantImageId) ? updated : img
+                ),
+              }));
+            }
+          }}
           onRetry={async (imageId) => {
             try {
               const { taskImagesAiApi } = await import('../../api/sharedTaskApi');
               await taskImagesAiApi.retry(imageId);
-              showToast?.('Đã gửi retry AI scan!', 'success');
-              setAiModalImage(null);
+              showToast?.('Đã gửi retry AI scan! Modal sẽ tự reload kết quả.', 'success');
+              // KHÔNG đóng modal — để polling cập nhật
             } catch (e) {
               showToast?.('Không thể retry: ' + (e?.message || 'Lỗi'), 'error');
+              throw e;
             }
           }}
         />
