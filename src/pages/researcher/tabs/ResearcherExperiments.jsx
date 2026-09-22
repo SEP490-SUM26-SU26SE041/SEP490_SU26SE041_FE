@@ -1447,7 +1447,8 @@ const ExperimentDetailModal = ({ experiment, allSkills: parentAllSkills = [], on
 
       // Chỉ fetch workload cho các user nằm trong match list
       try {
-        const countRes = await tasksCountApi.countByUser(dateParam ? { date: dateParam } : {});
+        // 🆕 Gọi 2 API riêng cho Student và Technician (BE đôi khi không filter đúng khi gộp role)
+        const countRes = await tasksCountApi.countByStudentsAndTechnicians({ date: dateParam });
         const userMap = {};
         (countRes?.users || []).forEach(u => {
           userMap[u.userId] = {
@@ -1493,7 +1494,8 @@ const ExperimentDetailModal = ({ experiment, allSkills: parentAllSkills = [], on
     try {
       const [matches, countRes] = await Promise.allSettled([
         tasksApi.getSkillMatches(task.id),
-        tasksCountApi.countByUser({}).catch(() => ({ users: [] }))
+        // 🆕 Tách 2 call để filter role chính xác (gộp Student,Technician → BE có thể bỏ sót task giao cho Technician)
+        tasksCountApi.countByStudentsAndTechnicians({}).catch(() => ({ users: [] }))
       ]);
       const matchList = matches.status === 'fulfilled' ? (Array.isArray(matches.value) ? matches.value : []) : [];
       const userMap = {};

@@ -186,6 +186,12 @@ const ExperimentDetailPage = ({ experimentId }) => {
   const [availableBeds, setAvailableBeds] = useState([]);
   const [areas, setAreas] = useState([]);
   const [taskReportsByBatch, setTaskReportsByBatch] = useState({});
+  // ── Experiment Completion ────────────────────────────────────────────────
+  const [finalReport, setFinalReport] = useState(null);      // báo cáo cuối cùng đã tạo
+  const [loadingFinalReport, setLoadingFinalReport] = useState(false);
+  const [completing, setCompleting] = useState(false);         // đang gọi tạo final report
+  const [suspending, setSuspending] = useState(false);         // đang gọi suspend
+  const [confirmModal, setConfirmModal] = useState(null);     // { title, message, onConfirm, confirmText, danger }
 
   // UI state
   const [activeSection, setActiveSection] = useState('overview');
@@ -306,6 +312,8 @@ const ExperimentDetailPage = ({ experimentId }) => {
         batchList.forEach((b, i) => { map[b.id] = reports[i].status === 'fulfilled' ? (Array.isArray(reports[i].value) ? reports[i].value : []) : []; });
         setTaskReportsByBatch(map);
       }
+      // ── Load final report nếu experiment đã Completed ──
+      try { await fetchFinalReport(); } catch { /* ignore */ }
     } catch (err) {
       console.error('Load error:', err);
       setLoadError(err.message || 'Không thể tải chi tiết thí nghiệm');
@@ -558,6 +566,118 @@ const ExperimentDetailPage = ({ experimentId }) => {
     finally { setTaskSubmitting(false); }
   };
 
+  // ── Experiment Completion Handlers ──────────────────────────────────────────
+
+  // Lấy final report + reload experiment (cập nhật status sau khi hoàn thành)
+  const fetchFinalReport = async () => {
+    if (!experiment?.id) return;
+    setLoadingFinalReport(true);
+    try {
+      // Load report và experiment song song
+      const [report, updatedExp] = await Promise.all([
+        experimentsApi.getFinalReport(experiment.id).catch(() => null),
+        experimentsApi.getById(experiment.id).catch(() => null),
+      ]);
+      // Chuẩn hóa để hiển thị: ưu tiên resultData, fallback
+      const normalized = report
+        ? (report.resultData
+            ? { ...report.resultData, createdAt: report.createdAt || report.reportMeta?.createdAt, createdBy: report.createdBy || report.reportMeta?.createdBy }
+            : report)
+        : null;
+      setFinalReport(normalized);
+      if (updatedExp) setExperiment(updatedExp);
+    } catch {
+      setFinalReport(null);
+    } finally {
+      setLoadingFinalReport(false);
+    }
+  };
+
+  // Hoàn thành thực nghiệm: tạo final report → chuyển status → Completed
+  const handleCompleteExperiment = async () => {
+    if (!experiment?.id) return;
+    setCompleting(true);
+    try {
+      await experimentsApi.createFinalReport(experiment.id);
+      showToast('Đã hoàn thành thực nghiệm — báo cáo cuối cùng đã được tạo', 'success');
+      const updated = await experimentsApi.getById(experiment.id);
+      setExperiment(updated || null);
+      await fetchFinalReport();
+    } catch (err) {
+      showToast(err.message || 'Lỗi hoàn thành thực nghiệm', 'error');
+    } finally {
+      setCompleting(false);
+      setConfirmModal(null);
+    }
+  };
+
+  // Tạm dừng thực nghiệm: chuyển status → Paused
+  const handleSuspendExperiment = async () => {
+    if (!experiment?.id) return;
+    setSuspending(true);
+    try {
+      await experimentsApi.suspend(experiment.id);
+      showToast('Đã tạm dừng thực nghiệm', 'success');
+      const updated = await experimentsApi.getById(experiment.id);
+      setExperiment(updated || null);
+    } catch (err) {
+      showToast(err.message || 'Lỗi tạm dừng thực nghiệm', 'error');
+    } finally {
+      setSuspending(false);
+      setConfirmModal(null);
+    }
+  };
+
+  // Tiếp tục thực nghiệm: chuyển status → Active (từ Paused)
+  const handleResumeExperiment = async () => {
+    if (!experiment?.id) return;
+    setSuspending(true);
+    try {
+      await experimentsApi.resume(experiment.id);
+      showToast('Đã tiếp tục thực nghiệm', 'success');
+      const updated = await experimentsApi.getById(experiment.id);
+      setExperiment(updated || null);
+    } catch (err) {
+      showToast(err.message || 'Lỗi tiếp tục thực nghiệm', 'error');
+    } finally {
+      setSuspending(false);
+      setConfirmModal(null);
+    }
+  };
+
+  // Mở confirm dialog cho hoàn thành
+  const openCompleteConfirm = () => {
+    setConfirmModal({
+      title: 'Hoàn thành thực nghiệm',
+      message: 'Bạn có chắc muốn đánh dấu hoàn thành thực nghiệm này?\nHệ thống sẽ tạo báo cáo cuối cùng và chuyển trạng thái sang Hoàn thành. Hành động này không thể hoàn tác.',
+      confirmText: 'Hoàn thành',
+      danger: false,
+      onConfirm: handleCompleteExperiment,
+    });
+  };
+
+  // Mở confirm dialog cho tạm dừng
+  const openSuspendConfirm = () => {
+    setConfirmModal({
+      title: 'Tạm dừng thực nghiệm',
+      message: 'Bạn có thật sự muốn tạm dừng thực nghiệm này?\nTrạng thái sẽ chuyển sang Tạm dừng và không thể tạo thêm tác vụ mới.',
+      confirmText: 'Tạm dừng',
+      danger: true,
+      onConfirm: handleSuspendExperiment,
+    });
+  };
+
+  // Mở confirm dialog cho tiếp tục
+  const openResumeConfirm = () => {
+    setConfirmModal({
+      title: 'Tiếp tục thực nghiệm',
+      message: 'Bạn có muốn tiếp tục thực nghiệm này?\nTrạng thái sẽ chuyển sang Đang hoạt động.',
+      confirmText: 'Tiếp tục',
+      danger: false,
+      onConfirm: handleResumeExperiment,
+    });
+  };
+
   // ── Rename group ─────────────────────────────────────────────────────
   const handleRenameGroup = async (groupId, newName) => {
     try {
@@ -620,7 +740,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
     const el = contentRef.current;
     if (!el) return;
     const onScroll = () => {
-      const sections = ['overview', 'criteria', 'stages', 'hierarchy', 'tasks', 'schedules', 'measurements', 'batches', 'design', 'beds', 'stats'];
+      const sections = ['overview', 'criteria', 'stages', 'hierarchy', 'tasks', 'schedules', 'measurements', 'batches', 'design', 'beds', 'stats', 'completion'];
       let found = 'overview';
       for (const id of sections) {
         const sec = document.getElementById(`section-${id}`);
@@ -712,6 +832,48 @@ const ExperimentDetailPage = ({ experimentId }) => {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              {/* Nút Hoàn thành — xổ ra tab Báo Cáo + form */}
+              {experiment.status !== 'Completed' && experiment.status !== 'Cancelled' && (
+                <button
+                  onClick={() => scrollTo('completion')}
+                  disabled={completing || experiment.status === 'Draft'}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                  title={experiment.status === 'Draft' ? 'Cần kích hoạt thực nghiệm trước' : 'Hoàn thành thực nghiệm & tạo báo cáo cuối cùng'}
+                >
+                  {completing ? '⏳' : '✅'} Hoàn thành
+                </button>
+              )}
+
+              {/* Nút Tạm dừng / Tiếp tục */}
+              {experiment.status !== 'Completed' && experiment.status !== 'Cancelled' ? (
+                experiment.status === 'Paused' || experiment.status === 'Suspended' ? (
+                  <button
+                    onClick={openResumeConfirm}
+                    disabled={suspending}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
+                  >
+                    {suspending ? '⏳' : '▶️'} Tiếp tục
+                  </button>
+                ) : (
+                  <button
+                    onClick={openSuspendConfirm}
+                    disabled={suspending}
+                    className="px-4 py-2 border border-amber-500 text-amber-600 hover:bg-amber-50 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
+                  >
+                    {suspending ? '⏳' : '⏸️'} Tạm dừng
+                  </button>
+                )
+              ) : null}
+
+              {/* Nút Báo Cáo → cuộn xuống tab */}
+              <button
+                onClick={() => scrollTo('completion')}
+                className="px-4 py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-xl text-sm font-semibold flex items-center gap-2 transition-colors"
+                title="Xem báo cáo cuối cùng"
+              >
+                📑 Báo Cáo
+              </button>
+
               <button onClick={loadAll}
                 className="px-4 py-2 border border-slate-300 rounded-xl text-sm font-semibold hover:bg-slate-50 flex items-center gap-2 transition-colors"
                 title="Làm mới dữ liệu">
@@ -736,6 +898,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
                 { id: 'design', label: 'Thiết Kế', icon: '📐' },
                 { id: 'beds', label: 'Luống', icon: '🌱', badge: bedAssignments.length },
                 { id: 'stats', label: 'Thống Kê', icon: '📈' },
+                { id: 'completion', label: 'Báo Cáo', icon: '📑' },
               ].map(tab => (
                 <button key={tab.id} onClick={() => scrollTo(tab.id)}
                   className={`px-4 py-2 rounded-xl text-[12px] font-bold whitespace-nowrap transition-all shrink-0 flex items-center gap-1.5 ${
@@ -883,6 +1046,22 @@ const ExperimentDetailPage = ({ experimentId }) => {
               </SafeBoundary>
             </section>
 
+            {/* ── 12. Hoàn Thành Thực Nghiệm ─────────────────────────────── */}
+            <section id="section-completion">
+              <SafeBoundary>
+                <ExperimentCompletionPanel
+                  experiment={experiment}
+                  finalReport={finalReport}
+                  loadingFinalReport={loadingFinalReport}
+                  completing={completing}
+                  groups={groups}
+                  batches={batches}
+                  stages={stages}
+                  onRefresh={fetchFinalReport}
+                />
+              </SafeBoundary>
+            </section>
+
           </main>
         </div>
 
@@ -908,6 +1087,12 @@ const ExperimentDetailPage = ({ experimentId }) => {
           saving={editExpSaving}
           onClose={() => setEditExpModal({ open: false })}
           onSave={handleSaveExperimentInfo}
+        />
+
+        {/* Experiment Completion Confirm Dialog */}
+        <ExperimentConfirmDialog
+          confirm={confirmModal ? { ...confirmModal, loading: completing || suspending } : null}
+          onClose={() => setConfirmModal(null)}
         />
 
         {/* Create Task Modal */}
@@ -2367,55 +2552,42 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
           // Set users NGAY ở đây (không đợi skill matches)
           if (alive) setUsers(uniq);
 
-          // ── Gọi API count-by-user (BE tự đếm cho cả Student + Technician) ──
-          const todayStr = new Date().toISOString().slice(0, 10);
-          return tasksApi.countByUser({ roles: 'Student,Technician', date: todayStr })
+          // ── Gọi API count-by-user TÁCH RIÊNG theo role ──
+          // Lý do: trước đây gọi 1 lần với roles=Student,Technician
+          //   → BE đôi khi không filter đúng, làm task giao Technician ngày 29 không liệt kê được.
+          // → Gọi 2 API riêng để chắc chắn, có fallback Promise.allSettled (1 role fail → role kia vẫn hiển thị).
+          //
+          // ⚠️ QUAN TRỌNG: date phải là NGÀY GIAO TASK (task.dueDate), không phải hôm nay.
+          // Vì API /tasks/count-by-user trả workload theo ngày cụ thể:
+          //   - Nếu truyền today → trả số task deadline hôm nay (có thể = 0 nếu task giao ngày 29)
+          //   - Nếu truyền task.dueDate → trả đúng số task mà user đang phải làm trong ngày giao task.
+          // Khi researcher mở modal assign cho task ngày 29, cần biết workload NGÀY 29 để
+          // quyết định giao thêm có quá tải không.
+          const taskDueDate = task?.dueDate ? new Date(task.dueDate).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
+          return tasksCountApi.countByStudentsAndTechnicians({ date: taskDueDate })
             .then(countData => {
               if (!alive) return;
-              console.log('[AssignModal] count-by-user raw:', countData);
-              // countData có thể là:
-              //   - { users: [{ userId, totalTasks, pendingTasks, ... }], totalUsers, totalTasks }
-              //   - [{ userId, total, today, pending, inProgress, completed }]
-              //   - { items: [...] } / { data: [...] }
-              //   - { [userId]: { total, today, ... } } (object map)
-              const arr = Array.isArray(countData)
-                ? countData
-                : (Array.isArray(countData?.users) ? countData.users
-                  : (Array.isArray(countData?.items) ? countData.items
-                    : (Array.isArray(countData?.data) ? countData.data : null)));
+              console.log('[AssignModal] count-by-user (2 lần) merged:', countData, '— date used:', taskDueDate, '(task.dueDate:', task?.dueDate, ')');
+              // countData = { users, studentUsers, technicianUsers, totalTasks }
+              const arr = Array.isArray(countData?.users) ? countData.users : [];
               const wl = {};
               const num = (v) => Number(v || 0);
-              if (arr) {
-                arr.forEach(item => {
-                  const uid = item.userId || item.id || item.assignedToId;
-                  if (!uid) return;
-                  wl[uid] = {
-                    total: num(item.totalTasks ?? item.total),
-                    today: num(item.todayTasks ?? item.today ?? item.todayCount),
-                    pending: num(item.pendingTasks ?? item.pending ?? item.pendingCount),
-                    inProgress: num(item.inProgressTasks ?? item.inProgress ?? item.inProgressCount),
-                    completed: num(item.completedTasks ?? item.completed ?? item.completedCount),
-                    overdue: num(item.overdueTasks ?? item.overdue),
-                    cancelled: num(item.cancelledTasks ?? item.cancelled),
-                  };
-                });
-              } else if (countData && typeof countData === 'object') {
-                // Map object { userId: { total, today, ... } }
-                Object.entries(countData).forEach(([uid, v]) => {
-                  if (v && typeof v === 'object' && (v.totalTasks !== undefined || v.total !== undefined)) {
-                    wl[uid] = {
-                      total: num(v.totalTasks ?? v.total),
-                      today: num(v.todayTasks ?? v.today ?? v.todayCount),
-                      pending: num(v.pendingTasks ?? v.pending ?? v.pendingCount),
-                      inProgress: num(v.inProgressTasks ?? v.inProgress ?? v.inProgressCount),
-                      completed: num(v.completedTasks ?? v.completed ?? v.completedCount),
-                      overdue: num(v.overdueTasks ?? v.overdue),
-                      cancelled: num(v.cancelledTasks ?? v.cancelled),
-                    };
-                  }
-                });
-              }
-              console.log('[AssignModal] userWorkload mapped:', wl, '(total users:', Object.keys(wl).length, ')');
+              arr.forEach(item => {
+                const uid = item.userId || item.id || item.assignedToId;
+                if (!uid) return;
+                wl[uid] = {
+                  total: num(item.totalTasks ?? item.total),
+                  today: num(item.todayTasks ?? item.today ?? item.todayCount),
+                  pending: num(item.pendingTasks ?? item.pending ?? item.pendingCount),
+                  inProgress: num(item.inProgressTasks ?? item.inProgress ?? item.inProgressCount),
+                  completed: num(item.completedTasks ?? item.completed ?? item.completedCount),
+                  overdue: num(item.overdueTasks ?? item.overdue),
+                  cancelled: num(item.cancelledTasks ?? item.cancelled),
+                  // 🆕 Lưu roleName để debug khi filter sai
+                  roleName: item.roleName || item.role
+                };
+              });
+              console.log('[AssignModal] userWorkload mapped:', wl, '(total users:', Object.keys(wl).length, '— students:', countData.studentUsers?.length, 'technicians:', countData.technicianUsers?.length, ')');
               if (alive) setUserWorkload(wl);
             })
             .catch(err => {
@@ -2426,20 +2598,23 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
               const fallbackDateStr = taskDue ? taskDue.toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
               const wl = {};
               uniq.forEach(u => {
-                const userTasks = (tasks || []).filter(t =>
+                // Đếm theo ngày giao task (fallback FE khi BE fail)
+                const userTasksInDay = (tasks || []).filter(t =>
                   (t.assigneeId || t.assignedToId) === u.id &&
+                  t.dueDate && t.dueDate.slice(0, 10) === fallbackDateStr &&
                   !['Completed', 'Cancelled', 'Approved'].includes(t.status)
                 );
-                const todayCount = userTasks.filter(t => {
-                  if (!t.dueDate) return false;
-                  return t.dueDate.slice(0, 10) === fallbackDateStr;
-                }).length;
+                const completedInDay = (tasks || []).filter(t =>
+                  (t.assigneeId || t.assignedToId) === u.id &&
+                  t.dueDate && t.dueDate.slice(0, 10) === fallbackDateStr &&
+                  ['Completed', 'Approved'].includes(t.status)
+                ).length;
                 wl[u.id] = {
-                  total: userTasks.length,
-                  today: todayCount,
-                  pending: userTasks.filter(t => t.status === 'Pending' || t.status === 'Assigned').length,
-                  inProgress: userTasks.filter(t => t.status === 'InProgress').length,
-                  completed: userTasks.filter(t => t.status === 'Completed').length,
+                  total: userTasksInDay.length + completedInDay,
+                  today: userTasksInDay.length + completedInDay,
+                  pending: userTasksInDay.filter(t => t.status === 'Pending' || t.status === 'Assigned').length,
+                  inProgress: userTasksInDay.filter(t => t.status === 'InProgress').length,
+                  completed: completedInDay,
                 };
               });
               if (alive) setUserWorkload(wl);
@@ -2476,7 +2651,10 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
   }, [assignModal, task?.id, skills]);
 
   // ── Helpers cho modal gán ─────────────────────────────────────────────
-  const getWorkload = (userId) => userWorkload[userId] || { total: 0, today: 0, pending: 0, inProgress: 0 };
+  const taskDueDateStr = task?.dueDate
+    ? new Date(task.dueDate).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })
+    : new Date().toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
+  const getWorkload = (userId) => userWorkload[userId] || { total: 0, today: 0, pending: 0, inProgress: 0, completed: 0 };
   const getUserMatchedSkills = (userId) => skillMatches[userId]?.matched || [];
   const getUserScore = (userId) => skillMatches[userId]?.score || 0;
 
@@ -2876,7 +3054,30 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
                     const isSelected = assigneeId === u.id;
                     const scorePct = skills.length > 0 ? (score / skills.length) * 100 : 100;
                     const scoreColor = scorePct === 100 ? 'bg-emerald-500' : scorePct >= 50 ? 'bg-amber-500' : 'bg-rose-400';
-                    const wlTodayClass = wl.today === 0 ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : wl.today >= 3 ? 'text-rose-700 bg-rose-50 border-rose-200' : 'text-amber-700 bg-amber-50 border-amber-200';
+
+                    // ✅ Đếm task theo NGÀY GIAO TASK (task.dueDate) — không phải "hôm nay"
+                    // Cấu trúc 3 chỉ số:
+                    //   - totalInDay  : tổng task deadline trong ngày giao task này (chỉ tính task có dueDate = ngày đó)
+                    //   - doneInDay   : đã hoàn thành trong ngày đó (Completed/Approved)
+                    //   - pendingInDay: chưa xong trong ngày đó (Pending/Assigned/InProgress)
+                    // Nếu wl không break down theo ngày → fallback dùng total / completed / (total - completed)
+                    const doneInDay = Number(wl.completed ?? wl.completedTasks ?? 0);
+                    const pendingInDay = Number(wl.pending ?? wl.pendingTasks ?? 0) + Number(wl.inProgress ?? wl.inProgressTasks ?? 0);
+                    const totalInDay = Math.max(
+                      Number(wl.today ?? wl.todayTasks ?? 0),
+                      Number(wl.total ?? wl.totalTasks ?? 0),
+                      doneInDay + pendingInDay
+                    );
+
+                    // Mức độ rảnh/bận của ngày đó
+                    const busyLevel = totalInDay === 0 ? 'free' : totalInDay >= 4 ? 'overload' : totalInDay >= 2 ? 'busy' : 'light';
+                    const busyConfig = {
+                      free:    { dot: 'bg-emerald-500', bg: 'bg-emerald-50',  border: 'border-emerald-200', text: 'text-emerald-700', label: 'Rảnh' },
+                      light:   { dot: 'bg-blue-500',    bg: 'bg-blue-50',     border: 'border-blue-200',    text: 'text-blue-700',    label: 'Ít việc' },
+                      busy:    { dot: 'bg-amber-500',   bg: 'bg-amber-50',    border: 'border-amber-200',   text: 'text-amber-700',   label: 'Bận' },
+                      overload:{ dot: 'bg-rose-500',    bg: 'bg-rose-50',     border: 'border-rose-200',    text: 'text-rose-700',    label: 'Quá tải' }
+                    }[busyLevel];
+
                     return (
                       <button
                         key={u.id}
@@ -2914,38 +3115,56 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
                               </div>
                             )}
                           </div>
-                          {/* Workload badges */}
-                          <div className="shrink-0 flex flex-col items-end gap-1 min-w-[64px]">
-                            {/* Tổng task lớn nổi bật */}
-                            <div className={`px-2 py-1 rounded-lg text-xs font-extrabold border-2 ${wl.total === 0 ? 'bg-emerald-50 text-emerald-700 border-emerald-300' :
-                              wl.total >= 5 ? 'bg-rose-50 text-rose-700 border-rose-300' :
-                              wl.total >= 3 ? 'bg-amber-50 text-amber-700 border-amber-300' :
-                              'bg-blue-50 text-blue-700 border-blue-300'
-                              }`}>
-                              📋 {wl.total} task
-                            </div>
-                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${wlTodayClass}`}>
-                              📅 {wl.today} hôm nay
-                            </span>
-                            <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-bold">
-                              ⏳ {wl.pending} chờ
-                            </span>
-                            <span className="px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded text-[10px] font-bold">
-                              🔄 {wl.inProgress} làm
-                            </span>
-                            {/* Workload progress bar (capacity giả định = 5) */}
-                            <div className="w-full mt-0.5">
-                              <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full transition-all ${wl.total === 0 ? 'bg-emerald-400' :
-                                    wl.total >= 5 ? 'bg-rose-500' :
-                                    wl.total >= 3 ? 'bg-amber-500' :
-                                    'bg-blue-500'
-                                    }`}
-                                  style={{ width: `${Math.min(100, (wl.total / 5) * 100)}%` }}
-                                />
+
+                          {/* ── Workload Card (UX cải tiến) ── */}
+                          <div className={`shrink-0 rounded-lg border ${busyConfig.border} ${busyConfig.bg} min-w-[126px] overflow-hidden`}>
+                            {/* Header: trạng thái + dot */}
+                            <div className={`flex items-center justify-between px-2 py-1 border-b ${busyConfig.border}`}>
+                              <div className="flex items-center gap-1.5">
+                                <span className={`w-1.5 h-1.5 rounded-full ${busyConfig.dot} ${totalInDay > 0 ? 'animate-pulse' : ''}`} />
+                                <span className={`text-[10px] font-bold uppercase tracking-wide ${busyConfig.text}`}>{busyConfig.label}</span>
                               </div>
-                              <p className="text-[9px] text-slate-400 text-right mt-0.5">capacity 5</p>
+                              <span className={`text-[9px] font-semibold ${busyConfig.text} opacity-70`}>
+                                {taskDueDateStr}
+                              </span>
+                            </div>
+
+                            {/* 3 chỉ số: Tổng / Hoàn thành / Chưa xong */}
+                            <div className="px-2 py-1.5 space-y-0.5">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[10px] text-slate-500 font-medium">Tổng task</span>
+                                <span className="text-sm font-extrabold text-slate-900 leading-none">{totalInDay}</span>
+                              </div>
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[10px] text-emerald-600 font-medium flex items-center gap-1">
+                                  <span className="w-1 h-1 rounded-full bg-emerald-500" />Hoàn thành
+                                </span>
+                                <span className="text-xs font-bold text-emerald-700 leading-none">{doneInDay}</span>
+                              </div>
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[10px] text-amber-600 font-medium flex items-center gap-1">
+                                  <span className="w-1 h-1 rounded-full bg-amber-500" />Chưa xong
+                                </span>
+                                <span className="text-xs font-bold text-amber-700 leading-none">{pendingInDay}</span>
+                              </div>
+
+                              {/* Mini progress bar (hoàn thành / tổng) */}
+                              {totalInDay > 0 && (
+                                <div className="mt-1">
+                                  <div className="h-1 bg-white/60 rounded-full overflow-hidden">
+                                    <div
+                                      className="h-full bg-emerald-500 rounded-full transition-all"
+                                      style={{ width: `${Math.min(100, (doneInDay / totalInDay) * 100)}%` }}
+                                    />
+                                  </div>
+                                  <p className="text-[8px] text-slate-500 text-right mt-0.5 font-mono">
+                                    {Math.round((doneInDay / totalInDay) * 100)}% done
+                                  </p>
+                                </div>
+                              )}
+                              {totalInDay === 0 && (
+                                <p className="text-[9px] text-emerald-600 italic mt-1 text-center">✨ chưa có task</p>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -3913,6 +4132,362 @@ const CreateTaskModal = ({ open, mode, onClose, onChangeMode, stages = [], batch
 };
 
 export default ExperimentDetailPage;
+
+const ExperimentCompletionPanel = ({ experiment, finalReport, loadingFinalReport, completing, groups = [], batches = [], stages = [], onRefresh }) => {
+  if (!experiment) return null;
+
+  const status = experiment.status || 'Draft';
+  const isCompleted = status === 'Completed';
+
+  const [form, setForm] = useState({
+    title: '',
+    summary: '',
+    objectives: '',
+    methodology: '',
+    results: '',
+    conclusion: '',
+    recommendations: '',
+    notes: '',
+  });
+  const [submitting, setSubmitting] = useState(false);
+
+  // Auto-fill khi mount hoặc khi experiment thay đổi
+  const autoFill = () => {
+    const groupCount = groups.length;
+    const batchCount = batches.length;
+    const stageCount = stages.length;
+
+    // Mục tiêu nghiên cứu — thử nhiều field khả dĩ từ experiment
+    const objectiveCandidates = [
+      experiment.objectives,
+      experiment.researchObjective,
+      experiment.objective,
+      experiment.purpose,
+      experiment.aim,
+      experiment.goal,
+      experiment.hypothesis,
+      experiment.researchQuestion,
+      experiment.description,
+      experiment.notes,
+      experiment.summary,
+      experiment.experimentDescription,
+      experiment.designRationale,
+    ];
+    const objectives = objectiveCandidates.find(v => v && String(v).trim()) || '';
+
+    // Thiết kế thực nghiệm
+    const designType = experiment.designType || experiment.designName || experiment.experimentDesign || '';
+    const designDesc = experiment.designDescription || experiment.design || '';
+
+    // Thời gian
+    const startDate = experiment.startDate
+      ? new Date(experiment.startDate).toLocaleDateString('vi-VN')
+      : '';
+    const endDate = experiment.endDate
+      ? new Date(experiment.endDate).toLocaleDateString('vi-VN')
+      : '';
+    const duration = startDate && endDate
+      ? `Từ ${startDate} đến ${endDate}`
+      : startDate ? `Bắt đầu: ${startDate}` : endDate ? `Kết thúc: ${endDate}` : '';
+
+    // Mặc định title
+    const defaultTitle = `Báo cáo tổng kết: ${experiment.title || experiment.experimentCode || 'Thực nghiệm'} ${startDate ? `(${startDate})` : ''}`;
+
+    // Nguyên tắc thiết kế (methodology)
+    let methodology = '';
+    if (designType) {
+      methodology = `Thiết kế: ${designType}${designDesc ? ` - ${designDesc}` : ''}.`;
+    }
+    if (groupCount > 0) methodology += ` Thực nghiệm gồm ${groupCount} nhóm`;
+    if (batchCount > 0) methodology += `, ${batchCount} lô trồng`;
+    if (stageCount > 0) methodology += `, ${stageCount} giai đoạn.`;
+    if (!methodology) {
+      methodology = `Thực nghiệm gồm ${groupCount} nhóm, ${batchCount} lô, ${stageCount} giai đoạn.`;
+    }
+
+    // Tóm tắt - dùng dữ liệu thật
+    const summaryParts = [];
+    if (experiment.title) summaryParts.push(`Thực nghiệm "${experiment.title}"`);
+    else summaryParts.push('Thực nghiệm này');
+    if (startDate || endDate) {
+      const period = startDate && endDate ? `được thực hiện từ ${startDate} đến ${endDate}` : startDate ? `bắt đầu từ ${startDate}` : `kết thúc vào ${endDate}`;
+      summaryParts.push(period);
+    }
+    if (groupCount > 0) summaryParts.push(`với ${groupCount} nhóm thí nghiệm`);
+    if (batchCount > 0) summaryParts.push(`${batchCount} lô trồng`);
+    if (stageCount > 0) summaryParts.push(`và ${stageCount} giai đoạn chính`);
+    summaryParts.push('.');
+    const defaultSummary = summaryParts.join(' ');
+
+    setForm(prev => ({
+      title: prev.title || defaultTitle,
+      summary: prev.summary || defaultSummary,
+      objectives: prev.objectives || objectives,
+      methodology: prev.methodology || methodology,
+      results: prev.results || '',
+      conclusion: prev.conclusion || '',
+      recommendations: prev.recommendations || '',
+      notes: prev.notes || duration,
+    }));
+  };
+
+  // Auto-fill khi experiment hoặc dữ liệu liên quan thay đổi (chỉ khi chưa có finalReport)
+  useEffect(() => {
+    if (!isCompleted && !finalReport && experiment) {
+      autoFill();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [experiment?.id, groups.length, batches.length, stages.length]);
+
+  const handleChange = (field, value) => {
+    setForm(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleSubmit = async () => {
+    if (!form.title.trim()) {
+      alert('Vui lòng nhập tiêu đề báo cáo');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      // resultData là JSONB, chỉ gửi field có giá trị (loại field trống)
+      const resultData = {};
+      Object.entries(form).forEach(([k, v]) => {
+        if (v != null && String(v).trim() !== '') resultData[k] = String(v).trim();
+      });
+
+      await experimentsApi.createFinalReport(experiment.id, resultData);
+      // Reload experiment (status đã chuyển Completed) + final report
+      await Promise.all([
+        experimentsApi.getById(experiment.id).then(u => setExperiment(u)).catch(() => {}),
+        onRefresh?.(),
+      ]);
+    } catch (err) {
+      alert(err.message || 'Lỗi tạo báo cáo');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ── Render helpers ────────────────────────────────────────────────────────
+  const Field = ({ label, field, multiline = false, placeholder = '' }) => (
+    <div>
+      <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5">{label}</label>
+      {multiline ? (
+        <textarea
+          value={form[field] || ''}
+          onChange={e => handleChange(field, e.target.value)}
+          placeholder={placeholder || `Nhập ${label.toLowerCase()}...`}
+          rows={4}
+          className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent resize-y bg-white"
+        />
+      ) : (
+        <input
+          type="text"
+          value={form[field] || ''}
+          onChange={e => handleChange(field, e.target.value)}
+          placeholder={placeholder || `Nhập ${label.toLowerCase()}...`}
+          className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent bg-white"
+        />
+      )}
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+            📑 Báo Cáo Cuối Cùng
+          </h2>
+          <button
+            onClick={() => { autoFill(); onRefresh?.(); }}
+            className="px-3 py-1.5 border border-slate-200 hover:bg-slate-50 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+            title="Tải lại & tự động điền"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+            Làm mới
+          </button>
+        </div>
+        <p className="text-sm text-slate-500">
+          {isCompleted
+            ? '✅ Thực nghiệm đã hoàn thành. Báo cáo cuối cùng được hiển thị bên dưới.'
+            : 'Điền thông tin báo cáo bên dưới. Các trường đã được tự động điền từ dữ liệu thực nghiệm. Nhấn "Hoàn thành" trên header để lưu.'}
+        </p>
+      </div>
+
+      {/* Form / Report viewer */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+        {isCompleted && finalReport ? (
+          /* ── Đã hoàn thành: chỉ hiển thị report ── */
+          <div className="rounded-xl border border-blue-200 bg-blue-50/30 overflow-hidden">
+            <div className="px-5 py-4 border-b border-blue-200 bg-blue-50 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-blue-500 text-white flex items-center justify-center text-xl shrink-0 shadow-sm">📑</div>
+                <div className="min-w-0">
+                  <p className="text-base font-bold text-blue-900 truncate">{finalReport.title || finalReport.reportTitle || 'Báo cáo cuối cùng'}</p>
+                  <p className="text-xs text-blue-700">
+                    {finalReport.createdAt ? `Tạo: ${new Date(finalReport.createdAt).toLocaleString('vi-VN')}` : ''}
+                    {finalReport.createdBy ? ` • ${finalReport.createdBy}` : ''}
+                  </p>
+                </div>
+              </div>
+              <span className="shrink-0 px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-bold uppercase tracking-wide shadow-sm">✅ Đã hoàn thành</span>
+            </div>
+            <div className="p-5 space-y-4">
+              {finalReport.summary && (
+                <Section label="📋 Tóm tắt" value={finalReport.summary} />
+              )}
+              {finalReport.objectives && (
+                <Section label="🎯 Mục tiêu" value={finalReport.objectives} />
+              )}
+              {finalReport.methodology && (
+                <Section label="📐 Nguyên tắc thiết kế" value={finalReport.methodology} />
+              )}
+              {finalReport.results && (
+                <Section label="📊 Kết quả" value={finalReport.results} />
+              )}
+              {finalReport.conclusion && (
+                <Section label="🎯 Kết luận" value={finalReport.conclusion} />
+              )}
+              {finalReport.recommendations && (
+                <Section label="💡 Khuyến nghị" value={finalReport.recommendations} />
+              )}
+              {finalReport.notes && (
+                <Section label="📝 Ghi chú" value={finalReport.notes} />
+              )}
+              {/* Fallback: các field còn lại (không phải metadata) */}
+              {(() => {
+                const rest = Object.entries(finalReport).filter(([k,v]) => !KNOWN_REPORT_FIELDS.has(k) && v != null && v !== '' && typeof v !== 'object');
+                return rest.length > 0 ? (
+                  <div className="border-t border-blue-100 pt-4 mt-4">
+                    <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-3">ℹ️ Thông tin khác</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      {rest.map(([k,v]) => (
+                        <div key={k} className="bg-white rounded-lg border border-slate-200 p-2.5">
+                          <p className="text-[10px] text-slate-400 font-medium mb-0.5 capitalize">{k.replace(/([A-Z])/g,' $1').trim()}</p>
+                          <p className="text-sm text-slate-900 font-semibold truncate">{String(v)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null;
+              })()}
+            </div>
+          </div>
+        ) : (
+          /* ── Chưa hoàn thành: FORM báo cáo thông minh ── */
+          <div className="space-y-5">
+            {/* Thanh trạng thái form */}
+            <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
+              <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+              <span>Điền thông tin báo cáo. Các trường được tự động điền từ dữ liệu thực nghiệm — bạn có thể chỉnh sửa trước khi gửi.</span>
+            </div>
+
+            {/* Tiêu đề */}
+            <Field label="📌 Tiêu đề báo cáo *" field="title" placeholder="VD: Báo cáo tổng kết thực nghiệm ABC (2026)" />
+
+            {/* Tóm tắt */}
+            <Field label="📋 Tóm tắt" field="summary" multiline placeholder="Tóm tắt ngắn gọn nội dung và kết quả chính..." />
+
+            {/* Mục tiêu */}
+            <Field label="🎯 Mục tiêu nghiên cứu" field="objectives" multiline placeholder="Mục tiêu của thực nghiệm..." />
+
+            {/* Nguyên tắc thiết kế (design + groups/batches/stages) */}
+            <Field label="📐 Nguyên tắc thiết kế" field="methodology" multiline placeholder="Thiết kế: RCBD. Thực nghiệm gồm 3 nhóm, 9 lô trồng, 5 giai đoạn." />
+
+            {/* Kết quả */}
+            <Field label="📊 Kết quả" field="results" multiline placeholder="Phân tích kết quả thu được từ các nhóm..." />
+
+            {/* Kết luận */}
+            <Field label="🎯 Kết luận" field="conclusion" multiline placeholder="Kết luận rút ra từ thực nghiệm..." />
+
+            {/* Khuyến nghị */}
+            <Field label="💡 Khuyến nghị" field="recommendations" multiline placeholder="Các đề xuất, cải tiến cho nghiên cứu tiếp theo..." />
+
+            {/* Ghi chú */}
+            <Field label="📝 Ghi chú" field="notes" multiline placeholder="Thông tin bổ sung, điều kiện đặc biệt..." />
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+              <button
+                onClick={autoFill}
+                className="px-4 py-2 border border-slate-300 text-slate-600 hover:bg-slate-50 rounded-xl text-sm font-semibold transition-colors"
+              >
+                🔄 Tự động điền lại
+              </button>
+              <button
+                onClick={handleSubmit}
+                disabled={submitting || !form.title.trim()}
+                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-xl text-sm font-bold transition-colors shadow-sm flex items-center gap-2"
+              >
+                {submitting ? '⏳ Đang lưu...' : '💾 Lưu & Hoàn thành'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Các field nội dung hiển thị
+const KNOWN_REPORT_FIELDS = new Set([
+  'id', 'experimentId', 'createdAt', 'updatedAt', 'createdBy',
+  'title', 'summary', 'objectives', 'methodology', 'results',
+  'conclusion', 'recommendations', 'notes',
+  // Metadata bỏ qua
+  'reportTitle', 'reportType', 'isFinal', 'reportMeta',
+  'fileUrl', 'exportUrl', 'exportPath', 'file', 'attachments',
+]);
+
+// Helper hiển thị section trong report
+const Section = ({ label, value }) => (
+  <div>
+    <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">{label}</p>
+    <p className="text-sm text-slate-800 leading-relaxed whitespace-pre-wrap bg-white rounded-lg border border-slate-200 p-3">{value}</p>
+  </div>
+);
+
+// ── Generic Confirm Dialog (cho Hoàn thành / Tạm dừng / Tiếp tục) ────────────
+const ExperimentConfirmDialog = ({ confirm, onClose }) => {
+  if (!confirm) return null;
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[5000] flex items-center justify-center p-4 animate-fade-in">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-scale-in">
+        <div className="p-6">
+          <div className={`w-14 h-14 rounded-full ${confirm.danger ? 'bg-rose-100' : 'bg-indigo-100'} flex items-center justify-center mx-auto mb-4`}>
+            <span className={`text-3xl ${confirm.danger ? 'text-rose-500' : 'text-indigo-500'}`}>
+              {confirm.danger ? '⚠️' : '💡'}
+            </span>
+          </div>
+          <h3 className="text-lg font-bold text-center text-slate-900 mb-2">{confirm.title}</h3>
+          <p className="text-sm text-slate-600 text-center mb-6 whitespace-pre-line leading-relaxed">{confirm.message}</p>
+          <div className="flex gap-3">
+            <button
+              onClick={onClose}
+              className="flex-1 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-bold transition-colors"
+            >
+              Hủy
+            </button>
+            <button
+              onClick={confirm.onConfirm}
+              disabled={confirm.loading}
+              className={`flex-1 px-4 py-2.5 text-white rounded-xl text-sm font-bold transition-colors disabled:opacity-50 ${
+                confirm.danger
+                  ? 'bg-rose-500 hover:bg-rose-600'
+                  : 'bg-indigo-500 hover:bg-indigo-600'
+              }`}
+            >
+              {confirm.loading ? '⏳ Đang xử lý...' : confirm.confirmText}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const EditExperimentModal = ({ open, form, setForm, saving, onClose, onSave }) => {
   if (!open) return null;
