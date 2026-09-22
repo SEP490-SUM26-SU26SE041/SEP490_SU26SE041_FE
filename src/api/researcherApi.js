@@ -75,6 +75,8 @@ export const tasksApi = {
   assign: (payload) => apiClient.request('/tasks/assign', { method: 'POST', body: payload }),
   reassign: (payload) => apiClient.request('/tasks/reassign', { method: 'POST', body: payload }),
   getAssignments: (taskId) => apiClient.request(`/tasks/${taskId}/assignments`).then(u),
+  // ⚠️ Wrapper giữ tương thích ngược — nên dùng tasksCountApi.countByStudentsAndTechnicians từ skillsApi.js
+  // vì BE đôi khi không tách đúng khi truyền roles=Student,Technician (gây ra task giao cho Technician ngày 29 không liệt kê).
   countByUser: ({ roles, date } = {}) => {
     const params = new URLSearchParams();
     if (roles) params.append('roles', roles);

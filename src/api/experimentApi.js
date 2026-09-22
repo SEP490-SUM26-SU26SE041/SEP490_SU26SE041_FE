@@ -107,7 +107,36 @@ export const experimentsApi = {
 
   // Supplement Groups (BE mới) - thêm/sửa groups sau auto-setup
   supplementGroups: (id, payload) =>
-    apiClient.request(`/experiments/${id}/supplement-groups`, { method: 'POST', body: payload })
+    apiClient.request(`/experiments/${id}/supplement-groups`, { method: 'POST', body: payload }),
+
+  // ── Experiment Completion ──────────────────────────────────────────────────
+  // Lấy báo cáo final (resultData JSONB). BE trả về mảng reports — lấy phần tử cuối có reportType='final' (hoặc fallback).
+  getFinalReport: (id) =>
+    apiClient.request(`/experiments/${id}/reports`).then((list) => {
+      if (!Array.isArray(list) || list.length === 0) return null;
+      const finals = list.filter(r => r.reportType === 'final' || r.isFinal);
+      const arr = finals.length > 0 ? finals : list;
+      const last = arr[arr.length - 1];
+      // Lấy payload ra: ưu tiên resultData, fallback các field còn lại
+      return last?.resultData
+        ? { ...last.resultData, ...last, reportMeta: last }
+        : last;
+    }),
+
+  // Tạo báo cáo cuối cùng (JSONB resultData) — BE tự chuyển status → Completed sau khi lưu
+  createFinalReport: (id, resultData = {}) =>
+    apiClient.request(`/experiments/${id}/reports`, {
+      method: 'POST',
+      body: { reportType: 'final', resultData },
+    }).then(u),
+
+  // Tạm dừng thực nghiệm — chuyển status → Paused
+  suspend: (id) =>
+    apiClient.request(`/experiments/${id}/suspend`, { method: 'PATCH' }).then(u),
+
+  // Tiếp tục thực nghiệm — chuyển status → Active (từ Paused)
+  resume: (id) =>
+    apiClient.request(`/experiments/${id}/resume`, { method: 'PATCH' }).then(u),
 };
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
