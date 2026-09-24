@@ -14,7 +14,7 @@ export const farmsApi = {
 };
 
 export const areasApi = {
-  getByFarm: (farmId) => apiClient.request('/farms/' + farmId + '/areas').then(u),
+  getByFarm: (farmId) => apiClient.request('/farms/farms/' + farmId + '/areas').then(u),
   getAll: () => apiClient.request('/farms/areas').then(u),
   getById: (id) => apiClient.request('/farms/areas/' + id).then(u),
   create: (payload) => apiClient.request('/farms/areas', { method: 'POST', body: payload }),
