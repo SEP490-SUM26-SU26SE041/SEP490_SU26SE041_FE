@@ -16,8 +16,7 @@ const ExperimentHierarchyView = ({
   stages = [],
   measurements = [],
   recordsByBatch = new Map(),
-  onRenameGroup,
-  onDeleteGroup
+  onRenameGroup
 }) => {
   const unassignedBatches = batchesByGroup.get('_unassigned') || [];
 
@@ -61,7 +60,6 @@ const ExperimentHierarchyView = ({
                   measurements={measurements}
                   recordsByBatch={recordsByBatch}
                   onRenameGroup={onRenameGroup}
-                  onDeleteGroup={onDeleteGroup}
                 />
               ))
             )}
@@ -116,7 +114,7 @@ const ExperimentHierarchyView = ({
 };
 
 // ── LEVEL 2: Group ────────────────────────────────────────────────────────
-const GroupNode = ({ group, batches, stages, measurements, recordsByBatch, onRenameGroup, onDeleteGroup }) => {
+const GroupNode = ({ group, batches, stages, measurements, recordsByBatch, onRenameGroup }) => {
   const [expanded, setExpanded] = useState(true);
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState(group.groupName || '');
@@ -211,11 +209,6 @@ const GroupNode = ({ group, batches, stages, measurements, recordsByBatch, onRen
                 className="p-1 hover:bg-indigo-100 rounded cursor-pointer text-slate-500 hover:text-indigo-600"
                 title="Đổi tên nhóm">
                 ✏️
-              </span>
-              <span onClick={e => { e.stopPropagation(); onDeleteGroup?.(group.id); }}
-                className="p-1 hover:bg-rose-100 rounded cursor-pointer text-slate-500 hover:text-rose-600"
-                title="Xóa nhóm">
-                🗑️
               </span>
             </div>
           )}

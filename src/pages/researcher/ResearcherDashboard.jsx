@@ -5,7 +5,6 @@ import ResearcherExperiments from './tabs/ResearcherExperiments';
 import ResearcherRequests from './tabs/ResearcherRequests';
 import ResearcherTemplates from './tabs/ResearcherTemplates';
 import ResearcherTasks from './tabs/ResearcherTasks';
-import ResearcherKPIs from './tabs/ResearcherKPIs';
 import MonitoringDashboard from '../../components/dashboard/MonitoringDashboard';
 import NotificationBell from '../../components/notifications/NotificationBell';
 
@@ -16,7 +15,6 @@ const TABS = [
   { id: 'requests', label: 'Yêu Cầu', icon: '📨' },
   { id: 'templates', label: 'Quy Trình', icon: '📋' },
   { id: 'tasks', label: 'Tác Vụ', icon: '📌' },
-  { id: 'kpis', label: 'KPIs & Nhân Sự', icon: '📈' },
 ];
 
 const ResearcherDashboard = () => {
@@ -92,7 +90,6 @@ const ResearcherDashboard = () => {
               {activeTab === 'requests' && 'Gửi và theo dõi yêu cầu thí nghiệm'}
               {activeTab === 'templates' && 'Quản lý quy trình canh tác mẫu'}
               {activeTab === 'tasks' && 'Quản lý tác vụ thí nghiệm'}
-              {activeTab === 'kpis' && 'Theo dõi KPI tăng trưởng & hiệu suất nhân sự'}
             </p>
           </div>
 
@@ -103,7 +100,6 @@ const ResearcherDashboard = () => {
           {activeTab === 'requests' && <ResearcherRequests onConvertToExperiment={handleConvertToExperiment} />}
           {activeTab === 'templates' && <ResearcherTemplates />}
           {activeTab === 'tasks' && <ResearcherTasks />}
-          {activeTab === 'kpis' && <ResearcherKPIs />}
         </div>
       </main>
     </div>

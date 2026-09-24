@@ -14,6 +14,7 @@ import { canGenerateTasksFromStage, canCreateTaskOnStage } from '../../utils/tas
 import { useToast } from '../../context/ToastContext';
 import ExperimentOverviewSummary from '../../components/researcher/ExperimentOverviewSummary';
 import StatisticsDashboard from '../../components/researcher/StatisticsDashboard';
+import BatchIoTPanel from '../../components/iot/BatchIoTPanel';
 
 const Portal = ({ children }) => {
   return children;
@@ -331,7 +332,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
         console.log('[DEBUG merge] raw groups=', JSON.parse(JSON.stringify(loadedGroups)));
         if (!loadedGroups.length) return loadedGroups;
         if (!planTreatments.length) return loadedGroups;
-        const norm = (s) => (s || '').trim().toLowerCase();
+        const norm = (s) => String(s == null ? '' : s).trim().toLowerCase();
         // reset _used flag
         planTreatments.forEach(t => { t._used = false; });
         const merged = loadedGroups.map((g, idx) => {
@@ -352,7 +353,10 @@ const ExperimentDetailPage = ({ experimentId }) => {
         console.log('[DEBUG merge] merged groups=', JSON.parse(JSON.stringify(merged)));
         return merged;
       };
-      setStages(get(results[0]));
+      const rawStages = get(results[0]);
+      console.log('[DEBUG rawStages]', JSON.parse(JSON.stringify(rawStages)));
+      console.log('[DEBUG rawStages keys]', rawStages && rawStages[0] ? Object.keys(rawStages[0]) : 'no stages');
+      setStages(rawStages);
       setGroups(mergeTreatmentDesc(get(results[1])));
       setMeasurements(get(results[2])); setBatches(get(results[3]));
       setMeasurementRecords(get(results[4])); setSchedules(get(results[5])); setTasks(get(results[6])); setBedAssignments(get(results[7]));
@@ -378,6 +382,98 @@ const ExperimentDetailPage = ({ experimentId }) => {
   }, [experimentId, showToast]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  // ── LUÔN call API get final report ngay khi mở detail (bất chấp status) ──
+  useEffect(() => {
+    if (!experimentId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await fetchFinalReport(experimentId);
+      } catch (e) {
+        if (!cancelled) console.warn('[fetchFinalReport on mount]', e?.message || e);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [experimentId]);
+
+  // ── Stage progress ───────────────────────────────────────────────────────
+  // Giai đoạn đã "qua": Completed HOẶC đã hết thời gian HOẶC có kết quả
+  const passedStagesCount = (() => {
+    if (!Array.isArray(stages) || stages.length === 0) return 0;
+    const now = new Date();
+
+    // Robust date parser: BE có thể trả ISO (YYYY-MM-DD[THH:mm:ss]) hoặc DD/MM/YYYY
+    const parseDate = (v) => {
+      if (!v) return null;
+      if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v;
+      const str = String(v).trim();
+      if (!str) return null;
+      // ISO YYYY-MM-DD hoặc ISO datetime
+      if (/^\d{4}-\d{2}-\d{2}/.test(str)) {
+        const d = new Date(str);
+        return Number.isNaN(d.getTime()) ? null : d;
+      }
+      // DD/MM/YYYY (VN) hoặc DD-MM-YYYY
+      const m = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+      if (m) {
+        const [_, d, mo, y] = m;
+        const yr = y.length === 2 ? 2000 + Number(y) : Number(y);
+        const dt = new Date(yr, Number(mo) - 1, Number(d));
+        return Number.isNaN(dt.getTime()) ? null : dt;
+      }
+      const d = new Date(str);
+      return Number.isNaN(d.getTime()) ? null : d;
+    };
+
+    const hasResult = (s) => {
+      // resultData là JSON string → parse để check có field nào không
+      if (s.resultData) {
+        const str = String(s.resultData).trim();
+        if (str && str !== '{}' && str !== 'null') {
+          try {
+            const obj = JSON.parse(str);
+            if (obj && typeof obj === 'object' && Object.keys(obj).length > 0) return true;
+          } catch { /* keep going */ }
+        }
+      }
+      // resultSummary là text ngắn tóm tắt kết quả
+      if (s.resultSummary && String(s.resultSummary).trim() !== '') return true;
+      // Fallback: BE có thể set result thay vì resultData
+      if (s.result && String(s.result).trim() !== '' && s.result !== '{}') return true;
+      return false;
+    };
+
+    const passed = stages.filter(s => {
+      if (!s) return false;
+      if (s.status === 'Completed') return true;
+      const endParsed = parseDate(s?.endDate);
+      if (endParsed && endParsed < now) return true;
+      if (hasResult(s)) return true;
+      return false;
+    });
+
+    // Debug: log mỗi lần render để xác minh giá trị thực tế
+    if (typeof window !== 'undefined') {
+      window.__stageProgressDebug = {
+        now: now.toISOString(),
+        totalStages: stages.length,
+        passed,
+        stageSummary: stages.map(s => ({
+          id: s?.id,
+          name: s?.stageName || s?.name,
+          status: s?.status,
+          endDate: s?.endDate,
+          hasResultData: !!(s?.resultData && s.resultData !== '{}' && s.resultData !== 'null'),
+          resultSummary: s?.resultSummary || null,
+        })),
+      };
+      console.log('[StageProgress FINAL]', 'total=', stages.length, 'passed=', passed.length);
+    }
+
+    return passed.length;
+  })();
 
   // ── Index data ────────────────────────────────────────────────────────────
   const measurementById = useMemo(() => { const m = new Map(); measurements.forEach(d => m.set(d.id, d)); return m; }, [measurements]);
@@ -623,14 +719,16 @@ const ExperimentDetailPage = ({ experimentId }) => {
   // ── Experiment Completion Handlers ──────────────────────────────────────────
 
   // Lấy final report + reload experiment (cập nhật status sau khi hoàn thành)
-  const fetchFinalReport = async () => {
-    if (!experiment?.id) return;
+  // experimentId: nếu không truyền thì lấy từ experiment.id (back-compat)
+  const fetchFinalReport = async (experimentIdArg) => {
+    const id = experimentIdArg || experiment?.id;
+    if (!id) return;
     setLoadingFinalReport(true);
     try {
       // Load report và experiment song song
       const [report, updatedExp] = await Promise.all([
-        experimentsApi.getFinalReport(experiment.id).catch(() => null),
-        experimentsApi.getById(experiment.id).catch(() => null),
+        experimentsApi.getFinalReport(id).catch(() => null),
+        experimentsApi.getById(id).catch(() => null),
       ]);
       // Chuẩn hóa để hiển thị: resultData là JSON string → parse trước khi spread
       let normalized = null;
@@ -669,10 +767,25 @@ const ExperimentDetailPage = ({ experimentId }) => {
     if (!experiment?.id) return;
     setCompleting(true);
     try {
+      // 1. Tạo báo cáo cuối cùng
       await experimentsApi.createFinalReport(experiment.id);
+
+      // 2. Cập nhật status → Completed (BE không tự đổi khi tạo report,
+      //    nên FE phải gọi updateStatus để đảm bảo chuyển trạng thái)
+      let updated = null;
+      try {
+        updated = await experimentsApi.updateStatus(experiment.id, 'Completed');
+      } catch (statusErr) {
+        console.warn('[handleComplete] updateStatus failed, sẽ fallback getById:', statusErr);
+      }
+
+      // 3. Nếu updateStatus không trả về object → fetch lại
+      if (!updated) {
+        try { updated = await experimentsApi.getById(experiment.id); } catch { /* ignore */ }
+      }
+      if (updated) setExperiment(updated);
+
       showToast('Đã hoàn thành thực nghiệm — báo cáo cuối cùng đã được tạo', 'success');
-      const updated = await experimentsApi.getById(experiment.id);
-      setExperiment(updated || null);
       await fetchFinalReport();
     } catch (err) {
       showToast(err.message || 'Lỗi hoàn thành thực nghiệm', 'error');
@@ -753,7 +866,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
   const applyMerge = (arr) => {
     const pts = planTreatmentsRef.current || [];
     if (!arr.length || !pts.length) return arr;
-    const norm = (s) => (s || '').trim().toLowerCase();
+    const norm = (s) => String(s == null ? '' : s).trim().toLowerCase();
     // Reset _used flag (vì pts là ref)
     pts.forEach(t => { t._used = false; });
     return arr.map(g => {
@@ -923,10 +1036,10 @@ const ExperimentDetailPage = ({ experimentId }) => {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              {/* Nút Hoàn thành — xổ ra tab Báo Cáo + form */}
+              {/* Nút Hoàn thành — xổ confirm dialog */}
               {experiment.status !== 'Completed' && experiment.status !== 'Cancelled' && (
                 <button
-                  onClick={() => scrollTo('completion')}
+                  onClick={openCompleteConfirm}
                   disabled={completing || experiment.status === 'Draft'}
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
                   title={experiment.status === 'Draft' ? 'Cần kích hoạt thực nghiệm trước' : 'Hoàn thành thực nghiệm & tạo báo cáo cuối cùng'}
@@ -980,7 +1093,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
               {[
                 { id: 'overview', label: 'Tổng Quan', icon: '📋' },
                 { id: 'criteria', label: 'Tiêu Chí', icon: '🎯' },
-                { id: 'stages', label: 'Giai Đoạn', icon: '🪜', badge: stages.length },
+                { id: 'stages', label: 'Giai Đoạn', icon: '🪜', badge: (console.log('[Tab nav stages badge]', 'len=', stages.length, 'passed=', passedStagesCount), stages.length > 0 ? `${passedStagesCount}/${stages.length}` : stages.length) },
                 { id: 'hierarchy', label: 'Cấu Trúc', icon: '🌳' },
                 { id: 'tasks', label: 'Tác Vụ', icon: '📌', badge: tasks.length },
                 { id: 'schedules', label: 'Lịch', icon: '📅', badge: schedules.length },
@@ -999,7 +1112,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
                   }`}>
                   <span>{tab.icon}</span>
                   <span>{tab.label}</span>
-                  {tab.badge > 0 && (
+                  {tab.badge && String(tab.badge).length > 0 && Number(String(tab.badge).split('/')[0]) > 0 && (
                     <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${
                       activeSection === tab.id ? 'bg-white/20' : 'bg-slate-200 text-slate-600'
                     }`}>{tab.badge}</span>
@@ -1046,6 +1159,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
                   onCreateStage={handleCreateStage} onUpdateStage={handleUpdateStage}
                   onDeleteStage={handleDeleteStage}
                   saving={saving.stage} showToast={showToast}
+                  passedStagesCount={passedStagesCount}
                 />
               </SafeBoundary>
             </section>
@@ -1057,7 +1171,6 @@ const ExperimentDetailPage = ({ experimentId }) => {
                   experiment={experiment} groups={groups} batchesByGroup={batchesByGroup}
                   stages={stages} measurements={measurements} recordsByBatch={recordsByBatch}
                   onRenameGroup={handleRenameGroup}
-                  onDeleteGroup={handleDeleteGroup}
                 />
               </SafeBoundary>
             </section>
@@ -1338,7 +1451,8 @@ const DecisionCriteriaPanel = ({ decisionSummary }) => {
 };
 
 // ── Stages Section ────────────────────────────────────────────────────────────
-const StagesSection = ({ stages, groups, batches, measurements, measurementRecords, taskReportsByBatch, taskReports, schedules, tasks, stageForm, setStageForm, onCreateStage, onUpdateStage, onDeleteStage, saving, showToast }) => {
+const StagesSection = ({ stages, groups, batches, measurements, measurementRecords, taskReportsByBatch, taskReports, schedules, tasks, stageForm, setStageForm, onCreateStage, onUpdateStage, onDeleteStage, saving, showToast, passedStagesCount }) => {
+  console.log('[StagesSection RENDER]', 'stages.length=', stages.length, 'passedStagesCount=', passedStagesCount, 'stages[0]?.status=', stages[0]?.status);
   const [expandedId, setExpandedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editData, setEditData] = useState({});
@@ -1551,7 +1665,11 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
             <p className="text-sm text-slate-500 mt-0.5">Tạo, chỉnh sửa kết quả và đánh giá từng giai đoạn</p>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-sm text-slate-600">{stages.length} giai đoạn</span>
+            <span className="text-sm text-slate-600">
+              {stages.length > 0
+                ? <><b className="text-emerald-700">{passedStagesCount}</b>/<b>{stages.length}</b> giai đoạn đã qua</>
+                : '0 giai đoạn'}
+            </span>
             {stages.filter(s => s.status === 'Completed').length > 0 && (
               <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-xs font-bold">
                 ✅ {stages.filter(s => s.status === 'Completed').length} hoàn thành
@@ -3726,6 +3844,11 @@ const BatchesSection = ({ batches, groups, bedAssignments, form, setForm, onCrea
                   {batch.expectedHarvestDate && <span className="px-2 py-1 bg-amber-50 text-amber-700 rounded-md">🌾 {new Date(batch.expectedHarvestDate).toLocaleDateString('vi-VN')}</span>}
                 </div>
                 {batch.notes && <p className="text-xs text-slate-400 mt-2 italic line-clamp-2">{batch.notes}</p>}
+
+                {/* ── IoT Panel cho batch này ──────────────────────────────── */}
+                <div className="mt-3 pt-3 border-t border-slate-100">
+                  <BatchIoTPanel batch={batch} />
+                </div>
               </div>
             );
           })}

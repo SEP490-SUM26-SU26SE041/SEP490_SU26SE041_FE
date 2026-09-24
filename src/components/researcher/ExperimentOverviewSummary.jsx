@@ -176,8 +176,24 @@ const ExperimentOverviewSummary = ({
   decisionSummary = [],
   onEditExperiment
 }) => {
-  const completedStages = stages.filter(s => s.status === 'Completed').length;
-  const activeStages = stages.filter(s => s.status === 'Active' || s.status === 'InProgress').length;
+  // Completed = đã qua ngày kết thúc (endDate < today)
+  const now = Date.now();
+  const completedStages = stages.filter(s => {
+    if (!s.endDate) return false;
+    const end = new Date(s.endDate).getTime();
+    return !Number.isNaN(end) && end < now;
+  }).length;
+  // Active = đã bắt đầu (startDate <= today) và chưa kết thúc
+  const activeStages = stages.filter(s => {
+    if (!s.startDate) return false;
+    const start = new Date(s.startDate).getTime();
+    if (Number.isNaN(start) || start > now) return false;
+    if (s.endDate) {
+      const end = new Date(s.endDate).getTime();
+      if (!Number.isNaN(end) && end < now) return false;
+    }
+    return true;
+  }).length;
 
   // Phân tích thiết kế JSONB
   const designInfo = parseDesign(experiment);
