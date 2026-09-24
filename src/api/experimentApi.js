@@ -110,25 +110,65 @@ export const experimentsApi = {
     apiClient.request(`/experiments/${id}/supplement-groups`, { method: 'POST', body: payload }),
 
   // ── Experiment Completion ──────────────────────────────────────────────────
-  // Lấy báo cáo final (resultData JSONB). BE trả về mảng reports — lấy phần tử cuối có reportType='final' (hoặc fallback).
-  getFinalReport: (id) =>
-    apiClient.request(`/experiments/${id}/reports`).then((list) => {
-      if (!Array.isArray(list) || list.length === 0) return null;
+  // Lấy báo cáo final. BE có thể trả nhiều format:
+  //   1. Array trực tiếp: [...]
+  //   2. Object: { items: [...] } hoặc { data: [...] }
+  //   3. Single object: { id, resultData, ... }
+  //   4. Null/404 khi chưa có
+  // → Auto-detect và trả về 1 report object duy nhất.
+  getFinalReport: async (id) => {
+    const list = await apiClient.request(`/experiments/${id}/reports`).then(u);
+    if (!list) return null;
+
+    // Trường hợp BE trả thẳng 1 object (single report)
+    if (!Array.isArray(list) && typeof list === 'object') {
+      // Có thể là { items: [] } / { data: [] } / { data: {} } / { result: [] }
+      if (Array.isArray(list.items)) {
+        const finals = list.items.filter(r => r.reportType === 'final' || r.isFinal);
+        return (finals.length > 0 ? finals : list.items).slice(-1)[0] || null;
+      }
+      if (Array.isArray(list.data)) {
+        const finals = list.data.filter(r => r.reportType === 'final' || r.isFinal);
+        return (finals.length > 0 ? finals : list.data).slice(-1)[0] || null;
+      }
+      if (Array.isArray(list.result)) {
+        const finals = list.result.filter(r => r.reportType === 'final' || r.isFinal);
+        return (finals.length > 0 ? finals : list.result).slice(-1)[0] || null;
+      }
+      // Đã là 1 single report object
+      return list;
+    }
+
+    // Array trực tiếp
+    if (Array.isArray(list) && list.length > 0) {
       const finals = list.filter(r => r.reportType === 'final' || r.isFinal);
       const arr = finals.length > 0 ? finals : list;
-      const last = arr[arr.length - 1];
-      // Lấy payload ra: ưu tiên resultData, fallback các field còn lại
-      return last?.resultData
-        ? { ...last.resultData, ...last, reportMeta: last }
-        : last;
-    }),
+      return arr[arr.length - 1];
+    }
+    return null;
+  },
 
-  // Tạo báo cáo cuối cùng (JSONB resultData) — BE tự chuyển status → Completed sau khi lưu
-  createFinalReport: (id, resultData = {}) =>
-    apiClient.request(`/experiments/${id}/reports`, {
+  // Tạo báo cáo cuối cùng.
+  // BE Swagger schema: body FLAT — không có wrapper `dto`. Schema:
+  //   { experimentId, reportType, title, summary, resultData, experiment, fileUrl }
+  // BE yêu cầu:
+  //   - experimentId ở top-level
+  //   - title là field STRING bắt buộc (BE check `Title khong duoc de trong`)
+  //   - resultData là JSON STRING (BE parse lưu JSONB)
+  //   - reportType = 'final'
+  createFinalReport: (id, resultData = {}) => {
+    const dtoPayload = {
+      experimentId: id,
+      reportType: 'final',
+      title: resultData.title || resultData.summary || 'Báo cáo cuối cùng',
+      summary: resultData.summary || '',
+      resultData: JSON.stringify(resultData),
+    };
+    return apiClient.request(`/experiments/${id}/reports`, {
       method: 'POST',
-      body: { reportType: 'final', resultData },
-    }).then(u),
+      body: dtoPayload,
+    }).then(u);
+  },
 
   // Tạm dừng thực nghiệm — chuyển status → Paused
   suspend: (id) =>

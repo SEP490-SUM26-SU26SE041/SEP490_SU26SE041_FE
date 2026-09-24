@@ -219,6 +219,9 @@ const ExperimentDetailPage = ({ experimentId }) => {
     return () => { cancelled = true; };
   }, []);
 
+  // Plan treatments cache (dùng để merge lại khi rename/delete group)
+  const planTreatmentsRef = useRef([]);
+
   // Edit experiment basic info
   const [editExpModal, setEditExpModal] = useState({ open: false });
   const [editExpForm, setEditExpForm] = useState({ title: '', objective: '', hypothesis: '', status: '', startDate: '', endDate: '' });
@@ -238,24 +241,28 @@ const ExperimentDetailPage = ({ experimentId }) => {
       const exp = await experimentsApi.getById(experimentId);
       setExperiment(exp);
 
-      // Lấy chi tiết yêu cầu thí nghiệm (request)
-      if (exp.requestId) {
-        try {
-          const request = await experimentRequestsApi.getById(exp.requestId);
-          // Gắn thông tin request vào experiment object để truyền xuống Overview
-          if (request) {
-            setExperiment(prev => ({
-              ...prev,
-              requestName: request.title || request.name || request.experimentRequestTitle || request.experimentRequestName || null,
-              requestCode: request.code || request.requestCode || request.experimentRequestCode || null,
-              requestDescription: request.description || request.requestDescription || null,
-              requestObjective: request.objective || null,
-            }));
-          }
-        } catch (err) {
-          console.warn('[ExperimentDetail] Failed to load request:', err?.message || err);
+      // ── DEBUG: log raw exp để kiểm tra BE trả field gì
+      console.log('[DEBUG exp keys]', Object.keys(exp || {}));
+      console.log('[DEBUG exp.request]', exp?.request);
+      console.log('[DEBUG exp.experimentRequest]', exp?.experimentRequest);
+      console.log('[DEBUG exp.monitoringPlan]', exp?.monitoringPlan);
+      console.log('[DEBUG exp.requestGroups]', exp?.requestGroups);
+      console.log('[DEBUG exp.experimentRequestGroups]', exp?.experimentRequestGroups);
+
+      // ── Lấy mô tả nhóm từ 2 nguồn ──────────────────────────────────────────
+      // Nguồn 1 (ưu tiên): exp.monitoringPlan (BE trả sẵn trong experiment object)
+      //   → JSON string có dạng { treatments: [{name, groupType, description}, ...] }
+      // Nguồn 2: request.monitoringPlan (qua experimentRequestsApi.getById)
+      let planTreatments = [];
+      try {
+        const planStr = exp?.monitoringPlan || exp?.experimentRequest?.monitoringPlan || exp?.request?.monitoringPlan;
+        if (planStr && typeof planStr === 'string') {
+          const plan = JSON.parse(planStr);
+          planTreatments = Array.isArray(plan?.treatments) ? plan.treatments : [];
+          console.log('[DEBUG planTreatments from exp]', planTreatments);
         }
-      }
+      } catch (e) { /* ignore parse error */ }
+      planTreatmentsRef.current = planTreatments;
 
       // Load experiment data (chỉ những endpoint chắc chắn tồn tại)
       const results = await Promise.allSettled([
@@ -268,6 +275,22 @@ const ExperimentDetailPage = ({ experimentId }) => {
         tasksApi.getByExperiment(experimentId),
         bedAssignmentsApi.getByExperiment(experimentId)
       ]);
+
+      // Fallback: nếu exp không có monitoringPlan, lấy từ request
+      if (planTreatments.length === 0 && exp.requestId) {
+        try {
+          const request = await experimentRequestsApi.getById(exp.requestId);
+          console.log('[DEBUG request keys]', Object.keys(request || {}));
+          console.log('[DEBUG request.monitoringPlan]', request?.monitoringPlan);
+          console.log('[DEBUG request.experimentRequestGroups]', request?.experimentRequestGroups);
+          if (request?.monitoringPlan) {
+            const plan = JSON.parse(request.monitoringPlan);
+            planTreatments = Array.isArray(plan?.treatments) ? plan.treatments : [];
+            console.log('[DEBUG planTreatments from request]', planTreatments);
+          }
+        } catch (e) { /* ignore */ }
+      }
+      planTreatmentsRef.current = planTreatments;
 
       const get = (r) => {
         if (r.status !== 'fulfilled') return [];
@@ -300,7 +323,38 @@ const ExperimentDetailPage = ({ experimentId }) => {
         tasks: results[6].status === 'fulfilled' ? (Array.isArray(results[6].value) ? `array(${results[6].value.length})` : (results[6].value?.items ? `obj.items(${results[6].value.items.length})` : (results[6].value?.data ? `obj.data(${results[6].value.data.length})` : JSON.stringify(results[6].value).slice(0, 200)))) : results[6].status,
         bedAssignments: results[7].status === 'fulfilled' ? (Array.isArray(results[7].value) ? `array(${results[7].value.length})` : typeof results[7].value) : results[7].status,
       });
-      setStages(get(results[0])); setGroups(get(results[1])); setMeasurements(get(results[2])); setBatches(get(results[3]));
+      // Merge treatmentDescription từ monitoringPlan.treatments vào groups
+      // BE đã tự sinh sẵn g.treatmentDescription (VD "Thu nghiem: Control") nhưng
+      // ta cần ưu tiên description thật từ monitoringPlan.treatments (VD "Phân NPK").
+      const mergeTreatmentDesc = (loadedGroups) => {
+        console.log('[DEBUG merge] planTreatments=', JSON.parse(JSON.stringify(planTreatments)));
+        console.log('[DEBUG merge] raw groups=', JSON.parse(JSON.stringify(loadedGroups)));
+        if (!loadedGroups.length) return loadedGroups;
+        if (!planTreatments.length) return loadedGroups;
+        const norm = (s) => (s || '').trim().toLowerCase();
+        // reset _used flag
+        planTreatments.forEach(t => { t._used = false; });
+        const merged = loadedGroups.map((g, idx) => {
+          const trt = planTreatments.find(t =>
+            (t.name && norm(t.name) === norm(g.groupName)) ||
+            (t.groupType && norm(t.groupType) === norm(g.groupType) && !t._used)
+          );
+          if (trt) trt._used = true;
+          // Ưu tiên description từ monitoringPlan (trt.description). Nếu không có thì fallback về g.treatmentDescription (BE tự sinh)
+          const newDesc = trt?.description || trt?.treatmentDescription || g.treatmentDescription || '';
+          console.log(`[DEBUG merge] group[${idx}] name="${g.groupName}" type="${g.groupType}" matchedDesc="${trt?.description || ''}" prevDesc="${g.treatmentDescription || ''}" → finalDesc="${newDesc}"`);
+          return {
+            ...g,
+            treatmentDescription: newDesc,
+            groupType: g.groupType || trt?.groupType || g.groupType,
+          };
+        });
+        console.log('[DEBUG merge] merged groups=', JSON.parse(JSON.stringify(merged)));
+        return merged;
+      };
+      setStages(get(results[0]));
+      setGroups(mergeTreatmentDesc(get(results[1])));
+      setMeasurements(get(results[2])); setBatches(get(results[3]));
       setMeasurementRecords(get(results[4])); setSchedules(get(results[5])); setTasks(get(results[6])); setBedAssignments(get(results[7]));
       setAvailableBeds([]); setAreas([]);
 
@@ -578,12 +632,29 @@ const ExperimentDetailPage = ({ experimentId }) => {
         experimentsApi.getFinalReport(experiment.id).catch(() => null),
         experimentsApi.getById(experiment.id).catch(() => null),
       ]);
-      // Chuẩn hóa để hiển thị: ưu tiên resultData, fallback
-      const normalized = report
-        ? (report.resultData
-            ? { ...report.resultData, createdAt: report.createdAt || report.reportMeta?.createdAt, createdBy: report.createdBy || report.reportMeta?.createdBy }
-            : report)
-        : null;
+      // Chuẩn hóa để hiển thị: resultData là JSON string → parse trước khi spread
+      let normalized = null;
+      if (report) {
+        if (report.resultData) {
+          try {
+            const parsed = typeof report.resultData === 'string'
+              ? JSON.parse(report.resultData)
+              : report.resultData;
+            normalized = {
+              ...parsed,
+              createdAt: report.createdAt || parsed.createdAt || report.reportMeta?.createdAt,
+              createdBy: report.createdBy || parsed.createdBy || report.reportMeta?.createdBy,
+              id: report.id || parsed.id,
+              experimentId: report.experimentId || parsed.experimentId,
+            };
+          } catch {
+            // resultData không parse được → fallback hiển thị trực tiếp top-level
+            normalized = report;
+          }
+        } else {
+          normalized = report;
+        }
+      }
       setFinalReport(normalized);
       if (updatedExp) setExperiment(updatedExp);
     } catch {
@@ -679,13 +750,33 @@ const ExperimentDetailPage = ({ experimentId }) => {
   };
 
   // ── Rename group ─────────────────────────────────────────────────────
+  const applyMerge = (arr) => {
+    const pts = planTreatmentsRef.current || [];
+    if (!arr.length || !pts.length) return arr;
+    const norm = (s) => (s || '').trim().toLowerCase();
+    // Reset _used flag (vì pts là ref)
+    pts.forEach(t => { t._used = false; });
+    return arr.map(g => {
+      const trt = pts.find(t =>
+        (t.name && norm(t.name) === norm(g.groupName)) ||
+        (t.groupType && norm(t.groupType) === norm(g.groupType) && !t._used)
+      );
+      if (trt) trt._used = true;
+      // Ưu tiên description từ monitoringPlan; fallback g.treatmentDescription nếu không match
+      return {
+        ...g,
+        treatmentDescription: trt?.description || trt?.treatmentDescription || g.treatmentDescription || '',
+        groupType: g.groupType || trt?.groupType || g.groupType,
+      };
+    });
+  };
+
   const handleRenameGroup = async (groupId, newName) => {
     try {
       await groupsApi.update(groupId, { groupName: newName });
       showToast('Đã đổi tên nhóm', 'success');
-      // refresh groups
       const data = await groupsApi.getByExperiment(experiment.id);
-      setGroups(Array.isArray(data) ? data : []);
+      setGroups(applyMerge(Array.isArray(data) ? data : []));
       return true;
     } catch (err) { showToast(err.message || 'Lỗi đổi tên', 'error'); return false; }
   };
@@ -696,7 +787,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
       await groupsApi.remove(groupId);
       showToast('Đã xóa nhóm', 'success');
       const data = await groupsApi.getByExperiment(experiment.id);
-      setGroups(Array.isArray(data) ? data : []);
+      setGroups(applyMerge(Array.isArray(data) ? data : []));
     } catch (err) { showToast(err.message, 'error'); }
   };
 
@@ -1057,6 +1148,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
                   groups={groups}
                   batches={batches}
                   stages={stages}
+                  showToast={showToast}
                   onRefresh={fetchFinalReport}
                 />
               </SafeBoundary>
@@ -1112,6 +1204,36 @@ const ExperimentDetailPage = ({ experimentId }) => {
           skillCatalog={skillCatalog}
           onSubmitManual={async () => {
             if (!taskForm.title.trim()) { showToast('Tiêu đề tác vụ không được trống', 'error'); return; }
+
+            // ── Validate dueDate nằm trong khoảng stage / batch ──
+            if (taskForm.dueDate) {
+              const due = new Date(taskForm.dueDate);
+              if (taskForm.experimentStageId) {
+                const stg = stages.find(s => s.id === taskForm.experimentStageId);
+                if (stg?.startDate && due < new Date(stg.startDate)) {
+                  showToast(`Hạn chót phải từ ngày bắt đầu giai đoạn (${new Date(stg.startDate).toLocaleDateString('vi-VN')})`, 'error'); return;
+                }
+                if (stg?.endDate && due > new Date(stg.endDate)) {
+                  showToast(`Hạn chót phải trước ngày kết thúc giai đoạn (${new Date(stg.endDate).toLocaleDateString('vi-VN')})`, 'error'); return;
+                }
+              } else if (taskForm.batchId) {
+                const bth = batches.find(b => b.id === taskForm.batchId);
+                if (bth?.plantingDate && due < new Date(bth.plantingDate)) {
+                  showToast(`Hạn chót phải từ ngày trồng của lô (${new Date(bth.plantingDate).toLocaleDateString('vi-VN')})`, 'error'); return;
+                }
+                if (bth?.expectedHarvestDate && due > new Date(bth.expectedHarvestDate)) {
+                  showToast(`Hạn chót phải trước ngày dự kiến thu hoạch (${new Date(bth.expectedHarvestDate).toLocaleDateString('vi-VN')})`, 'error'); return;
+                }
+              }
+            }
+
+            // ── Validate careScheduleId khớp stage đã chọn (nếu có) ──
+            if (taskForm.careScheduleId && taskForm.experimentStageId) {
+              const sc = schedules.find(s => s.id === taskForm.careScheduleId);
+              if (sc && sc.experimentStageId && sc.experimentStageId !== taskForm.experimentStageId) {
+                showToast('Lịch chăm sóc không thuộc giai đoạn đã chọn. Vui lòng chọn lại.', 'error'); return;
+              }
+            }
             const payload = {
               experimentStageId: taskForm.experimentStageId || undefined,
               batchId: taskForm.batchId || undefined,
@@ -4026,15 +4148,76 @@ const CreateTaskModal = ({ open, mode, onClose, onChangeMode, stages = [], batch
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1">Hạn chót</label>
                   <input type="date" value={form.dueDate}
-                    min={new Date().toISOString().split('T')[0]}
+                    min={(() => {
+                      // Hạn chót tối thiểu = hôm nay
+                      const today = new Date().toISOString().split('T')[0];
+                      // Nếu đã chọn stage có startDate thì lấy max(today, stage.startDate)
+                      if (form.experimentStageId) {
+                        const stg = stages.find(s => s.id === form.experimentStageId);
+                        if (stg?.startDate) {
+                          const sd = new Date(stg.startDate).toISOString().split('T')[0];
+                          return sd > today ? sd : today;
+                        }
+                      }
+                      // Nếu đã chọn batch có plantingDate thì lấy max(today, batch.plantingDate)
+                      if (form.batchId) {
+                        const bth = batches.find(b => b.id === form.batchId);
+                        if (bth?.plantingDate) {
+                          const pd = new Date(bth.plantingDate).toISOString().split('T')[0];
+                          return pd > today ? pd : today;
+                        }
+                      }
+                      return today;
+                    })()}
+                    max={(() => {
+                      // Ưu tiên stage.endDate > batch.expectedHarvestDate
+                      if (form.experimentStageId) {
+                        const stg = stages.find(s => s.id === form.experimentStageId);
+                        if (stg?.endDate) return new Date(stg.endDate).toISOString().split('T')[0];
+                      }
+                      if (form.batchId) {
+                        const bth = batches.find(b => b.id === form.batchId);
+                        if (bth?.expectedHarvestDate) return new Date(bth.expectedHarvestDate).toISOString().split('T')[0];
+                      }
+                      return undefined;
+                    })()}
                     onChange={e => setForm({ ...form, dueDate: e.target.value })}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                  {(() => {
+                    // Hiển thị khoảng cho phép
+                    if (form.experimentStageId) {
+                      const stg = stages.find(s => s.id === form.experimentStageId);
+                      if (stg?.startDate && stg?.endDate) {
+                        return (
+                          <p className="text-[10px] text-slate-500 mt-1">
+                            📅 Trong khoảng: {new Date(stg.startDate).toLocaleDateString('vi-VN')} → {new Date(stg.endDate).toLocaleDateString('vi-VN')}
+                          </p>
+                        );
+                      }
+                    }
+                    if (form.batchId) {
+                      const bth = batches.find(b => b.id === form.batchId);
+                      if (bth?.plantingDate && bth?.expectedHarvestDate) {
+                        return (
+                          <p className="text-[10px] text-slate-500 mt-1">
+                            🌱 Trong khoảng: {new Date(bth.plantingDate).toLocaleDateString('vi-VN')} → {new Date(bth.expectedHarvestDate).toLocaleDateString('vi-VN')}
+                          </p>
+                        );
+                      }
+                    }
+                    return null;
+                  })()}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1">Giai đoạn</label>
-                  <select value={form.experimentStageId} onChange={e => setForm({ ...form, experimentStageId: e.target.value })}
+                  <select value={form.experimentStageId}
+                    onChange={e => {
+                      const stageId = e.target.value;
+                      // Reset lịch chăm sóc vì stage thay đổi → lịch cũ không còn hợp lệ
+                      setForm({ ...form, experimentStageId: stageId, careScheduleId: '' });
+                    }}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
                     <option value="">— Không chọn —</option>
                     {stages.map(s => <option key={s.id} value={s.id}>{s.stageName || `Stage #${s.id}`}</option>)}
@@ -4042,7 +4225,12 @@ const CreateTaskModal = ({ open, mode, onClose, onChangeMode, stages = [], batch
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-600 mb-1">Lô</label>
-                  <select value={form.batchId} onChange={e => setForm({ ...form, batchId: e.target.value })}
+                  <select value={form.batchId}
+                    onChange={e => {
+                      const batchId = e.target.value;
+                      // Reset lịch chăm sóc vì batch thay đổi
+                      setForm({ ...form, batchId, careScheduleId: '' });
+                    }}
                     className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
                     <option value="">— Không chọn —</option>
                     {batches.map(b => <option key={b.id} value={b.id}>{b.batchCode || `Batch #${b.id}`}</option>)}
@@ -4054,9 +4242,27 @@ const CreateTaskModal = ({ open, mode, onClose, onChangeMode, stages = [], batch
                 <select value={form.careScheduleId || ''} onChange={e => setForm({ ...form, careScheduleId: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
                   <option value="">— Tùy chọn —</option>
-                  {(form.batchId ? schedules.filter(sc => !sc.batchId || sc.batchId === form.batchId) : schedules)
-                    .map(sc => <option key={sc.id} value={sc.id}>{sc.title || sc.scheduleName || `Schedule #${sc.id}`}</option>)}
+                  {schedules
+                    .filter(sc => {
+                      // Bắt buộc khớp stage nếu đã chọn
+                      if (form.experimentStageId && sc.experimentStageId && sc.experimentStageId !== form.experimentStageId) return false;
+                      // Nếu có batchId, chỉ giữ schedule của batch đó hoặc schedule chung (null batchId)
+                      if (form.batchId && sc.batchId && sc.batchId !== form.batchId) return false;
+                      return true;
+                    })
+                    .map(sc => {
+                      const stg = stages.find(s => s.id === sc.experimentStageId);
+                      const bth = batches.find(b => b.id === sc.batchId);
+                      return <option key={sc.id} value={sc.id}>
+                        {(sc.title || sc.scheduleName || `Schedule #${sc.id}`)}
+                        {stg ? ` — 📅 ${stg.stageName || 'GĐ'}` : ''}
+                        {bth ? ` — 📦 ${bth.batchCode || ''}` : ''}
+                      </option>;
+                    })}
                 </select>
+                {form.experimentStageId && schedules.filter(sc => sc.experimentStageId === form.experimentStageId).length === 0 && (
+                  <p className="text-[10px] text-amber-600 mt-1">⚠️ Giai đoạn này chưa có lịch chăm sóc nào.</p>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-600 mb-1">Mô tả</label>
@@ -4133,240 +4339,354 @@ const CreateTaskModal = ({ open, mode, onClose, onChangeMode, stages = [], batch
 
 export default ExperimentDetailPage;
 
-const ExperimentCompletionPanel = ({ experiment, finalReport, loadingFinalReport, completing, groups = [], batches = [], stages = [], onRefresh }) => {
+// ── Helper: build default form từ experiment + counts ───────────────────────
+function buildReportDefaults(experiment, groups, batches, stages) {
+  const groupCount = groups.length;
+  const batchCount = batches.length;
+  const stageCount = stages.length;
+
+  // Mục tiêu — ưu tiên field có nghĩa rõ nhất
+  const objectives = [
+    experiment.objectives, experiment.researchObjective, experiment.objective,
+    experiment.purpose, experiment.aim, experiment.goal,
+    experiment.hypothesis, experiment.researchQuestion,
+    experiment.description, experiment.experimentDescription,
+    experiment.designRationale,
+  ].find(v => v && String(v).trim()) || '';
+
+  const designType = experiment.designType || experiment.designName || experiment.experimentDesign || '';
+  const designDesc = experiment.designDescription || experiment.design || '';
+
+  const startDate = experiment.startDate ? new Date(experiment.startDate).toLocaleDateString('vi-VN') : '';
+  const endDate = experiment.endDate ? new Date(experiment.endDate).toLocaleDateString('vi-VN') : '';
+  const duration = startDate && endDate ? `Từ ${startDate} đến ${endDate}`
+    : startDate ? `Bắt đầu: ${startDate}` : endDate ? `Kết thúc: ${endDate}` : '';
+
+  const title = `Báo cáo tổng kết: ${experiment.title || experiment.experimentCode || 'Thực nghiệm'}${startDate ? ` (${startDate})` : ''}`;
+
+  // Nguyên tắc thiết kế (methodology) — format IMRAD
+  let methodology = '';
+  if (designType) methodology = `Thiết kế thực nghiệm: ${designType}${designDesc ? ` (${designDesc})` : ''}.`;
+  if (groupCount > 0) methodology += ` Bố trí ${groupCount} nghiệm thức (nhóm)`;
+  if (batchCount > 0) methodology += `, ${batchCount} lô trồng`;
+  if (stageCount > 0) methodology += `, ${stageCount} giai đoạn sinh trưởng`;
+  if (startDate || endDate) methodology += `. Thời gian: ${duration || 'chưa xác định'}.`;
+  if (!methodology) methodology = `Thực nghiệm gồm ${groupCount} nhóm, ${batchCount} lô trồng, ${stageCount} giai đoạn.`;
+
+  // Tóm tắt điều hành (executive summary)
+  const summaryParts = [];
+  summaryParts.push(experiment.title ? `Thực nghiệm "${experiment.title}"` : 'Thực nghiệm này');
+  if (designType) summaryParts.push(`theo thiết kế ${designType}`);
+  if (startDate || endDate) {
+    const period = startDate && endDate ? `được thực hiện từ ${startDate} đến ${endDate}`
+      : startDate ? `bắt đầu từ ${startDate}` : `kết thúc vào ${endDate}`;
+    summaryParts.push(period);
+  }
+  if (groupCount > 0) summaryParts.push(`với ${groupCount} nghiệm thức`);
+  if (stageCount > 0) summaryParts.push(`trải qua ${stageCount} giai đoạn chính`);
+  summaryParts.push('.');
+  const summary = summaryParts.join(' ');
+
+  return {
+    title, summary, objectives, methodology,
+    results: '', conclusion: '', recommendations: '',
+    discussion: '',
+    limitations: '',
+    notes: duration,
+  };
+}
+
+// ── Field input (textarea + input) — không scroll jump ──────────────────────
+const ReportField = React.forwardRef(function ReportField(
+  { label, field, multiline = false, placeholder = '', value, onChange, autoFilled = false, hint = '', required = false },
+  ref
+) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-xs font-bold text-slate-700 uppercase tracking-wide">
+          {label}{required && <span className="text-rose-500 ml-0.5">*</span>}
+        </label>
+        {autoFilled && value && (
+          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded uppercase tracking-wide shrink-0">
+            ⚡ Auto-filled
+          </span>
+        )}
+      </div>
+      {multiline ? (
+        <textarea
+          ref={ref}
+          value={value || ''}
+          onChange={e => onChange(field, e.target.value)}
+          placeholder={placeholder || `Nhập ${label.toLowerCase()}...`}
+          rows={4}
+          className="w-full px-3.5 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent resize-y bg-white min-h-[96px] leading-relaxed"
+        />
+      ) : (
+        <input
+          ref={ref}
+          type="text"
+          value={value || ''}
+          onChange={e => onChange(field, e.target.value)}
+          placeholder={placeholder || `Nhập ${label.toLowerCase()}...`}
+          className="w-full px-3.5 py-2.5 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent bg-white"
+        />
+      )}
+      {hint && <p className="text-[11px] text-slate-500 italic">{hint}</p>}
+    </div>
+  );
+});
+
+// ── Form báo cáo chuẩn khoa học (IMRAD-like) — dùng cho Create + Edit ────────
+function ReportForm({ experiment, groups, batches, stages, initial, onSubmit, submitting, onCancel, showToast }) {
+  const defaults = useMemo(
+    () => buildReportDefaults(experiment, groups, batches, stages),
+    [experiment?.id, groups.length, batches.length, stages.length]
+  );
+
+  const [form, setForm] = useState(() => ({ ...defaults, ...(initial || {}) }));
+
+  // Track field nào được auto-fill (hiển thị badge)
+  const autoFilledFields = useMemo(() => {
+    const set = new Set();
+    Object.entries(defaults).forEach(([k, v]) => {
+      if (v && (!initial || initial[k] == null || initial[k] === '')) set.add(k);
+    });
+    return set;
+  }, [defaults, initial]);
+
+  const handleChange = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
+
+  const refill = () => setForm(prev => ({ ...defaults, ...prev, results: prev.results, conclusion: prev.conclusion, recommendations: prev.recommendations, discussion: prev.discussion, limitations: prev.limitations }));
+
+  const submit = async () => {
+    if (!form.title.trim()) {
+      showToast?.('Vui lòng nhập tiêu đề báo cáo', 'warning');
+      return;
+    }
+    if (!form.objectives.trim() && !autoFilledFields.has('objectives')) {
+      showToast?.('Vui lòng nhập mục tiêu nghiên cứu', 'warning');
+      return;
+    }
+    const resultData = {};
+    Object.entries(form).forEach(([k, v]) => {
+      if (v != null && String(v).trim() !== '') resultData[k] = String(v).trim();
+    });
+    await onSubmit(resultData);
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Info banner */}
+      <div className="flex items-start gap-2 text-xs bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5">
+        <span className="text-blue-600 text-base shrink-0 mt-0.5">💡</span>
+        <div className="flex-1">
+          <p className="text-slate-700 leading-relaxed">
+            Báo cáo theo cấu trúc <strong>IMRAD</strong> (Giới thiệu → Phương pháp → Kết quả → Thảo luận).
+            Các trường có gắn <span className="font-bold text-emerald-700">⚡ Auto-filled</span> đã tự động điền từ dữ liệu thực nghiệm — bạn có thể chỉnh sửa.
+          </p>
+        </div>
+        <button type="button" onClick={refill}
+          className="text-blue-600 hover:text-blue-700 font-bold shrink-0 text-[11px] uppercase tracking-wide">
+          🔄 Điền lại
+        </button>
+      </div>
+
+      {/* Section I — Introduction */}
+      <fieldset className="border border-slate-200 rounded-xl p-4 space-y-4 bg-slate-50/30">
+        <legend className="text-xs font-bold text-slate-700 uppercase tracking-wide px-2">
+          📖 Phần I — Giới thiệu
+        </legend>
+        <ReportField label="Tiêu đề báo cáo" field="title" required value={form.title} onChange={handleChange}
+          placeholder="VD: Báo cáo tổng kết thực nghiệm ABC" autoFilled={autoFilledFields.has('title')} />
+        <ReportField label="Tóm tắt điều hành" field="summary" multiline value={form.summary} onChange={handleChange}
+          placeholder="Tóm tắt ngắn gọn nội dung, quy mô, thời gian thực hiện..." autoFilled={autoFilledFields.has('summary')}
+          hint="1–3 câu. Trình bày bối cảnh, quy mô, mục đích chính của thực nghiệm." />
+        <ReportField label="Mục tiêu nghiên cứu" field="objectives" multiline value={form.objectives} onChange={handleChange}
+          placeholder="Mục tiêu cụ thể của thực nghiệm (có thể dạng gạch đầu dòng)..." autoFilled={autoFilledFields.has('objectives')}
+          hint="Nêu rõ câu hỏi nghiên cứu hoặc giả thuyết cần kiểm chứng." />
+      </fieldset>
+
+      {/* Section II — Methods */}
+      <fieldset className="border border-slate-200 rounded-xl p-4 space-y-4 bg-slate-50/30">
+        <legend className="text-xs font-bold text-slate-700 uppercase tracking-wide px-2">
+          🔬 Phần II — Nguyên tắc thiết kế & Phương pháp
+        </legend>
+        <ReportField label="Nguyên tắc thiết kế" field="methodology" multiline value={form.methodology} onChange={handleChange}
+          placeholder="Thiết kế thực nghiệm: RCBD. Bố trí 3 nghiệm thức × 3 lần lặp. Thời gian: ..."
+          autoFilled={autoFilledFields.has('methodology')}
+          hint="Mô tả: loại thiết kế (RCBD/CRD/...), số nghiệm thức, số lần lặp, số lô, các giai đoạn chính, thời gian thực hiện." />
+      </fieldset>
+
+      {/* Section III — Results */}
+      <fieldset className="border border-slate-200 rounded-xl p-4 space-y-4 bg-slate-50/30">
+        <legend className="text-xs font-bold text-slate-700 uppercase tracking-wide px-2">
+          📊 Phần III — Kết quả
+        </legend>
+        <ReportField label="Kết quả chính" field="results" multiline value={form.results} onChange={handleChange}
+          placeholder="Mô tả kết quả thu được từ các nhóm/lô/giai đoạn. Có thể đính kèm số liệu trung bình, độ lệch chuẩn, ý nghĩa thống kê..."
+          hint="Trình bày khách quan, có số liệu (nếu có). Tránh diễn giải tại phần này." />
+      </fieldset>
+
+      {/* Section IV — Discussion & Conclusion */}
+      <fieldset className="border border-slate-200 rounded-xl p-4 space-y-4 bg-slate-50/30">
+        <legend className="text-xs font-bold text-slate-700 uppercase tracking-wide px-2">
+          💭 Phần IV — Thảo luận & Kết luận
+        </legend>
+        <ReportField label="Thảo luận" field="discussion" multiline value={form.discussion} onChange={handleChange}
+          placeholder="Diễn giải ý nghĩa kết quả, so sánh với tài liệu tham khảo, lý giải sự khác biệt giữa các nghiệm thức..."
+          hint="Phân tích nguyên nhân, đối chiếu với y văn, làm rõ xu hướng kết quả." />
+        <ReportField label="Kết luận" field="conclusion" multiline value={form.conclusion} onChange={handleChange}
+          placeholder="Kết luận rút ra từ thực nghiệm (1–3 gạch đầu dòng)."
+          hint="Ngắn gọn, rõ ràng, trả lời trực tiếp mục tiêu nghiên cứu." />
+        <ReportField label="Hạn chế" field="limitations" multiline value={form.limitations} onChange={handleChange}
+          placeholder="Các hạn chế của thực nghiệm (điều kiện thời tiết, quy mô mẫu, công cụ đo,...)"
+          hint="Giúp người đọc đánh giá phạm vi áp dụng của kết quả." />
+        <ReportField label="Khuyến nghị / Hướng phát triển" field="recommendations" multiline value={form.recommendations} onChange={handleChange}
+          placeholder="Đề xuất cải tiến, ứng dụng thực tiễn, hướng nghiên cứu tiếp theo..." />
+      </fieldset>
+
+      {/* Notes */}
+      <fieldset className="border border-slate-200 rounded-xl p-4 space-y-4 bg-slate-50/30">
+        <legend className="text-xs font-bold text-slate-700 uppercase tracking-wide px-2">
+          📝 Ghi chú bổ sung
+        </legend>
+        <ReportField label="Ghi chú" field="notes" multiline value={form.notes} onChange={handleChange}
+          placeholder="Thông tin bổ sung, điều kiện đặc biệt, sự cố trong quá trình thí nghiệm..."
+          autoFilled={autoFilledFields.has('notes')} />
+      </fieldset>
+
+      {/* Actions */}
+      <div className="flex items-center justify-between gap-3 pt-2 border-t border-slate-200">
+        <p className="text-[11px] text-slate-500">
+          <span className="text-rose-500">*</span> Trường bắt buộc. Báo cáo được lưu vào JSONB <code className="bg-slate-100 px-1 rounded">resultData</code>.
+        </p>
+        <div className="flex items-center gap-2">
+          {onCancel && (
+            <button type="button" onClick={onCancel}
+              className="px-4 py-2 border border-slate-300 text-slate-600 hover:bg-slate-50 rounded-lg text-sm font-semibold">
+              Hủy
+            </button>
+          )}
+          <button type="button" onClick={submit} disabled={submitting || !form.title.trim()}
+            className="px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-lg text-sm font-bold shadow-sm flex items-center gap-2">
+            {submitting ? '⏳ Đang lưu...' : '💾 Lưu báo cáo'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Panel chính: View (xem lại) / Edit (chỉnh sửa) / Create ────────────────
+const ExperimentCompletionPanel = ({ experiment, finalReport, loadingFinalReport, completing, groups = [], batches = [], stages = [], onRefresh, showToast }) => {
   if (!experiment) return null;
 
   const status = experiment.status || 'Draft';
   const isCompleted = status === 'Completed';
-
-  const [form, setForm] = useState({
-    title: '',
-    summary: '',
-    objectives: '',
-    methodology: '',
-    results: '',
-    conclusion: '',
-    recommendations: '',
-    notes: '',
-  });
+  const [editing, setEditing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // Auto-fill khi mount hoặc khi experiment thay đổi
-  const autoFill = () => {
-    const groupCount = groups.length;
-    const batchCount = batches.length;
-    const stageCount = stages.length;
-
-    // Mục tiêu nghiên cứu — thử nhiều field khả dĩ từ experiment
-    const objectiveCandidates = [
-      experiment.objectives,
-      experiment.researchObjective,
-      experiment.objective,
-      experiment.purpose,
-      experiment.aim,
-      experiment.goal,
-      experiment.hypothesis,
-      experiment.researchQuestion,
-      experiment.description,
-      experiment.notes,
-      experiment.summary,
-      experiment.experimentDescription,
-      experiment.designRationale,
-    ];
-    const objectives = objectiveCandidates.find(v => v && String(v).trim()) || '';
-
-    // Thiết kế thực nghiệm
-    const designType = experiment.designType || experiment.designName || experiment.experimentDesign || '';
-    const designDesc = experiment.designDescription || experiment.design || '';
-
-    // Thời gian
-    const startDate = experiment.startDate
-      ? new Date(experiment.startDate).toLocaleDateString('vi-VN')
-      : '';
-    const endDate = experiment.endDate
-      ? new Date(experiment.endDate).toLocaleDateString('vi-VN')
-      : '';
-    const duration = startDate && endDate
-      ? `Từ ${startDate} đến ${endDate}`
-      : startDate ? `Bắt đầu: ${startDate}` : endDate ? `Kết thúc: ${endDate}` : '';
-
-    // Mặc định title
-    const defaultTitle = `Báo cáo tổng kết: ${experiment.title || experiment.experimentCode || 'Thực nghiệm'} ${startDate ? `(${startDate})` : ''}`;
-
-    // Nguyên tắc thiết kế (methodology)
-    let methodology = '';
-    if (designType) {
-      methodology = `Thiết kế: ${designType}${designDesc ? ` - ${designDesc}` : ''}.`;
-    }
-    if (groupCount > 0) methodology += ` Thực nghiệm gồm ${groupCount} nhóm`;
-    if (batchCount > 0) methodology += `, ${batchCount} lô trồng`;
-    if (stageCount > 0) methodology += `, ${stageCount} giai đoạn.`;
-    if (!methodology) {
-      methodology = `Thực nghiệm gồm ${groupCount} nhóm, ${batchCount} lô, ${stageCount} giai đoạn.`;
-    }
-
-    // Tóm tắt - dùng dữ liệu thật
-    const summaryParts = [];
-    if (experiment.title) summaryParts.push(`Thực nghiệm "${experiment.title}"`);
-    else summaryParts.push('Thực nghiệm này');
-    if (startDate || endDate) {
-      const period = startDate && endDate ? `được thực hiện từ ${startDate} đến ${endDate}` : startDate ? `bắt đầu từ ${startDate}` : `kết thúc vào ${endDate}`;
-      summaryParts.push(period);
-    }
-    if (groupCount > 0) summaryParts.push(`với ${groupCount} nhóm thí nghiệm`);
-    if (batchCount > 0) summaryParts.push(`${batchCount} lô trồng`);
-    if (stageCount > 0) summaryParts.push(`và ${stageCount} giai đoạn chính`);
-    summaryParts.push('.');
-    const defaultSummary = summaryParts.join(' ');
-
-    setForm(prev => ({
-      title: prev.title || defaultTitle,
-      summary: prev.summary || defaultSummary,
-      objectives: prev.objectives || objectives,
-      methodology: prev.methodology || methodology,
-      results: prev.results || '',
-      conclusion: prev.conclusion || '',
-      recommendations: prev.recommendations || '',
-      notes: prev.notes || duration,
-    }));
-  };
-
-  // Auto-fill khi experiment hoặc dữ liệu liên quan thay đổi (chỉ khi chưa có finalReport)
-  useEffect(() => {
-    if (!isCompleted && !finalReport && experiment) {
-      autoFill();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [experiment?.id, groups.length, batches.length, stages.length]);
-
-  const handleChange = (field, value) => {
-    setForm(prev => ({ ...prev, [field]: value }));
-  };
-
-  const handleSubmit = async () => {
-    if (!form.title.trim()) {
-      alert('Vui lòng nhập tiêu đề báo cáo');
-      return;
-    }
+  const submitReport = async (resultData) => {
     setSubmitting(true);
     try {
-      // resultData là JSONB, chỉ gửi field có giá trị (loại field trống)
-      const resultData = {};
-      Object.entries(form).forEach(([k, v]) => {
-        if (v != null && String(v).trim() !== '') resultData[k] = String(v).trim();
-      });
-
       await experimentsApi.createFinalReport(experiment.id, resultData);
-      // Reload experiment (status đã chuyển Completed) + final report
-      await Promise.all([
-        experimentsApi.getById(experiment.id).then(u => setExperiment(u)).catch(() => {}),
-        onRefresh?.(),
-      ]);
+      await onRefresh?.();
+      setEditing(false);
+      showToast?.('Đã lưu báo cáo cuối cùng thành công', 'success');
     } catch (err) {
-      alert(err.message || 'Lỗi tạo báo cáo');
+      showToast?.(err.message || 'Lỗi lưu báo cáo', 'error');
     } finally {
       setSubmitting(false);
     }
   };
 
-  // ── Render helpers ────────────────────────────────────────────────────────
-  const Field = ({ label, field, multiline = false, placeholder = '' }) => (
-    <div>
-      <label className="block text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5">{label}</label>
-      {multiline ? (
-        <textarea
-          value={form[field] || ''}
-          onChange={e => handleChange(field, e.target.value)}
-          placeholder={placeholder || `Nhập ${label.toLowerCase()}...`}
-          rows={4}
-          className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent resize-y bg-white"
-        />
-      ) : (
-        <input
-          type="text"
-          value={form[field] || ''}
-          onChange={e => handleChange(field, e.target.value)}
-          placeholder={placeholder || `Nhập ${label.toLowerCase()}...`}
-          className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent bg-white"
-        />
-      )}
-    </div>
-  );
+  const renderCreatedAt = (r) => {
+    if (!r?.createdAt) return '';
+    try { return new Date(r.createdAt).toLocaleString('vi-VN'); } catch { return ''; }
+  };
 
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
-        <div className="flex items-center justify-between mb-1">
-          <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-            📑 Báo Cáo Cuối Cùng
-          </h2>
-          <button
-            onClick={() => { autoFill(); onRefresh?.(); }}
-            className="px-3 py-1.5 border border-slate-200 hover:bg-slate-50 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
-            title="Tải lại & tự động điền"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
-            Làm mới
-          </button>
+        <div className="flex items-center justify-between mb-1 gap-3 flex-wrap">
+          <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">📑 Báo Cáo Cuối Cùng</h2>
+          <div className="flex items-center gap-2">
+            {finalReport && !editing && (
+              <button onClick={() => setEditing(true)}
+                className="px-3 py-1.5 border border-blue-200 text-blue-700 hover:bg-blue-50 rounded-lg text-xs font-bold flex items-center gap-1.5">
+                ✏️ Chỉnh sửa
+              </button>
+            )}
+            <button onClick={() => onRefresh?.()}
+              className="px-3 py-1.5 border border-slate-200 hover:bg-slate-50 rounded-lg text-xs font-semibold flex items-center gap-1.5">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>
+              Làm mới
+            </button>
+          </div>
         </div>
         <p className="text-sm text-slate-500">
-          {isCompleted
-            ? '✅ Thực nghiệm đã hoàn thành. Báo cáo cuối cùng được hiển thị bên dưới.'
-            : 'Điền thông tin báo cáo bên dưới. Các trường đã được tự động điền từ dữ liệu thực nghiệm. Nhấn "Hoàn thành" trên header để lưu.'}
+          {loadingFinalReport
+            ? '⏳ Đang tải báo cáo...'
+            : finalReport && !editing
+              ? editing
+                ? '✏️ Đang chỉnh sửa báo cáo. Thay đổi sẽ được lưu khi nhấn "Lưu báo cáo".'
+                : '✅ Báo cáo cuối cùng được hiển thị bên dưới theo cấu trúc IMRAD — nhấn "Chỉnh sửa" để cập nhật.'
+              : editing
+                ? '✏️ Đang chỉnh sửa báo cáo. Thay đổi sẽ được lưu khi nhấn "Lưu báo cáo".'
+                : 'Điền thông tin báo cáo bên dưới theo cấu trúc IMRAD. Các trường có gắn ⚡ đã được tự động điền từ dữ liệu thực nghiệm.'}
         </p>
       </div>
 
-      {/* Form / Report viewer */}
+      {/* Body */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
-        {isCompleted && finalReport ? (
-          /* ── Đã hoàn thành: chỉ hiển thị report ── */
+        {loadingFinalReport ? (
+          <div className="py-10 text-center text-slate-400 text-sm">⏳ Đang tải báo cáo...</div>
+        ) : finalReport && !editing ? (
+          /* ── VIEW MODE: đã có báo cáo, không edit ── */
           <div className="rounded-xl border border-blue-200 bg-blue-50/30 overflow-hidden">
             <div className="px-5 py-4 border-b border-blue-200 bg-blue-50 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-10 h-10 rounded-xl bg-blue-500 text-white flex items-center justify-center text-xl shrink-0 shadow-sm">📑</div>
                 <div className="min-w-0">
-                  <p className="text-base font-bold text-blue-900 truncate">{finalReport.title || finalReport.reportTitle || 'Báo cáo cuối cùng'}</p>
+                  <p className="text-base font-bold text-blue-900 truncate">
+                    {finalReport.title || finalReport.reportTitle || 'Báo cáo cuối cùng'}
+                  </p>
                   <p className="text-xs text-blue-700">
-                    {finalReport.createdAt ? `Tạo: ${new Date(finalReport.createdAt).toLocaleString('vi-VN')}` : ''}
+                    {renderCreatedAt(finalReport) && `Tạo: ${renderCreatedAt(finalReport)}`}
                     {finalReport.createdBy ? ` • ${finalReport.createdBy}` : ''}
                   </p>
                 </div>
               </div>
-              <span className="shrink-0 px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-bold uppercase tracking-wide shadow-sm">✅ Đã hoàn thành</span>
+              <span className="shrink-0 px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-xs font-bold uppercase tracking-wide shadow-sm">
+                ✅ Đã hoàn thành
+              </span>
             </div>
-            <div className="p-5 space-y-4">
-              {finalReport.summary && (
-                <Section label="📋 Tóm tắt" value={finalReport.summary} />
-              )}
-              {finalReport.objectives && (
-                <Section label="🎯 Mục tiêu" value={finalReport.objectives} />
-              )}
-              {finalReport.methodology && (
-                <Section label="📐 Nguyên tắc thiết kế" value={finalReport.methodology} />
-              )}
-              {finalReport.results && (
-                <Section label="📊 Kết quả" value={finalReport.results} />
-              )}
-              {finalReport.conclusion && (
-                <Section label="🎯 Kết luận" value={finalReport.conclusion} />
-              )}
-              {finalReport.recommendations && (
-                <Section label="💡 Khuyến nghị" value={finalReport.recommendations} />
-              )}
-              {finalReport.notes && (
-                <Section label="📝 Ghi chú" value={finalReport.notes} />
-              )}
-              {/* Fallback: các field còn lại (không phải metadata) */}
+            <div className="p-5 space-y-5">
+              {/* IMRAD sections */}
+              {finalReport.summary && <Section label="📋 Tóm tắt điều hành" value={finalReport.summary} />}
+              {finalReport.objectives && <Section label="🎯 Mục tiêu nghiên cứu" value={finalReport.objectives} />}
+              {finalReport.methodology && <Section label="🔬 Nguyên tắc thiết kế & Phương pháp" value={finalReport.methodology} />}
+              {finalReport.results && <Section label="📊 Kết quả chính" value={finalReport.results} />}
+              {finalReport.discussion && <Section label="💭 Thảo luận" value={finalReport.discussion} />}
+              {finalReport.conclusion && <Section label="✅ Kết luận" value={finalReport.conclusion} />}
+              {finalReport.limitations && <Section label="⚠️ Hạn chế" value={finalReport.limitations} />}
+              {finalReport.recommendations && <Section label="💡 Khuyến nghị" value={finalReport.recommendations} />}
+              {finalReport.notes && <Section label="📝 Ghi chú" value={finalReport.notes} />}
+              {/* Fallback */}
               {(() => {
-                const rest = Object.entries(finalReport).filter(([k,v]) => !KNOWN_REPORT_FIELDS.has(k) && v != null && v !== '' && typeof v !== 'object');
+                const rest = Object.entries(finalReport).filter(([k, v]) =>
+                  !KNOWN_REPORT_FIELDS.has(k) && v != null && v !== '' && typeof v !== 'object');
                 return rest.length > 0 ? (
                   <div className="border-t border-blue-100 pt-4 mt-4">
                     <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-3">ℹ️ Thông tin khác</p>
                     <div className="grid grid-cols-2 gap-3">
-                      {rest.map(([k,v]) => (
+                      {rest.map(([k, v]) => (
                         <div key={k} className="bg-white rounded-lg border border-slate-200 p-2.5">
-                          <p className="text-[10px] text-slate-400 font-medium mb-0.5 capitalize">{k.replace(/([A-Z])/g,' $1').trim()}</p>
+                          <p className="text-[10px] text-slate-400 font-medium mb-0.5 capitalize">
+                            {k.replace(/([A-Z])/g, ' $1').trim()}
+                          </p>
                           <p className="text-sm text-slate-900 font-semibold truncate">{String(v)}</p>
                         </div>
                       ))}
@@ -4377,55 +4697,18 @@ const ExperimentCompletionPanel = ({ experiment, finalReport, loadingFinalReport
             </div>
           </div>
         ) : (
-          /* ── Chưa hoàn thành: FORM báo cáo thông minh ── */
-          <div className="space-y-5">
-            {/* Thanh trạng thái form */}
-            <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
-              <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
-              <span>Điền thông tin báo cáo. Các trường được tự động điền từ dữ liệu thực nghiệm — bạn có thể chỉnh sửa trước khi gửi.</span>
-            </div>
-
-            {/* Tiêu đề */}
-            <Field label="📌 Tiêu đề báo cáo *" field="title" placeholder="VD: Báo cáo tổng kết thực nghiệm ABC (2026)" />
-
-            {/* Tóm tắt */}
-            <Field label="📋 Tóm tắt" field="summary" multiline placeholder="Tóm tắt ngắn gọn nội dung và kết quả chính..." />
-
-            {/* Mục tiêu */}
-            <Field label="🎯 Mục tiêu nghiên cứu" field="objectives" multiline placeholder="Mục tiêu của thực nghiệm..." />
-
-            {/* Nguyên tắc thiết kế (design + groups/batches/stages) */}
-            <Field label="📐 Nguyên tắc thiết kế" field="methodology" multiline placeholder="Thiết kế: RCBD. Thực nghiệm gồm 3 nhóm, 9 lô trồng, 5 giai đoạn." />
-
-            {/* Kết quả */}
-            <Field label="📊 Kết quả" field="results" multiline placeholder="Phân tích kết quả thu được từ các nhóm..." />
-
-            {/* Kết luận */}
-            <Field label="🎯 Kết luận" field="conclusion" multiline placeholder="Kết luận rút ra từ thực nghiệm..." />
-
-            {/* Khuyến nghị */}
-            <Field label="💡 Khuyến nghị" field="recommendations" multiline placeholder="Các đề xuất, cải tiến cho nghiên cứu tiếp theo..." />
-
-            {/* Ghi chú */}
-            <Field label="📝 Ghi chú" field="notes" multiline placeholder="Thông tin bổ sung, điều kiện đặc biệt..." />
-
-            {/* Actions */}
-            <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
-              <button
-                onClick={autoFill}
-                className="px-4 py-2 border border-slate-300 text-slate-600 hover:bg-slate-50 rounded-xl text-sm font-semibold transition-colors"
-              >
-                🔄 Tự động điền lại
-              </button>
-              <button
-                onClick={handleSubmit}
-                disabled={submitting || !form.title.trim()}
-                className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white rounded-xl text-sm font-bold transition-colors shadow-sm flex items-center gap-2"
-              >
-                {submitting ? '⏳ Đang lưu...' : '💾 Lưu & Hoàn thành'}
-              </button>
-            </div>
-          </div>
+          /* ── CREATE / EDIT MODE: chưa có report hoặc đang edit ── */
+          <ReportForm
+            experiment={experiment}
+            groups={groups}
+            batches={batches}
+            stages={stages}
+            initial={editing && finalReport ? finalReport : null}
+            submitting={submitting}
+            onSubmit={submitReport}
+            onCancel={editing ? () => setEditing(false) : null}
+            showToast={showToast}
+          />
         )}
       </div>
     </div>
@@ -4436,8 +4719,7 @@ const ExperimentCompletionPanel = ({ experiment, finalReport, loadingFinalReport
 const KNOWN_REPORT_FIELDS = new Set([
   'id', 'experimentId', 'createdAt', 'updatedAt', 'createdBy',
   'title', 'summary', 'objectives', 'methodology', 'results',
-  'conclusion', 'recommendations', 'notes',
-  // Metadata bỏ qua
+  'discussion', 'conclusion', 'limitations', 'recommendations', 'notes',
   'reportTitle', 'reportType', 'isFinal', 'reportMeta',
   'fileUrl', 'exportUrl', 'exportPath', 'file', 'attachments',
 ]);
