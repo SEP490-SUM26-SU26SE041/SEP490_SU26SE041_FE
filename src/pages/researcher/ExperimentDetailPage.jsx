@@ -15,6 +15,7 @@ import { useToast } from '../../context/ToastContext';
 import ExperimentOverviewSummary from '../../components/researcher/ExperimentOverviewSummary';
 import StatisticsDashboard from '../../components/researcher/StatisticsDashboard';
 import BatchIoTPanel from '../../components/iot/BatchIoTPanel';
+import BatchEditModal from '../../components/researcher/BatchEditModal';
 
 const Portal = ({ children }) => {
   return children;
@@ -628,8 +629,47 @@ const ExperimentDetailPage = ({ experimentId }) => {
     if (!scheduleForm.title.trim()) { showToast('Tiêu đề lịch không được trống', 'error'); return; }
     setSaving(s => ({ ...s, schedule: true }));
     try {
-      await schedulesApi.create(experiment.id, { ...scheduleForm, frequencyDays: parseInt(scheduleForm.frequencyDays) || 1 });
-      showToast('Đã tạo lịch', 'success');
+      // Nếu user chọn "Tất cả lô" (batchId rỗng) → loop qua từng batch gọi API N lần
+      // vì BE endpoint /schedules hiện chỉ nhận 1 batchId / lần.
+      const applyAllBatches = !scheduleForm.batchId || scheduleForm.batchId === '';
+      const targetBatches = applyAllBatches
+        ? (batches || []).filter(b => b && b.id)
+        : [{ id: scheduleForm.batchId }];
+
+      const basePayload = {
+        ...scheduleForm,
+        frequencyDays: parseInt(scheduleForm.frequencyDays) || 1,
+        batchId: applyAllBatches ? undefined : scheduleForm.batchId,
+      };
+
+      if (applyAllBatches) {
+        showToast(`Đang tạo ${targetBatches.length} lịch cho ${targetBatches.length} lô...`, 'info');
+      }
+
+      let successCount = 0;
+      let failCount = 0;
+      for (const b of targetBatches) {
+        try {
+          await schedulesApi.create(experiment.id, { ...basePayload, batchId: b.id });
+          successCount++;
+        } catch (err) {
+          failCount++;
+          console.error('Schedule create failed for batch', b.id, err);
+        }
+      }
+
+      if (applyAllBatches) {
+        if (failCount === 0) {
+          showToast(`Đã tạo ${successCount} lịch cho ${successCount} lô thành công!`, 'success');
+        } else if (successCount > 0) {
+          showToast(`Tạo thành công ${successCount}/${targetBatches.length} lịch. ${failCount} lô bị lỗi.`, 'warning');
+        } else {
+          showToast(`Tạo lịch thất bại cho cả ${targetBatches.length} lô`, 'error');
+        }
+      } else {
+        showToast('Đã tạo lịch', 'success');
+      }
+
       setScheduleForm({ experimentStageId: scheduleForm.experimentStageId, batchId: '', title: '', instruction: '', frequencyDays: 1, taskType: 'Watering', startDate: '', endDate: '' });
       const data = await schedulesApi.getByExperiment(experiment.id);
       setSchedules(Array.isArray(data) ? data : []);
@@ -660,6 +700,22 @@ const ExperimentDetailPage = ({ experimentId }) => {
     if (!window.confirm('Xóa lô này?')) return;
     try { await batchesApi.remove(id); showToast('Đã xóa', 'success'); setBatches(prev => prev.filter(b => b.id !== id)); }
     catch (err) { showToast(err.message, 'error'); }
+  };
+
+  const handleUpdateBatch = async (batchId, payload) => {
+    try {
+      setSaving(s => ({ ...s, batch: true }));
+      await batchesApi.update(batchId, payload);
+      showToast('Đã cập nhật lô', 'success');
+      // Reload batches list
+      const data = await batchesApi.getByExperiment(experiment.id);
+      setBatches(Array.isArray(data) ? data : []);
+    } catch (err) {
+      showToast(err.message || 'Lỗi cập nhật lô', 'error');
+      throw err;
+    } finally {
+      setSaving(s => ({ ...s, batch: false }));
+    }
   };
 
   // ── Task creation (modal) ────────────────────────────────────────────
@@ -1219,7 +1275,8 @@ const ExperimentDetailPage = ({ experimentId }) => {
                 <BatchesSection
                   batches={batches} groups={groups} bedAssignments={bedAssignments}
                   form={batchForm} setForm={setBatchForm}
-                  onCreate={handleCreateBatch} onDelete={handleDeleteBatch} saving={saving.batch}
+                  onCreate={handleCreateBatch} onDelete={handleDeleteBatch}
+                  onUpdate={handleUpdateBatch} saving={saving.batch}
                   taskReportsByBatch={taskReportsByBatch}
                 />
               </SafeBoundary>
@@ -1521,6 +1578,15 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
   };
 
   const saveEdit = async (stageId) => {
+    // Validate: endDate phải sau startDate
+    if (editData.startDate && editData.endDate && editData.endDate < editData.startDate) {
+      showToast('Ngày kết thúc phải sau (hoặc bằng) ngày bắt đầu', 'error');
+      return;
+    }
+    if (!editData.stageName?.trim()) {
+      showToast('Tên giai đoạn không được trống', 'error');
+      return;
+    }
     setSavingId(stageId);
     try {
       const payload = {
@@ -1853,6 +1919,55 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
 
                     {isEditing && (
                       <div className="space-y-4">
+                        {/* Thông tin cơ bản (BỔ SUNG: ngày tháng cho stage) */}
+                        <div className="bg-white rounded-xl p-4 border border-slate-100 space-y-3">
+                          <p className="text-xs font-bold uppercase text-slate-500 flex items-center gap-1.5">
+                            <span>📝</span> Thông tin giai đoạn
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                            <div className="lg:col-span-2">
+                              <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Tên giai đoạn *</label>
+                              <input value={editData.stageName}
+                                onChange={e => setEditData({ ...editData, stageName: e.target.value })}
+                                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Thứ tự</label>
+                              <input type="number" min="1" value={editData.stageOrder}
+                                onChange={e => setEditData({ ...editData, stageOrder: e.target.value })}
+                                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Loại</label>
+                              <select value={editData.stageType}
+                                onChange={e => setEditData({ ...editData, stageType: e.target.value })}
+                                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
+                                {STAGE_TYPES.map(t => <option key={t.value} value={t.value}>{t.icon} {t.label}</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">📅 Ngày bắt đầu</label>
+                              <input type="date" value={editData.startDate}
+                                onChange={e => setEditData({ ...editData, startDate: e.target.value })}
+                                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">📅 Ngày kết thúc</label>
+                              <input type="date" value={editData.endDate}
+                                min={editData.startDate || undefined}
+                                onChange={e => setEditData({ ...editData, endDate: e.target.value })}
+                                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
+                            </div>
+                            <div className="lg:col-span-2">
+                              <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">🎯 Mục tiêu</label>
+                              <input value={editData.objective}
+                                onChange={e => setEditData({ ...editData, objective: e.target.value })}
+                                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white"
+                                placeholder="Mô tả mục tiêu của giai đoạn..." />
+                            </div>
+                          </div>
+                        </div>
+
                         {/* Gợi ý tự động từ task reports / measurements */}
                         {(() => {
                           const hints = getStageSuggestedHints(s);
@@ -1887,8 +2002,8 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                                     }
                                   }
                                   return (
-                                    <button key={i} onClick={() => {
-                                      if (h.key) {
+                                  <button key={i} onClick={() => {
+                                    if (h.key) {
                                         if (editData._isPerGroup || h.groupId) {
                                           // Điền vào nhóm cụ thể
                                           const targetGroupId = h.groupId && h.groupId !== '_unassigned'
@@ -1897,11 +2012,11 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                                           if (targetGroupId) {
                                             updateField(h.key, String(h.numericValue ?? ''), targetGroupId);
                                           }
-                                        } else {
-                                          updateField(h.key, String(h.numericValue ?? ''));
-                                        }
-                                        showToast(`Đã điền ${h.label}`, 'success');
+                                      } else {
+                                        updateField(h.key, String(h.numericValue ?? ''));
                                       }
+                                      showToast(`Đã điền ${h.label}`, 'success');
+                                    }
                                     }} className={`bg-white rounded-lg p-2 border-2 ${targetColor} hover:shadow-md transition-all text-left`}>
                                       <div className="flex items-start justify-between gap-1">
                                         <p className="text-[10px] text-slate-500 uppercase flex items-center gap-1 flex-1 min-w-0">
@@ -1917,7 +2032,7 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                                         <p className="text-[9px] text-slate-500 mt-0.5">🎯 Mục tiêu: <span className="font-bold">{h.target}{h.unit || ''}</span></p>
                                       )}
                                       {h.source && <p className="text-[9px] text-slate-400 mt-0.5">{h.source}</p>}
-                                    </button>
+                                  </button>
                                   );
                                 })}
                               </div>
@@ -2205,8 +2320,8 @@ const TasksSection = ({ tasks, groups, batches, stages, taskStats, taskReportsBy
                     className="block w-full text-left px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-violet-50 border-t border-slate-100">
                     🌐 Cho toàn thực nghiệm
                   </button>
-                </div>
-              </div>
+          </div>
+        </div>
             </div>
           </div>
         </div>
@@ -3056,14 +3171,14 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
                         <div>
                           <p className="font-semibold text-slate-800 text-sm">{r.taskType || 'Báo cáo'}</p>
                           <p className="text-slate-600 text-[11px] mt-0.5">{r.reportText || r.notes || ''}</p>
-                        </div>
+                    </div>
                         <span className="text-[10px] text-slate-400 font-mono shrink-0">
                           {r.submittedAt ? new Date(r.submittedAt).toLocaleString('vi-VN') : ''}
                         </span>
                       </div>
 
                       {/* Plant count */}
-                      {(r.actualPlantCount || r.plantCount) && (
+                    {(r.actualPlantCount || r.plantCount) && (
                         <p className="text-emerald-700 font-bold text-xs mb-2">🌱 {r.actualPlantCount || r.plantCount} cây</p>
                       )}
 
@@ -3091,7 +3206,7 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
                                   {hasAiPending && (
                                     <div className="absolute inset-0 bg-amber-500/70 flex items-center justify-center">
                                       <span className="text-white text-[9px] font-bold animate-pulse">⟳</span>
-                                    </div>
+                  </div>
                                   )}
                                   {hasAiResult && (
                                     <div className="absolute top-0.5 right-0.5 w-3.5 h-3.5 bg-emerald-500 rounded-full flex items-center justify-center shadow"
@@ -3125,7 +3240,7 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
           </div>
 
           {/* Lịch sử chuyển giao */}
-          <div>
+            <div>
             <p className="text-xs font-bold uppercase text-slate-400 mb-2">
               🔄 Lịch sử phân công ({assignments.length})
             </p>
@@ -3145,25 +3260,25 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
                   return (
                     <div key={a.id || a.assignmentId || i} className="flex items-start gap-2 bg-slate-50 rounded-lg p-2.5 text-xs border border-slate-100">
                       <span className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold shrink-0">{i + 1}</span>
-                      <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className="px-1.5 py-0.5 bg-violet-100 text-violet-700 rounded text-[10px] font-bold">{actionLabel}</span>
                           <span className="font-semibold text-slate-800">{from}</span>
                           <span className="text-slate-400">→</span>
                           <span className="font-semibold text-emerald-700">{to}</span>
-                        </div>
+                    </div>
                         {when && (
                           <p className="text-slate-500 text-[10px] mt-0.5">📅 {new Date(when).toLocaleString('vi-VN')}</p>
                         )}
                         {reason && (
                           <p className="text-slate-600 italic text-[10px] mt-0.5">💬 "{reason}"</p>
                         )}
-                      </div>
-                    </div>
+                  </div>
+              </div>
                   );
                 })}
-              </div>
-            )}
+            </div>
+          )}
           </div>
         </div>
       </div>
@@ -3418,7 +3533,7 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
             {/* Reason + Actions */}
             <div className="px-6 py-4 border-t border-slate-200 shrink-0 space-y-3">
               <div>
-                <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Lý do (tùy chọn)</label>
+            <label className="block text-xs font-bold uppercase text-slate-500 mb-1">Lý do (tùy chọn)</label>
                 <textarea
                   value={reason}
                   onChange={e => setReason(e.target.value)}
@@ -3427,7 +3542,7 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
                   className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm resize-none"
                 />
               </div>
-              <div className="flex gap-2">
+            <div className="flex gap-2">
                 <button onClick={() => setAssignModal(null)} className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-sm font-bold">Hủy</button>
                 <button
                   onClick={handleConfirm}
@@ -3435,7 +3550,7 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
                   className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-sm font-bold"
                 >
                   {saving ? 'Đang lưu...' : (assignModal === 'assign' ? '✅ Xác nhận gán' : '✅ Xác nhận chuyển giao')}
-                </button>
+              </button>
               </div>
             </div>
           </div>
@@ -3715,7 +3830,7 @@ const MeasurementsSection = ({ measurements, groups, form, setForm, onCreate, on
 );
 
 // ── Batches Section ───────────────────────────────────────────────────────────
-const BatchesSection = ({ batches, groups, bedAssignments, form, setForm, onCreate, onDelete, saving, taskReportsByBatch }) => {
+const BatchesSection = ({ batches, groups, bedAssignments, form, setForm, onCreate, onDelete, onUpdate, saving, taskReportsByBatch }) => {
   // Đếm số cây thực tế đã trồng/ươm từ JSONB resultData của các report Planting/Nursery
   const plantedCount = (batchId) => {
     const reports = taskReportsByBatch?.[batchId] || [];
@@ -3740,6 +3855,9 @@ const BatchesSection = ({ batches, groups, bedAssignments, form, setForm, onCrea
       return sum;
     }, 0);
   };
+
+  // State cho modal edit batch
+  const [editingBatch, setEditingBatch] = useState(null);
   return (
   <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
     <div className="px-6 py-4 border-b border-slate-100">
@@ -3820,7 +3938,13 @@ const BatchesSection = ({ batches, groups, bedAssignments, form, setForm, onCrea
                     <p className="font-bold text-sm text-slate-900 font-mono">{batch.batchCode || batch.name || '—'}</p>
                     <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">👥 {groups.find(g => g.id === batch.groupId)?.groupName || batch.groupId || '—'}</p>
                   </div>
-                  <button onClick={() => onDelete(batch.id)} className="text-rose-400 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity font-bold shrink-0">✕</button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => setEditingBatch(batch)}
+                      title="Chỉnh sửa lô (số cây, ngày trồng/thu hoạch...)"
+                      className="text-indigo-400 hover:text-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity font-bold px-1.5 py-0.5 hover:bg-indigo-50 rounded">✏️</button>
+                    <button onClick={() => onDelete(batch.id)} className="text-rose-400 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity font-bold shrink-0">✕</button>
+                  </div>
                 </div>
                 {/* Chi tiết số cây đã trồng */}
                 <div className="mb-3 p-3 bg-gradient-to-br from-emerald-50 to-green-50 rounded-lg border border-emerald-100">
@@ -3855,6 +3979,21 @@ const BatchesSection = ({ batches, groups, bedAssignments, form, setForm, onCrea
         </div>
       )}
     </div>
+
+    {/* Modal edit batch */}
+    <BatchEditModal
+      open={!!editingBatch}
+      batch={editingBatch}
+      bedAssignments={bedAssignments || []}
+      groups={groups || []}
+      onClose={() => setEditingBatch(null)}
+      onSave={async (batchId, payload) => {
+        if (onUpdate) {
+          await onUpdate(batchId, payload);
+          setEditingBatch(null);
+        }
+      }}
+    />
   </div>
   );
 };
@@ -3872,7 +4011,7 @@ const DesignSection = ({ experiment }) => {
   let parsed = null;
   for (const raw of candidates) {
     if (raw == null) continue;
-    if (typeof raw === 'string') {
+  if (typeof raw === 'string') {
       try { parsed = JSON.parse(raw); if (parsed) break; } catch { parsed = null; }
     } else if (typeof raw === 'object') { parsed = raw; break; }
   }
@@ -3921,9 +4060,9 @@ const DesignSection = ({ experiment }) => {
     replicates: '🔁', replicate: '🔁', replicationCount: '🔁', blocks: '🧱', block: '🧱',
     rows: '➗', row: '➗', columns: '➗', column: '➗', factors: '✖️', factor: '✖️', factorLevels: '🔢',
     treatmentFactors: '🧪', treatmentGroups: '🧪', experimentalUnits: '📦',
-    plotSize: '📏', plantSpacing: '🌱', rowSpacing: '↔️', spacing: '↔️',
-    harvestArea: '🌾', plantDensity: '📊', duration: '📅',
-    numberOfTreatments: '🧪', treatmentCombinations: '🔀', controlTreatment: '✅',
+      plotSize: '📏', plantSpacing: '🌱', rowSpacing: '↔️', spacing: '↔️',
+      harvestArea: '🌾', plantDensity: '📊', duration: '📅',
+      numberOfTreatments: '🧪', treatmentCombinations: '🔀', controlTreatment: '✅',
     treatments: '💊', treatmentName: '💊', variables: '📊', observations: '👁️',
     numberOfGroups: '👥', groupType: '👥', randomization: '🎲', alpha: 'α',
     confidenceLevel: '📊', testType: '🧪', software: '💻',
