@@ -3786,7 +3786,7 @@ const MeasurementsSection = ({ measurements, groups, form, setForm, onCreate, on
         </div>
         <div>
           <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Giá trị mục tiêu</label>
-          <input type="number" step="0.1" value={form.targetValue} onChange={e => setForm({ ...form, targetValue: e.targetValue })}
+          <input type="number" step="0.1" value={form.targetValue} onChange={e => setForm({ ...form, targetValue: e.target.value })}
             placeholder="VD: 30" className="w-full px-3 py-2.5 border border-teal-200 rounded-xl text-sm bg-white" />
         </div>
         <div className="lg:col-span-4">
