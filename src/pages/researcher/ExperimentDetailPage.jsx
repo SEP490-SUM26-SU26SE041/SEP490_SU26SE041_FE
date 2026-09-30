@@ -188,6 +188,24 @@ const ExperimentDetailPage = ({ experimentId }) => {
   const [availableBeds, setAvailableBeds] = useState([]);
   const [areas, setAreas] = useState([]);
   const [taskReportsByBatch, setTaskReportsByBatch] = useState({});
+
+  // Bed History (BE mới: giữ ExperimentId khi release → xem được lịch sử)
+  const [bedHistoryOpen, setBedHistoryOpen] = useState(false);
+  const [bedHistory, setBedHistory] = useState(null);
+  const [bedHistoryLoading, setBedHistoryLoading] = useState(false);
+
+  const loadBedHistory = async () => {
+    if (!experiment?.id) return;
+    setBedHistoryLoading(true);
+    try {
+      const data = await experimentsApi.getBedHistory(experiment.id);
+      setBedHistory(data);
+    } catch (err) {
+      showToast(err.message || 'Lỗi tải lịch sử bed', 'error');
+    } finally {
+      setBedHistoryLoading(false);
+    }
+  };
   // ── Experiment Completion ────────────────────────────────────────────────
   const [finalReport, setFinalReport] = useState(null);      // báo cáo cuối cùng đã tạo
   const [loadingFinalReport, setLoadingFinalReport] = useState(false);
@@ -1084,9 +1102,10 @@ const ExperimentDetailPage = ({ experimentId }) => {
                   <span className="text-xs font-mono text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">{experiment.experimentCode || experiment.code || 'EXP'}</span>
                   <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full uppercase ${
                     experiment.status === 'Active' ? 'bg-emerald-100 text-emerald-700' :
+                    experiment.status === 'Paused' ? 'bg-amber-100 text-amber-700' :
                     experiment.status === 'Completed' ? 'bg-blue-100 text-blue-700' :
                     experiment.status === 'Cancelled' ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'
-                  }`}>{experiment.status || 'Draft'}</span>
+                  }`}>{experiment.status || '—'}</span>
                 </div>
                 <h1 className="text-lg font-bold text-slate-900 truncate mt-0.5">{experiment.title || '—'}</h1>
               </div>
@@ -1293,6 +1312,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
                 <BedsSection
                   bedAssignments={bedAssignments} availableBeds={availableBeds}
                   areas={areas} batches={batches}
+                  onOpenHistory={() => { setBedHistoryOpen(true); loadBedHistory(); }}
                 />
               </SafeBoundary>
             </section>
@@ -1349,6 +1369,14 @@ const ExperimentDetailPage = ({ experimentId }) => {
           saving={editExpSaving}
           onClose={() => setEditExpModal({ open: false })}
           onSave={handleSaveExperimentInfo}
+        />
+
+        {/* Bed History Modal (BE mới: giữ ExperimentId khi release → xem được lịch sử) */}
+        <BedHistoryModal
+          open={bedHistoryOpen}
+          onClose={() => setBedHistoryOpen(false)}
+          data={bedHistory}
+          loading={bedHistoryLoading}
         />
 
         {/* Experiment Completion Confirm Dialog */}
@@ -4231,7 +4259,7 @@ const DesignSection = ({ experiment }) => {
 };
 
 // ── Beds Section ─────────────────────────────────────────────────────────────
-const BedsSection = ({ bedAssignments, availableBeds, areas, batches }) => {
+const BedsSection = ({ bedAssignments, availableBeds, areas, batches, onOpenHistory }) => {
   const areaMap = useMemo(() => { const m = new Map(); areas.forEach(a => m.set(a.id, a)); return m; }, [areas]);
   const bedMap = useMemo(() => { const m = new Map(); availableBeds.forEach(b => m.set(b.id, b)); return m; }, [availableBeds]);
 
@@ -4243,7 +4271,16 @@ const BedsSection = ({ bedAssignments, availableBeds, areas, batches }) => {
             <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">🌱 Luống Đã Gán</h2>
             <p className="text-sm text-slate-500 mt-0.5">Vị trí vật lý của các lô trong nông trại</p>
           </div>
-          <span className="px-3 py-1.5 bg-emerald-100 text-emerald-700 rounded-lg text-sm font-bold">{bedAssignments.length} luống</span>
+          <div className="flex items-center gap-2">
+            <span className="px-3 py-1.5 bg-emerald-100 text-emerald-700 rounded-lg text-sm font-bold">{bedAssignments.length} luống</span>
+            {onOpenHistory && (
+              <button onClick={onOpenHistory}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-bold flex items-center gap-1.5 transition-colors"
+                title="Xem lịch sử gán bed (cả active + released)">
+                📜 Lịch sử bed
+              </button>
+            )}
+          </div>
         </div>
       </div>
       <div className="p-4">
@@ -4273,6 +4310,123 @@ const BedsSection = ({ bedAssignments, availableBeds, areas, batches }) => {
             })}
           </div>
         )}
+      </div>
+    </div>
+  );
+};
+
+// ── Bed History Modal ─────────────────────────────────────────────────────────
+// Hiển thị lịch sử gán bed cho experiment (BE mới giữ ExperimentId khi release).
+// Response shape: { experimentId, experimentCode, experimentTitle, totalAssignments,
+//                    activeAssignments, releasedAssignments, uniqueBeds, items: [...] }
+const BedHistoryModal = ({ open, onClose, data, loading }) => {
+  if (!open) return null;
+  const items = Array.isArray(data?.items) ? data.items : [];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-hidden flex flex-col"
+        onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-slate-50 to-slate-100">
+          <div>
+            <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">📜 Lịch sử gán bed</h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {data?.experimentCode && <span className="font-mono text-indigo-600">{data.experimentCode}</span>}
+              {data?.experimentTitle && <span className="ml-2">— {data.experimentTitle}</span>}
+            </p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-lg text-slate-500">✕</button>
+        </div>
+
+        {/* Stats summary */}
+        {data && !loading && (
+          <div className="px-6 py-3 bg-slate-50 border-b border-slate-100 grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="bg-white border border-slate-200 rounded-xl px-3 py-2">
+              <p className="text-[10px] uppercase font-bold text-slate-500">Tổng assignment</p>
+              <p className="text-xl font-bold text-slate-900">{data.totalAssignments ?? 0}</p>
+            </div>
+            <div className="bg-white border border-emerald-200 rounded-xl px-3 py-2">
+              <p className="text-[10px] uppercase font-bold text-emerald-700">Đang dùng</p>
+              <p className="text-xl font-bold text-emerald-700">{data.activeAssignments ?? 0}</p>
+            </div>
+            <div className="bg-white border border-amber-200 rounded-xl px-3 py-2">
+              <p className="text-[10px] uppercase font-bold text-amber-700">Đã release</p>
+              <p className="text-xl font-bold text-amber-700">{data.releasedAssignments ?? 0}</p>
+            </div>
+            <div className="bg-white border border-indigo-200 rounded-xl px-3 py-2">
+              <p className="text-[10px] uppercase font-bold text-indigo-700">Số bed duy nhất</p>
+              <p className="text-xl font-bold text-indigo-700">{data.uniqueBeds ?? 0}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-4">
+          {loading ? (
+            <div className="flex items-center justify-center py-12 text-slate-500">
+              <div className="w-5 h-5 border-2 border-slate-300 border-t-indigo-500 rounded-full animate-spin mr-2" />
+              Đang tải lịch sử…
+            </div>
+          ) : items.length === 0 ? (
+            <div className="text-center py-12 text-slate-400">
+              <span className="text-4xl block mb-2">🌱</span>
+              <p className="text-sm font-semibold">Chưa có bed nào được gán cho thực nghiệm này.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 sticky top-0">
+                  <tr className="text-[10px] uppercase text-slate-500 font-bold">
+                    <th className="text-left px-3 py-2">Bed</th>
+                    <th className="text-left px-3 py-2">Khu vực</th>
+                    <th className="text-left px-3 py-2">Nhóm</th>
+                    <th className="text-center px-3 py-2">Replicate</th>
+                    <th className="text-center px-3 py-2">Trạng thái</th>
+                    <th className="text-left px-3 py-2">Từ ngày</th>
+                    <th className="text-left px-3 py-2">Đến ngày</th>
+                    <th className="text-left px-3 py-2">Mục đích</th>
+                    <th className="text-center px-3 py-2">Số batch</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((it, idx) => {
+                    const status = it.status || 'Assigned';
+                    const released = String(status).toLowerCase() === 'released';
+                    return (
+                      <tr key={it.assignmentId || idx}
+                        className={`border-t border-slate-100 hover:bg-slate-50 transition-colors ${released ? 'bg-amber-50/30' : ''}`}>
+                        <td className="px-3 py-2 font-bold text-slate-900">{it.bedCode || '—'}</td>
+                        <td className="px-3 py-2 text-slate-600">{it.areaName || '—'}</td>
+                        <td className="px-3 py-2 text-slate-600">{it.groupName || '—'}</td>
+                        <td className="px-3 py-2 text-center font-mono text-slate-600">{it.replicateIndex ?? '—'}</td>
+                        <td className="px-3 py-2 text-center">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            released ? 'bg-amber-100 text-amber-800'
+                                    : String(status).toLowerCase() === 'assigned' ? 'bg-emerald-100 text-emerald-700'
+                                    : 'bg-slate-100 text-slate-600'
+                          }`}>
+                            {status}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 font-mono text-slate-600">{it.assignedFrom || '—'}</td>
+                        <td className="px-3 py-2 font-mono text-slate-600">{it.assignedTo || <span className="italic text-slate-400">đang dùng</span>}</td>
+                        <td className="px-3 py-2 text-slate-600 max-w-[180px] truncate" title={it.purpose || ''}>{it.purpose || '—'}</td>
+                        <td className="px-3 py-2 text-center font-bold text-indigo-700">{it.batchCount ?? 0}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-3 border-t border-slate-100 bg-slate-50 flex items-center justify-between text-[11px] text-slate-500">
+          <span>BE giữ <code className="px-1 py-0.5 bg-slate-200 rounded font-mono">ExperimentId</code> khi release để truy vết lịch sử.</span>
+          <button onClick={onClose} className="px-4 py-1.5 bg-slate-700 hover:bg-slate-800 text-white rounded-lg font-bold">Đóng</button>
+        </div>
       </div>
     </div>
   );

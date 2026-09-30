@@ -5,6 +5,7 @@ import ResearcherExperiments from './tabs/ResearcherExperiments';
 import ResearcherRequests from './tabs/ResearcherRequests';
 import ResearcherTemplates from './tabs/ResearcherTemplates';
 import ResearcherTasks from './tabs/ResearcherTasks';
+import ResearcherRagPanel from './tabs/ResearcherRagPanel';
 import MonitoringDashboard from '../../components/dashboard/MonitoringDashboard';
 import NotificationBell from '../../components/notifications/NotificationBell';
 
@@ -15,6 +16,7 @@ const TABS = [
   { id: 'requests', label: 'Yêu Cầu', icon: '📨' },
   { id: 'templates', label: 'Quy Trình', icon: '📋' },
   { id: 'tasks', label: 'Tác Vụ', icon: '📌' },
+  { id: 'rag', label: 'Trợ Lý AI', icon: '🌾' },
 ];
 
 const ResearcherDashboard = () => {
@@ -90,6 +92,7 @@ const ResearcherDashboard = () => {
               {activeTab === 'requests' && 'Gửi và theo dõi yêu cầu thí nghiệm'}
               {activeTab === 'templates' && 'Quản lý quy trình canh tác mẫu'}
               {activeTab === 'tasks' && 'Quản lý tác vụ thí nghiệm'}
+              {activeTab === 'rag' && 'Upload tài liệu & quản lý vector index cho AI Chatbot'}
             </p>
           </div>
 
@@ -100,6 +103,7 @@ const ResearcherDashboard = () => {
           {activeTab === 'requests' && <ResearcherRequests onConvertToExperiment={handleConvertToExperiment} />}
           {activeTab === 'templates' && <ResearcherTemplates />}
           {activeTab === 'tasks' && <ResearcherTasks />}
+          {activeTab === 'rag' && <ResearcherRagPanel />}
         </div>
       </main>
     </div>

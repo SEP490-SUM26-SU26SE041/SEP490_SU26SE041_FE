@@ -12,9 +12,8 @@ import {
 
 const STATUS_OPTIONS = [
   { value: '', label: 'Tất Cả Trạng Thái' },
-  { value: 'Draft', label: 'Draft' },
-  { value: 'Approved', label: 'Approved' },
   { value: 'Active', label: 'Active' },
+  { value: 'Paused', label: 'Paused' },
   { value: 'Completed', label: 'Completed' },
   { value: 'Cancelled', label: 'Cancelled' }
 ];

@@ -95,6 +95,21 @@ const NotificationBell = ({ variant = 'light' }) => {
     const unsubStatus = notificationSocket.onStatusChange(setConnected);
     const unsubMsg = notificationSocket.subscribe((env) => {
       if (env?.event === 'Connected') return; // bỏ qua heartbeat
+
+      // ── ReceiveAlert (BE mới): sensor threshold violation ────────────────
+      // BE đẩy 2 event song song khi có alert:
+      //   1. "ReceiveNotification" → chuông (đã handle bên dưới)
+      //   2. "ReceiveAlert"        → chỉ prepend vào list (đã có notif rồi)
+      // Mục đích: nếu sau này có trang /alerts riêng, có thể subscribe trực tiếp
+      // event này mà không phụ thuộc notification DB.
+      // Ở đây ta chỉ log + không double-add notification.
+      if (env?.event === 'ReceiveAlert' && env.data) {
+        // console.debug('[NotificationBell] ReceiveAlert (sensor threshold):', env.data);
+        // Không cần xử lý thêm — notification tương ứng sẽ được handle bởi
+        // ReceiveNotification event (BE push cả 2 cùng lúc).
+        return;
+      }
+
       if (env?.event === 'ReceiveNotification' && env.data) {
         const notif = env.data;
         setItems(prev => {
