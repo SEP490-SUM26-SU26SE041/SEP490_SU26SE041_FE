@@ -9,6 +9,7 @@ import ImageUploader from '../../components/tasks/ImageUploader';
 import BulkMeasurementForm from '../../components/technician/BulkMeasurementForm';
 import AiResultModal from '../../components/tasks/AiResultModal';
 import NotificationBell from '../../components/notifications/NotificationBell';
+import TechnicianRagPanel from './TechnicianRagPanel';
 import {
   extractMeasurementsFromReport, buildMeasurementPayloads, createMeasurementsFromTaskReport,
   extractBulkItemsFromResultData, createMeasurementsBulk, filterDefinitionsByTaskGroup
@@ -26,6 +27,7 @@ const TECH_TABS = [
   { id: 'tasks', label: 'Công Việc', icon: '📋' },
   { id: 'reports', label: 'Báo Cáo', icon: '📝' },
   { id: 'measurements', label: 'Đo Lường', icon: '📊' },
+  { id: 'rag', label: 'Tra Cứu AI', icon: '🤖' },
 ];
 
 const TASK_TABS = [
@@ -95,12 +97,14 @@ const TechnicianDashboard = () => {
               {activeTab === 'tasks' && 'Danh sách công việc được giao'}
               {activeTab === 'reports' && 'Báo cáo tác vụ đã gửi'}
               {activeTab === 'measurements' && 'Lịch sử ghi nhận đo lường'}
+              {activeTab === 'rag' && 'Tra cứu kỹ thuật qua AI (RAG) với trích dẫn file + trang'}
             </p>
           </div>
           {activeTab === 'overview' && <TechOverview />}
           {activeTab === 'tasks' && <TechTasksTab />}
           {activeTab === 'reports' && <TechReportsTab />}
           {activeTab === 'measurements' && <TechMeasurementsTab />}
+          {activeTab === 'rag' && <TechnicianRagPanel />}
         </div>
       </main>
     </div>

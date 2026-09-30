@@ -8,6 +8,7 @@ import {
   IoTDeviceStatus,
   classifyDevice
 } from '../../api/iotDevicesApi';
+import ThresholdRulesModal from './ThresholdRulesModal';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const SENSOR_TYPE_OPTIONS = [
@@ -37,6 +38,7 @@ const BatchIoTPanel = ({ batch, onDevicesChange }) => {
   const [togglingIoT, setTogglingIoT] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null); // device đang sửa
+  const [showThreshold, setShowThreshold] = useState(false);
 
   // Trạng thái IoT của batch — lấy từ BE (batchesApi.getById trả về isIoTEnabled)
   // Mặc định null = chưa load xong, false = tắt, true = bật
@@ -159,6 +161,15 @@ const BatchIoTPanel = ({ batch, onDevicesChange }) => {
               <span>+</span> Thêm thiết bị
             </button>
           )}
+          {/* Threshold rules cho batch này */}
+          <button
+            type="button"
+            onClick={() => setShowThreshold(true)}
+            className="px-3 py-1 bg-violet-100 hover:bg-violet-200 text-violet-700 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1"
+            title="Cấu hình ngưỡng cảnh báo cảm biến cho batch này"
+          >
+            🎚️ Ngưỡng
+          </button>
         </div>
       </div>
 
@@ -248,6 +259,16 @@ const BatchIoTPanel = ({ batch, onDevicesChange }) => {
           device={editing}
           onClose={() => { setShowForm(false); setEditing(null); }}
           onSaved={() => { setShowForm(false); setEditing(null); loadDevices(); }}
+        />
+      )}
+
+      {/* Modal threshold rules cho batch này */}
+      {showThreshold && (
+        <ThresholdRulesModal
+          open={showThreshold}
+          onClose={() => setShowThreshold(false)}
+          batch={batch}
+          experimentId={batch?.experimentId}
         />
       )}
     </div>

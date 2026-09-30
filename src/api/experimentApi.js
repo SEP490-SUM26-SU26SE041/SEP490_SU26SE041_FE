@@ -41,6 +41,11 @@ export const experimentsApi = {
     apiClient.request(`/experiments/${id}/status`, { method: 'PATCH', body: { status } }),
   remove: (id) => apiClient.request(`/experiments/${id}`, { method: 'DELETE' }),
 
+  // Bed History — lấy lịch sử bed assignments (cả active + released) cho experiment
+  // (Mới: BE trả về { totalAssignments, activeAssignments, releasedAssignments, uniqueBeds, items: [...] })
+  getBedHistory: (id) =>
+    apiClient.request(`/experiments/${id}/bed-history`).then(u),
+
   // Stages
   getStages: (id) => apiClient.request(`/experiments/${id}/stages`).then(u),
   createStage: (id, payload) =>

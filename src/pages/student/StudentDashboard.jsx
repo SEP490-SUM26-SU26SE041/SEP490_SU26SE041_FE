@@ -8,6 +8,7 @@ import { canSubmitReport } from '../../utils/taskValidation';
 import { authLogoutSync } from '../../utils/authLogout';
 import NotificationBell from '../../components/notifications/NotificationBell';
 import TaskReportForm, { buildReportPayload } from '../../components/tasks/TaskReportForm';
+import StudentRagPanel from './StudentRagPanel';
 import ImageUploader from '../../components/tasks/ImageUploader';
 import { extractMeasurementsFromReport, buildMeasurementPayloads, createMeasurementsFromTaskReport, previewMeasurements, extractBulkItemsFromResultData, createMeasurementsBulk, filterDefinitionsByTaskGroup } from '../../utils/measurementBridge';
 import { batchesApi, measurementDefinitionsApi } from '../../api/experimentApi';
@@ -18,6 +19,7 @@ const STU_TABS = [
   { id: 'tasks', label: 'Công Việc', icon: '📋' },
   { id: 'reports', label: 'Báo Cáo', icon: '📝' },
   { id: 'morphology', label: 'Ghi Nhận', icon: '📊' },
+  { id: 'rag', label: 'AI Chat', icon: '🤖' },
 ];
 
 const TASK_TABS = [
@@ -97,6 +99,7 @@ const StudentDashboard = () => {
               {activeTab === 'tasks' && 'Danh sách công việc được giao'}
               {activeTab === 'reports' && 'Báo cáo tác vụ đã gửi'}
               {activeTab === 'morphology' && 'Ghi nhận dữ liệu hình thái học'}
+              {activeTab === 'rag' && 'Hỏi đáp AI về nông nghiệp (RAG)'}
             </p>
           </div>
 
@@ -104,6 +107,7 @@ const StudentDashboard = () => {
           {activeTab === 'tasks' && <StudentTasksTab />}
           {activeTab === 'reports' && <StudentReportsTab />}
           {activeTab === 'morphology' && <StudentMorphologySection setActiveTab={setActiveTab} />}
+          {activeTab === 'rag' && <StudentRagPanel />}
         </div>
       </main>
     </div>
