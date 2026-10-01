@@ -75,6 +75,20 @@ export const tasksApi = {
   assign: (payload) => apiClient.request('/tasks/assign', { method: 'POST', body: payload }),
   reassign: (payload) => apiClient.request('/tasks/reassign', { method: 'POST', body: payload }),
   getAssignments: (taskId) => apiClient.request(`/tasks/${taskId}/assignments`).then(u),
+  // Bulk update status cho tất cả tasks thuộc 1 experiment (chưa Completed).
+  // BE: PATCH /api/tasks/bulk-update-by-experiment/{experimentId}
+  //   Body: { status: 'Cancelled' | 'Pending' }
+  //   Response: { experimentId, experimentStatus, requestedStatus, affectedTasks, updatedAt }
+  // Quy tắc (mirror BE):
+  //   Experiment=Cancelled  → body Cancelled  ✅   | body Pending ❌ 400
+  //   Experiment=Paused     → body Cancelled  ✅   | body Pending ✅
+  //   Experiment=Active     → body Cancelled  ❌ 400 | body Pending ✅ (resume)
+  //   Experiment=Completed  → cả 2 ❌ 400
+  bulkUpdateStatusByExperiment: (experimentId, status) =>
+    apiClient.request(`/tasks/bulk-update-by-experiment/${experimentId}`, {
+      method: 'PATCH',
+      body: { status },
+    }).then(u),
   // ⚠️ Wrapper giữ tương thích ngược — nên dùng tasksCountApi.countByStudentsAndTechnicians từ skillsApi.js
   // vì BE đôi khi không tách đúng khi truyền roles=Student,Technician (gây ra task giao cho Technician ngày 29 không liệt kê).
   countByUser: ({ roles, date } = {}) => {

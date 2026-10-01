@@ -738,6 +738,26 @@ const ExperimentDetailPage = ({ experimentId }) => {
 
   // ── Task creation (modal) ────────────────────────────────────────────
   const handleCreateTask = async (payload) => {
+    // ── Validate experiment status theo state machine ──
+    // Chỉ cho tạo task khi Active. Paused/Cancelled/Completed → chặn.
+    const expStatus = experiment?.status;
+    if (expStatus === 'Paused') {
+      showToast('Thực nghiệm đang TẠM DỪNG — không thể tạo tác vụ mới. Vui lòng Tiếp tục trước.', 'error');
+      return false;
+    }
+    if (expStatus === 'Cancelled') {
+      showToast('Thực nghiệm đã HỦY — không thể tạo tác vụ mới.', 'error');
+      return false;
+    }
+    if (expStatus === 'Completed') {
+      showToast('Thực nghiệm đã HOÀN THÀNH — không thể tạo thêm tác vụ.', 'error');
+      return false;
+    }
+    if (expStatus && expStatus !== 'Active') {
+      showToast(`Trạng thái "${expStatus}" không cho phép tạo tác vụ.`, 'error');
+      return false;
+    }
+
     // Validate stage còn active (giống form cũ trong ResearcherExperiments)
     if (payload.experimentStageId) {
       const st = stages.find(s => s.id === payload.experimentStageId);
@@ -775,8 +795,22 @@ const ExperimentDetailPage = ({ experimentId }) => {
   const handleBulkCreateTasksForAll = async () => {
     if (stages.length === 0) { showToast('Thí nghiệm chưa có giai đoạn nào. Vui lòng thêm giai đoạn trước.', 'error'); return false; }
     if (groups.length === 0) { showToast('Thí nghiệm chưa có nhóm nào. Vui lòng thêm nhóm trước.', 'error'); return false; }
-    if (experiment?.status && !['Active', 'Draft'].includes(experiment.status)) {
-      showToast(`Thí nghiệm đang ở trạng thái "${experiment.status}" — không thể generate tasks`, 'error');
+    // ── Validate experiment status (state machine) ──
+    const expStatus = experiment?.status;
+    if (expStatus === 'Paused') {
+      showToast('Thực nghiệm đang TẠM DỪNG — không thể generate tasks. Vui lòng Tiếp tục trước.', 'error');
+      return false;
+    }
+    if (expStatus === 'Cancelled') {
+      showToast('Thực nghiệm đã HỦY — không thể generate tasks.', 'error');
+      return false;
+    }
+    if (expStatus === 'Completed') {
+      showToast('Thực nghiệm đã HOÀN THÀNH — không thể generate thêm tasks.', 'error');
+      return false;
+    }
+    if (expStatus && expStatus !== 'Active') {
+      showToast(`Trạng thái "${expStatus}" không cho phép generate tasks.`, 'error');
       return false;
     }
     setTaskSubmitting(true);
@@ -869,38 +903,138 @@ const ExperimentDetailPage = ({ experimentId }) => {
     }
   };
 
-  // Tạm dừng thực nghiệm: chuyển status → Paused
-  const handleSuspendExperiment = async () => {
+  // ── State machine: giới hạn chuyển trạng thái hợp lệ ──
+  // Đã bỏ Draft/Planning/InProgress → bắt đầu từ Active.
+  //   Active    → Paused / Completed / Cancelled
+  //   Paused    → Active / Cancelled
+  //   Completed → (terminal) — không cho chuyển
+  //   Cancelled → (terminal) — không cho chuyển
+  const EXPERIMENT_STATUS_TRANSITIONS = {
+    Active:    ['Paused', 'Completed', 'Cancelled'],
+    Paused:    ['Active', 'Cancelled'],
+    Completed: [],
+    Cancelled: []
+  };
+  const isValidStatusTransition = (from, to) => {
+    if (!from || !to || from === to) return false;
+    const allowed = EXPERIMENT_STATUS_TRANSITIONS[from] || [];
+    return allowed.includes(to);
+  };
+  const STATUS_LABELS_VN = {
+    Active: 'Đang hoạt động',
+    Paused: 'Tạm dừng',
+    Completed: 'Hoàn thành',
+    Cancelled: 'Đã hủy'
+  };
+
+  // ── State machine + cascade config ──
+  // BE cho phép bulk-update tasks theo experiment qua endpoint
+  // PATCH /api/tasks/bulk-update-by-experiment/{experimentId}
+  //
+  // Ma trận (mirror BE):
+  //   Experiment → Target   | cascade task sang | body hợp lệ
+  //   Active   → Paused     | Cancelled         | "Cancelled"
+  //   Paused   → Active     | Pending           | "Pending"  (restore)
+  //   Active   → Cancelled  | Cancelled         | "Cancelled"
+  //   Active   → Completed  | Cancelled         | "Cancelled"
+  //   Paused   → Cancelled  | Cancelled         | "Cancelled"
+  //   Paused   → Completed  | Cancelled         | "Cancelled"
+  const TASK_CASCADE_MAP = {
+    Paused:    { fromAny: ['Active'],   cascadeTo: 'Cancelled' },
+    Active:    { fromAny: ['Paused'],   cascadeTo: 'Pending' },
+    Cancelled: { fromAny: ['Active', 'Paused'], cascadeTo: 'Cancelled' },
+    Completed: { fromAny: ['Active', 'Paused'], cascadeTo: 'Cancelled' }
+  };
+  // Trường hợp cancel experiment từ terminal (Cancelled→Cancelled, Completed→Completed) — không cascade.
+
+  // Handler chung: chuyển status với validation theo state machine
+  // + cascade tasks qua bulk endpoint (nếu target status yêu cầu).
+  const handleChangeStatus = async (targetStatus) => {
     if (!experiment?.id) return;
+    const currentStatus = experiment.status;
+
+    // Xác định có cần cascade tasks không (chỉ khi từ Active/Paused sang trạng thái yêu cầu)
+    const cascadeConfig = TASK_CASCADE_MAP[targetStatus];
+    const needsCascade = cascadeConfig && cascadeConfig.fromAny.includes(currentStatus);
+
+    if (!isValidStatusTransition(currentStatus, targetStatus)) {
+      showToast(
+        `Không thể chuyển "${STATUS_LABELS_VN[currentStatus] || currentStatus}" → "${STATUS_LABELS_VN[targetStatus] || targetStatus}". ` +
+        `Hành động này không hợp lệ.`,
+        'error'
+      );
+      setConfirmModal(null);
+      return;
+    }
+
     setSuspending(true);
     try {
-      await experimentsApi.suspend(experiment.id);
-      showToast('Đã tạm dừng thực nghiệm', 'success');
-      const updated = await experimentsApi.getById(experiment.id);
-      setExperiment(updated || null);
+      // 1. Đổi status experiment trước
+      await experimentsApi.updateStatus(experiment.id, targetStatus);
+      showToast(
+        `Đã chuyển trạng thái thực nghiệm → ${STATUS_LABELS_VN[targetStatus] || targetStatus}`,
+        'success'
+      );
+
+      // 2. Cascade tasks (nếu cần)
+      let cascadeResult = null;
+      if (needsCascade) {
+        try {
+          cascadeResult = await tasksApi.bulkUpdateStatusByExperiment(
+            experiment.id,
+            cascadeConfig.cascadeTo
+          );
+          const affected = cascadeResult?.affectedTasks ?? 0;
+          const cascadeLabel = cascadeConfig.cascadeTo === 'Cancelled'
+            ? 'đã hủy'
+            : 'đã khôi phục về Chờ xử lý';
+          if (affected > 0) {
+            showToast(
+              `${affected} tác vụ ${cascadeLabel} theo trạng thái mới của thực nghiệm`,
+              'info'
+            );
+          }
+        } catch (cascadeErr) {
+          // BE không cho phép cascade (vd Active→Pending khi experiment=Active) — vẫn OK
+          // (edge case không nên xảy ra vì FE đã validate, nhưng đề phòng)
+          console.warn('Cascade tasks skipped:', cascadeErr?.message);
+        }
+      }
+
+      // 3. Reload cả experiment + tasks song song để UI đồng bộ
+      const [updatedExp, updatedTasks] = await Promise.all([
+        experimentsApi.getById(experiment.id).catch(() => null),
+        tasksApi.getByExperiment(experiment.id).catch(() => null),
+      ]);
+      if (updatedExp) setExperiment(updatedExp);
+      if (updatedTasks) setTasks(Array.isArray(updatedTasks) ? updatedTasks : []);
+
     } catch (err) {
-      showToast(err.message || 'Lỗi tạm dừng thực nghiệm', 'error');
+      showToast(err.message || `Lỗi cập nhật trạng thái sang ${targetStatus}`, 'error');
     } finally {
       setSuspending(false);
       setConfirmModal(null);
     }
   };
 
-  // Tiếp tục thực nghiệm: chuyển status → Active (từ Paused)
-  const handleResumeExperiment = async () => {
-    if (!experiment?.id) return;
-    setSuspending(true);
-    try {
-      await experimentsApi.resume(experiment.id);
-      showToast('Đã tiếp tục thực nghiệm', 'success');
-      const updated = await experimentsApi.getById(experiment.id);
-      setExperiment(updated || null);
-    } catch (err) {
-      showToast(err.message || 'Lỗi tiếp tục thực nghiệm', 'error');
-    } finally {
-      setSuspending(false);
-      setConfirmModal(null);
-    }
+  // Tạm dừng thực nghiệm: Active → Paused
+  const handleSuspendExperiment = () => handleChangeStatus('Paused');
+
+  // Tiếp tục thực nghiệm: Paused → Active
+  const handleResumeExperiment = () => handleChangeStatus('Active');
+
+  // Hủy thực nghiệm: Active/Paused → Cancelled (terminal)
+  const handleCancelExperiment = () => handleChangeStatus('Cancelled');
+
+  // Mở confirm dialog cho hủy
+  const openCancelConfirm = () => {
+    setConfirmModal({
+      title: 'Hủy thực nghiệm',
+      message: 'Bạn có chắc muốn hủy thực nghiệm này?\nTrạng thái sẽ chuyển sang Đã hủy và coi như kết thúc vĩnh viễn — không thể khôi phục lại trạng thái cũ.',
+      confirmText: 'Hủy thực nghiệm',
+      danger: true,
+      onConfirm: handleCancelExperiment,
+    });
   };
 
   // Mở confirm dialog cho hoàn thành
@@ -984,7 +1118,9 @@ const ExperimentDetailPage = ({ experimentId }) => {
       title: experiment.title || '',
       objective: experiment.objective || '',
       hypothesis: experiment.hypothesis || '',
-      status: experiment.status || 'Draft',
+      status: ['Active', 'Paused', 'Completed', 'Cancelled'].includes(experiment.status)
+        ? experiment.status
+        : 'Active',
       startDate: experiment.startDate ? experiment.startDate.slice(0, 10) : '',
       endDate: experiment.endDate ? experiment.endDate.slice(0, 10) : ''
     });
@@ -1143,6 +1279,18 @@ const ExperimentDetailPage = ({ experimentId }) => {
                   </button>
                 )
               ) : null}
+
+              {/* Nút Hủy thực nghiệm — coi như kết thúc vĩnh viễn (chỉ hiện khi Active/Paused) */}
+              {experiment.status !== 'Completed' && experiment.status !== 'Cancelled' && (
+                <button
+                  onClick={openCancelConfirm}
+                  disabled={suspending}
+                  title="Hủy thực nghiệm — chuyển sang Đã hủy, không thể khôi phục"
+                  className="px-4 py-2 border border-rose-300 text-rose-600 hover:bg-rose-50 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors disabled:opacity-50"
+                >
+                  {suspending ? '⏳' : '❌'} Hủy
+                </button>
+              )}
 
               {/* Nút Báo Cáo → cuộn xuống tab */}
               <button
@@ -1367,6 +1515,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
           form={editExpForm}
           setForm={setEditExpForm}
           saving={editExpSaving}
+          currentStatus={experiment?.status}
           onClose={() => setEditExpModal({ open: false })}
           onSave={handleSaveExperimentInfo}
         />
@@ -5187,9 +5336,32 @@ const ExperimentConfirmDialog = ({ confirm, onClose }) => {
   );
 };
 
-const EditExperimentModal = ({ open, form, setForm, saving, onClose, onSave }) => {
+const EditExperimentModal = ({ open, form, setForm, saving, onClose, onSave, currentStatus }) => {
   if (!open) return null;
   const today = new Date().toISOString().split('T')[0];
+
+  // ── State machine: giới hạn chuyển trạng thái hợp lệ ──
+  // Đã bỏ Draft/Planning/InProgress → bắt đầu từ Active.
+  //   Active    → Paused / Completed / Cancelled
+  //   Paused    → Active / Cancelled
+  //   Completed → (terminal) — không cho chuyển
+  //   Cancelled → (terminal) — không cho chuyển
+  const ALLOWED_TRANSITIONS = {
+    Active: ['Paused', 'Completed', 'Cancelled'],
+    Paused: ['Active', 'Cancelled'],
+    Completed: [],
+    Cancelled: []
+  };
+  const STATUS_META = {
+    Active:    { icon: '🟢', label: 'Đang hoạt động' },
+    Paused:    { icon: '⏸️', label: 'Tạm dừng' },
+    Completed: { icon: '✅', label: 'Hoàn thành' },
+    Cancelled: { icon: '❌', label: 'Đã hủy' }
+  };
+  // Active là luôn khả dụng (giữ nguyên); các trạng thái khác chỉ hiện nếu nằm trong allowed
+  const STATUS_VALUES = ['Active', 'Paused', 'Completed', 'Cancelled'];
+  const isTerminal = currentStatus === 'Completed' || currentStatus === 'Cancelled';
+  const allowedNext = ALLOWED_TRANSITIONS[currentStatus] ?? ['Paused', 'Completed', 'Cancelled'];
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
       <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
@@ -5216,19 +5388,38 @@ const EditExperimentModal = ({ open, form, setForm, saving, onClose, onSave }) =
             <textarea value={form.hypothesis} onChange={e => setForm({ ...form, hypothesis: e.target.value })} rows={2}
               className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500/20" />
           </div>
+          {/* Banner nếu đang ở terminal state */}
+          {isTerminal && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-[12px] text-amber-800">
+              ⚠️ Thực nghiệm đang ở trạng thái cuối <b>{STATUS_META[currentStatus]?.label || currentStatus}</b>.
+              Bạn vẫn có thể chỉnh tiêu đề / mục tiêu / ngày tháng, nhưng không thể đổi trạng thái nữa.
+            </div>
+          )}
           <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-600 mb-1">Trạng thái</label>
               <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}
-                className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white">
-                <option value="Draft">Draft</option>
-                <option value="Planning">Planning</option>
-                <option value="Active">Active</option>
-                <option value="InProgress">InProgress</option>
-                <option value="Paused">Paused</option>
-                <option value="Completed">Completed</option>
-                <option value="Cancelled">Cancelled</option>
+                disabled={isTerminal}
+                title={isTerminal ? 'Trạng thái cuối — không thể đổi' : 'Chuyển trạng thái'}
+                className={`w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white ${isTerminal ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                {/* Status hiện tại luôn hiển thị (giữ nguyên) */}
+                <option value={form.status}>
+                  {STATUS_META[form.status]?.icon} {form.status} ({STATUS_META[form.status]?.label || form.status})
+                </option>
+                {/* Các trạng thái được phép chuyển (loại trùng với current) */}
+                {STATUS_VALUES
+                  .filter(s => s !== form.status && allowedNext.includes(s))
+                  .map(s => (
+                    <option key={s} value={s}>
+                      {STATUS_META[s].icon} {s} ({STATUS_META[s].label})
+                    </option>
+                  ))}
               </select>
+              {!isTerminal && form.status !== currentStatus && (
+                <p className="text-[10px] text-indigo-600 mt-1">
+                  ℹ️ Chuyển: {STATUS_META[currentStatus]?.label} → {STATUS_META[form.status]?.label}
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-600 mb-1">Ngày bắt đầu</label>

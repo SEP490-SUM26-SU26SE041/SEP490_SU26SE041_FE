@@ -430,7 +430,7 @@ const ResearcherExperiments = ({ prefillData, onPrefillConsumed }) => {
     if (Object.keys(errs).length > 0) { setCreateErrors(errs); return; }
     try {
       setCreatingExp(true);
-      const payload = { ...createForm };
+      const payload = { ...createForm, status: 'Active' };
       if (!payload.cropVarietyId) delete payload.cropVarietyId;
       if (!payload.experimentCode) delete payload.experimentCode;
       if (!payload.hypothesis) delete payload.hypothesis;

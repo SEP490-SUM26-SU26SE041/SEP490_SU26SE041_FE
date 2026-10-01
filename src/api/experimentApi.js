@@ -182,6 +182,10 @@ export const experimentsApi = {
   // Tiếp tục thực nghiệm — chuyển status → Active (từ Paused)
   resume: (id) =>
     apiClient.request(`/experiments/${id}/resume`, { method: 'PATCH' }).then(u),
+
+  // Hủy thực nghiệm — chuyển status → Cancelled (coi như kết thúc, không thể khôi phục)
+  cancel: (id) =>
+    apiClient.request(`/experiments/${id}/status`, { method: 'PATCH', body: { status: 'Cancelled' } }).then(u),
 };
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
@@ -211,6 +215,21 @@ export const tasksApi = {
   cancel: (id) => apiClient.request(`/tasks/${id}/cancel`, { method: 'PATCH' }),
   updateStatus: (id, status) =>
     apiClient.request(`/tasks/${id}/status`, { method: 'PATCH', body: { status } }),
+
+  // Bulk update status cho tất cả tasks thuộc 1 experiment (chưa Completed).
+  // BE: PATCH /api/tasks/bulk-update-by-experiment/{experimentId}
+  //   Body: { status: 'Cancelled' | 'Pending' }
+  //   Response: { experimentId, experimentStatus, requestedStatus, affectedTasks, updatedAt }
+  // Quy tắc (mirror BE):
+  //   Experiment=Cancelled  → body Cancelled  ✅   | body Pending ❌ 400
+  //   Experiment=Paused     → body Cancelled  ✅   | body Pending ✅
+  //   Experiment=Active     → body Cancelled  ❌ 400 | body Pending ✅ (resume)
+  //   Experiment=Completed  → cả 2 ❌ 400
+  bulkUpdateStatusByExperiment: (experimentId, status) =>
+    apiClient.request(`/tasks/bulk-update-by-experiment/${experimentId}`, {
+      method: 'PATCH',
+      body: { status },
+    }).then(u),
   assign: (payload) => apiClient.request('/tasks/assign', { method: 'POST', body: payload }),
   reassign: (payload) => apiClient.request('/tasks/reassign', { method: 'POST', body: payload }),
   updateAssignmentStatus: (payload) =>
