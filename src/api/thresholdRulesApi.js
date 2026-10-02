@@ -24,14 +24,40 @@ export const ThresholdSensorType = {
   Other: 6
 };
 
+// ── Normalize sensorType về number ──────────────────────────────────────────────
+// BE trả sensorType dưới dạng string ("Temperature") lẫn number (1).
+// Map này đảm bảo UI luôn so sánh được bằng number, dù BE serialize kiểu nào.
+const SENSOR_TYPE_NAME_TO_VALUE = {
+  Temperature: 1,
+  Humidity: 2,
+  SoilMoisture: 3,
+  Light: 4,
+  PH: 5,
+  Other: 6
+};
+
+export const normalizeSensorType = (raw) => {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === 'number') return raw;
+  if (typeof raw === 'string') {
+    // Trim + check cả key có dấu cách/hoa thường
+    const trimmed = raw.trim();
+    if (trimmed === '') return null;
+    if (SENSOR_TYPE_NAME_TO_VALUE[trimmed] !== undefined) return SENSOR_TYPE_NAME_TO_VALUE[trimmed];
+    // Nếu BE gửi số dạng string ("1", "2", ...)
+    const asNum = Number(trimmed);
+    if (!isNaN(asNum) && SENSOR_TYPE_OPTIONS.some(o => o.value === asNum)) return asNum;
+  }
+  return null;
+};
+
 export const SENSOR_TYPE_OPTIONS = [
-  { value: null,                  label: 'Tất cả loại cảm biến' },
-  { value: 1,                     label: '🌡️ Nhiệt độ (Temperature)' },
-  { value: 2,                     label: '💧 Độ ẩm (Humidity)' },
-  { value: 3,                     label: '🌱 Độ ẩm đất (SoilMoisture)' },
-  { value: 4,                     label: '☀️ Ánh sáng (Light)' },
-  { value: 5,                     label: '🧪 pH' },
-  { value: 6,                     label: '📌 Khác (Other)' }
+  { value: 1, label: '🌡️ Nhiệt độ (Temperature)' },
+  { value: 2, label: '💧 Độ ẩm (Humidity)' },
+  { value: 3, label: '🌱 Độ ẩm đất (SoilMoisture)' },
+  { value: 4, label: '☀️ Ánh sáng (Light)' },
+  { value: 5, label: '🧪 pH' },
+  { value: 6, label: '📌 Khác (Other)' }
 ];
 
 // AlertSeverity — Low | Medium | High | Critical
@@ -53,8 +79,17 @@ export const getSeverityMeta = (sev) =>
   SEVERITY_OPTIONS.find(s => s.value === sev) || SEVERITY_OPTIONS[1];
 
 export const getSensorLabel = (sensorType) => {
-  const opt = SENSOR_TYPE_OPTIONS.find(o => o.value === sensorType);
-  return opt ? opt.label : 'Tất cả loại';
+  const normalized = normalizeSensorType(sensorType);
+  if (normalized === null) {
+    // Vẫn thử lookup trực tiếp với raw (phòng trường hợp BE trả enum name chưa map)
+    const byName = SENSOR_TYPE_OPTIONS.find(o =>
+      String(o.value).toLowerCase() === String(sensorType).toLowerCase()
+    );
+    if (byName) return byName.label;
+    return '📌 Khác';
+  }
+  const opt = SENSOR_TYPE_OPTIONS.find(o => o.value === normalized);
+  return opt ? opt.label : '📌 Khác';
 };
 
 // ── REST endpoints ────────────────────────────────────────────────────────────

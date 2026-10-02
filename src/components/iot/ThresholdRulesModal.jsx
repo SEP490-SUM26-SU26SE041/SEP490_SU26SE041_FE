@@ -4,7 +4,8 @@ import thresholdRulesApi, {
   SENSOR_TYPE_OPTIONS,
   SEVERITY_OPTIONS,
   getSeverityMeta,
-  getSensorLabel
+  getSensorLabel,
+  normalizeSensorType
 } from '../../api/thresholdRulesApi';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -24,7 +25,7 @@ const formatDateTime = (iso) => {
 const RuleForm = ({ initial, onSubmit, onCancel, submitting, batchId, experimentId, mode = 'create' }) => {
   const { showToast } = useToast();
   const [form, setForm] = useState(() => ({
-    sensorType: initial?.sensorType ?? null,
+    sensorType: normalizeSensorType(initial?.sensorType) ?? 1, // mặc định Nhiệt độ (1) thay vì null
     minValue: initial?.minValue ?? '',
     maxValue: initial?.maxValue ?? '',
     severity: initial?.severity || 'Medium',
@@ -51,8 +52,14 @@ const RuleForm = ({ initial, onSubmit, onCancel, submitting, batchId, experiment
       showToast('Cần nhập ít nhất Min hoặc Max', 'error');
       return;
     }
+    // Sensor type bắt buộc — vì mỗi loại cảm biến có ngưỡng khác nhau
+    const sensorType = normalizeSensorType(form.sensorType);
+    if (!sensorType || !SENSOR_TYPE_OPTIONS.some(o => o.value === sensorType)) {
+      showToast('Vui lòng chọn loại cảm biến', 'error');
+      return;
+    }
     const payload = {
-      sensorType: form.sensorType || null,
+      sensorType,
       minValue: min,
       maxValue: max,
       severity: form.severity,
@@ -68,14 +75,16 @@ const RuleForm = ({ initial, onSubmit, onCancel, submitting, batchId, experiment
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {/* Loại cảm biến */}
         <div>
-          <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Loại cảm biến</label>
+          <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">
+            Loại cảm biến <span className="text-rose-500">*</span>
+          </label>
           <select
-            value={form.sensorType ?? ''}
-            onChange={e => handleChange('sensorType', e.target.value === '' ? null : Number(e.target.value))}
+            value={form.sensorType ?? 1}
+            onChange={e => handleChange('sensorType', Number(e.target.value))}
             className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
           >
             {SENSOR_TYPE_OPTIONS.map(o => (
-              <option key={String(o.value)} value={o.value ?? ''}>{o.label}</option>
+              <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
         </div>
