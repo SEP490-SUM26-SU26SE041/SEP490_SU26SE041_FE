@@ -64,28 +64,86 @@ const NotificationBell = ({ variant = 'light' }) => {
   const [items, setItems] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasNext, setHasNext] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
   const [connected, setConnected] = useState(false);
   const containerRef = useRef(null);
   const buttonRef = useRef(null);
+  const sentinelRef = useRef(null);
+  const PAGE_SIZE = 20;
   const [pos, setPos] = useState({ top: 0, left: 0 });
 
-  // Fetch ban đầu (page 1) + unread count
-  const fetchInitial = useCallback(async () => {
+  // Chuẩn hoá response từ BE — chấp nhận nhiều shape:
+  //   { items, pageNumber, totalCount, hasNext, ... }  ← chuẩn
+  //   [ ... ]                                          ← fallback nếu BE trả mảng thẳng
+  const normalizePaged = (resp) => {
+    if (Array.isArray(resp)) {
+      return { items: resp, pageNumber: 1, totalCount: resp.length, hasNext: false };
+    }
+    if (resp && typeof resp === 'object') {
+      const list = Array.isArray(resp.items) ? resp.items : (Array.isArray(resp.data) ? resp.data : []);
+      const next = typeof resp.hasNext === 'boolean'
+        ? resp.hasNext
+        : (typeof resp.totalPages === 'number' && typeof resp.pageNumber === 'number'
+            ? resp.pageNumber < resp.totalPages
+            : list.length >= PAGE_SIZE);
+      return {
+        items: list,
+        pageNumber: resp.pageNumber ?? 1,
+        totalCount: resp.totalCount ?? list.length,
+        hasNext: next
+      };
+    }
+    return { items: [], pageNumber: 1, totalCount: 0, hasNext: false };
+  };
+
+  // Fetch 1 trang (dùng cho cả initial và load more)
+  const fetchPage = useCallback(async (pageNumber, append) => {
     try {
-      setLoading(true);
-      const [page, count] = await Promise.all([
-        notificationsApi.getPaged(1, 20).catch(() => ({ items: [], totalCount: 0 })),
-        notificationsApi.getUnreadCount().catch(() => 0)
+      if (append) setLoadingMore(true); else setLoading(true);
+      const [resp, count] = await Promise.all([
+        notificationsApi.getPaged(pageNumber, PAGE_SIZE).catch(() => ({ items: [] })),
+        pageNumber === 1
+          ? notificationsApi.getUnreadCount().catch(() => 0)
+          : Promise.resolve(null) // chỉ cần fetch unreadCount ở lần đầu
       ]);
-      const list = Array.isArray(page) ? page : (page?.items || []);
-      setItems(list);
-      setUnreadCount(Number(count?.count ?? count ?? 0));
+      const normalized = normalizePaged(resp);
+      setItems(prev => append ? [...prev, ...normalized.items] : normalized.items);
+      setPage(normalized.pageNumber);
+      setHasNext(normalized.hasNext);
+      setTotalCount(normalized.totalCount);
+      if (count !== null) {
+        setUnreadCount(Number(count?.count ?? count ?? 0));
+      }
     } catch (err) {
-      console.warn('[NotificationBell] fetchInitial error:', err);
+      console.warn(`[NotificationBell] fetchPage ${pageNumber} error:`, err);
     } finally {
+      setLoadingMore(false);
       setLoading(false);
     }
   }, []);
+
+  const fetchInitial = useCallback(() => fetchPage(1, false), [fetchPage]);
+
+  // IntersectionObserver — auto load more khi scroll tới đáy
+  useEffect(() => {
+    if (!open || !hasNext || loadingMore) return;
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (entry.isIntersecting && hasNext && !loadingMore) {
+          fetchPage(page + 1, true);
+        }
+      },
+      { root: document.getElementById('notif-bell-dropdown'), threshold: 0.1 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [open, hasNext, loadingMore, page, fetchPage]);
 
   // Mount: connect WS + fetch + theo dõi trạng thái
   useEffect(() => {
@@ -114,8 +172,9 @@ const NotificationBell = ({ variant = 'light' }) => {
         const notif = env.data;
         setItems(prev => {
           if (prev.some(n => n.id === notif.id)) return prev;
-          return [notif, ...prev].slice(0, 50);
+          return [notif, ...prev];
         });
+        setTotalCount(c => c + 1);
         if (!notif.isRead) setUnreadCount(c => c + 1);
 
         // Toast popup theo priority
@@ -238,7 +297,7 @@ const NotificationBell = ({ variant = 'light' }) => {
 
       {/* Dropdown - portal để tránh clipping/stacking-context từ ancestor (fixed sidebar, etc.) */}
       {open && createPortal(
-        <div id="notif-bell-dropdown"
+        <div
           style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: 9999 }}
           className="w-[400px] max-h-[540px] bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-fade-in">
           {/* Header */}
@@ -246,7 +305,9 @@ const NotificationBell = ({ variant = 'light' }) => {
             <div>
               <p className="text-sm font-bold text-slate-900">Thông Báo</p>
               <p className="text-[10px] text-slate-500">
-                {unreadCount > 0 ? `${unreadCount} chưa đọc` : 'Tất cả đã đọc'}
+                {unreadCount > 0
+                  ? `${unreadCount} chưa đọc${totalCount > items.length ? ` · ${items.length}/${totalCount}` : ''}`
+                  : (totalCount > 0 ? `${items.length}/${totalCount}` : 'Tất cả đã đọc')}
               </p>
             </div>
             {unreadCount > 0 && (
@@ -258,7 +319,7 @@ const NotificationBell = ({ variant = 'light' }) => {
           </div>
 
           {/* List */}
-          <div className="overflow-y-auto flex-1 overscroll-contain" style={{ maxHeight: 460 }}>
+          <div id="notif-bell-dropdown" className="overflow-y-auto flex-1 overscroll-contain" style={{ maxHeight: 460 }}>
             {loading ? (
               <div className="px-4 py-8 text-center text-sm text-slate-500">Đang tải...</div>
             ) : sortedItems.length === 0 ? (
@@ -314,6 +375,24 @@ const NotificationBell = ({ variant = 'light' }) => {
                   </div>
                 );
               })
+            )}
+
+            {/* Sentinel + nút "Xem thêm" cho load more */}
+            {hasNext && !loading && (
+              <div ref={sentinelRef} className="px-4 py-3 text-center">
+                <button
+                  onClick={() => !loadingMore && fetchPage(page + 1, true)}
+                  disabled={loadingMore}
+                  className="text-[11px] font-bold text-blue-600 hover:text-blue-800 px-3 py-1.5 rounded-lg hover:bg-blue-50 disabled:opacity-50"
+                >
+                  {loadingMore ? '⏳ Đang tải...' : '↓ Xem thêm'}
+                </button>
+              </div>
+            )}
+            {!hasNext && items.length > 0 && !loading && (
+              <div className="px-4 py-3 text-center text-[10px] text-slate-400 italic">
+                — Đã hiển thị tất cả —
+              </div>
             )}
           </div>
           {connected !== undefined && (
