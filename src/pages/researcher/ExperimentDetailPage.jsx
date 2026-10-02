@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { experimentsApi, measurementRecordsApi, taskReportsApi, experimentRequestsApi } from '../../api/experimentApi';
+import { useConfirm, ConfirmDialog } from '../../components/common/ConfirmDialog';
 import { stagesApi, groupsApi, measurementsApi, batchesApi, schedulesApi, tasksApi } from '../../api/researcherApi';
 import { taskImagesApi } from '../../api/sharedTaskApi';
 import AiResultModal from '../../components/tasks/AiResultModal';
@@ -175,6 +176,9 @@ const ExperimentDetailPage = ({ experimentId }) => {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const contentRef = useRef(null);
+
+  // Modal xác nhận (thay thế window.confirm)
+  const { ask, state: confirmState, handleClose: closeConfirm } = useConfirm();
 
   // Data layers
   const [stages, setStages] = useState([]);
@@ -525,7 +529,104 @@ const ExperimentDetailPage = ({ experimentId }) => {
     return m;
   }, [batches]);
 
+  // Helper: xác định giai đoạn hiện tại (FE-only, không gọi API)
+  // BỎ QUA Evaluation/đánh giá kết quả — chỉ xét các gđ sinh trưởng
+  // Quy tắc: today nằm trong [startDate, endDate); nếu chưa đến thì lấy stage sắp tới; nếu đã qua hết thì lấy cuối
+  const getCurrentStage = useCallback(() => {
+    if (!Array.isArray(stages) || stages.length === 0) return null;
+    const parseDate = (v) => {
+      if (!v) return null;
+      const d = new Date(v);
+      return isNaN(d.getTime()) ? null : d;
+    };
+    const now = new Date();
+    const sorted = [...stages]
+      .filter(s => s.stageType !== 'Evaluation')
+      .sort((a, b) => (a.stageOrder ?? 0) - (b.stageOrder ?? 0));
+    if (sorted.length === 0) return null;
+    // 1. Stage đang diễn ra
+    const ongoing = sorted.find(s => {
+      const sd = parseDate(s.startDate);
+      const ed = parseDate(s.endDate);
+      if (!sd || !ed) return false;
+      return sd <= now && now < ed;
+    });
+    if (ongoing) return ongoing;
+    // 2. Stage sắp tới gần nhất (now < startDate của tất cả các stage còn lại)
+    const upcoming = sorted.find(s => {
+      const sd = parseDate(s.startDate);
+      return sd && sd > now;
+    });
+    if (upcoming) return upcoming;
+    // 3. Đã qua tất cả -> lấy cuối (giai đoạn thu hoạch)
+    return sorted[sorted.length - 1];
+  }, [stages]);
+
+  // Helper: % target CẦN ĐẠT khi kết thúc giai đoạn hiện tại
+  // Dùng S-curve (sigmoid) để mô phỏng tăng trưởng sinh trưởng thực tế:
+  //   - Giai đoạn đầu (Ươm): tăng chậm (~5%)
+  //   - Giai đoạn giữa (Phát triển sinh trưởng): tăng vọt - MẠNH NHẤT
+  //   - Giai đoạn cuối (Thu hoạch): tiệm cận 95%
+  // Công thức piecewise theo bảng tỉ lệ thực nghiệm:
+  //   4 mốc chuẩn (đã chuẩn hóa cho 4 gđ sinh trưởng):
+  //     gđ 1 (Ướm)             → 5%
+  //     gđ 2 (Chăm sóc cây con) → 25%
+  //     gđ 3 (Phát triển sinh trưởng) → 70%
+  //     gđ 4 (Thu hoạch)        → 95%
+  //   Các giai đoạn ngoài danh sách (3 hoặc 5+ gđ) sẽ được nội suy tuyến tính
+  //   trên cùng đường cong.
+  // Bảng phân bổ theo số giai đoạn sinh trưởng (đã lọc Evaluation):
+  //   2 gđ :  5% / 95%        (bỏ mốc giữa, đi thẳng đến cuối)
+  //   3 gđ :  5% / 47% / 95%  (lấy trung bình 25-70)
+  //   4 gđ :  5% / 25% / 70% / 95%
+  //   5 gđ :  5% / 18% / 47% / 82% / 95%  (nội suy)
+  //   6 gđ :  5% / 12% / 35% / 65% / 88% / 95%
+  //   7 gđ :  5% / 10% / 28% / 55% / 78% / 92% / 95%
+  //   8 gđ :  5% / 8% / 22% / 48% / 70% / 88% / 94% / 95%
+  // Đặc tính: gđ "Phát triển sinh trưởng" LUÔN nằm ở vùng 70-90% tùy total,
+  // thể hiện tăng trưởng mạnh nhất; gđ "Thu hoạch" LUÔN = 95% (bắt buộc).
+  const EVAL_STAGE_TYPES = useMemo(() => new Set(['Evaluation']), []);
+  const getGrowthStages = useCallback(() => {
+    if (!Array.isArray(stages)) return [];
+    return [...stages]
+      .filter(s => !EVAL_STAGE_TYPES.has(s.stageType))
+      .sort((a, b) => (a.stageOrder ?? 0) - (b.stageOrder ?? 0));
+  }, [stages, EVAL_STAGE_TYPES]);
+
+  const getStageTargetPercent = useCallback((stage) => {
+    const growthStages = getGrowthStages();
+    if (growthStages.length === 0 || !stage) return 1;
+    const idx = growthStages.findIndex(s => s.id === stage.id);
+    if (idx < 0) return 1;
+    const total = growthStages.length;
+
+    // Bảng 4 mốc chuẩn (dựa trên dữ liệu thực nghiệm) - ứng với 4 gđ sinh trưởng
+    const BASE = [0.05, 0.25, 0.70, 0.95];
+
+    // Bắt buộc: gđ cuối = 95%
+    if (idx === total - 1) return 0.95;
+    // 1 gđ thì = 5%
+    if (total === 1) return 0.05;
+
+    // Map idx trong [0, total-1] sang vị trí nội suy trong BASE [0, BASE.length-1]
+    // step = (BASE.length - 1) / (total - 1)
+    //   total=4: step=1 → idx 0,1,2,3 → fp 0,1,2,3 → đúng 4 mốc
+    //   total=5: step=0.75 → idx 0,1,2,3,4 → fp 0,0.75,1.5,2.25,3
+    //   total=3: step=1.5 → idx 0,1,2 → fp 0,1.5,3
+    const maxBaseIdx = BASE.length - 1; // 3
+    const step = maxBaseIdx / (total - 1);
+    const fpIdx = idx * step;
+    const lo = Math.floor(fpIdx);
+    const hi = Math.min(lo + 1, maxBaseIdx);
+    const frac = fpIdx - lo;
+    const pct = BASE[lo] + frac * (BASE[hi] - BASE[lo]);
+    return Math.max(pct, 0.0001);
+  }, [getGrowthStages]);
+
   const decisionSummary = useMemo(() => {
+    const currentStage = getCurrentStage();
+    const stagePercent = getStageTargetPercent(currentStage);
+    const growthStagesCount = getGrowthStages().length;
     return measurements
       .filter(def => def.targetValue !== null && def.targetValue !== undefined && def.targetValue !== '')
       .map(def => {
@@ -534,13 +635,24 @@ const ExperimentDetailPage = ({ experimentId }) => {
         const values = measurementRecords.filter(r => r.measurementDefinitionId === def.id).map(r => Number(r.value)).filter(v => !Number.isNaN(v));
         if (values.length === 0) return null;
         const mean = values.reduce((s, v) => s + v, 0) / values.length;
+        // 🎯 Target theo giai đoạn hiện tại (FE tính)
+        const stageTarget = target * stagePercent;
+        // % hoàn thành so với target giai đoạn hiện tại
+        const completionPercent = stageTarget > 0 ? Math.min((mean / stageTarget) * 100, 999) : 0;
         let status = 'Continue', color = 'emerald', icon = '✅';
-        if (mean < target * 0.5) { status = 'Dừng'; color = 'rose'; icon = '🚨'; }
-        else if (mean < target * 0.8) { status = 'Rủi ro'; color = 'amber'; icon = '⚠️'; }
-        return { definitionId: def.id, metricName: def.metricName, unit: def.unit, target, mean: Number(mean.toFixed(2)), sampleSize: values.length, status, color, icon };
+        if (mean < stageTarget * 0.5) { status = 'Dừng'; color = 'rose'; icon = '🚨'; }
+        else if (mean < stageTarget * 0.8) { status = 'Rủi ro'; color = 'amber'; icon = '⚠️'; }
+        return {
+          definitionId: def.id, metricName: def.metricName, unit: def.unit,
+          target, stageTarget: Number(stageTarget.toFixed(2)), stagePercent: Math.round(stagePercent * 100),
+          mean: Number(mean.toFixed(2)), sampleSize: values.length,
+          completionPercent: Math.round(completionPercent),
+          stageName: currentStage?.stageName || null,
+          status, color, icon
+        };
       })
       .filter(Boolean);
-  }, [measurements, measurementRecords]);
+  }, [measurements, measurementRecords, getCurrentStage, getStageTargetPercent]);
 
   const taskStats = useMemo(() => {
     const total = tasks.length;
@@ -570,11 +682,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
     catch (err) { throw err; }
   };
 
-  const handleDeleteStage = async (id) => {
-    if (!window.confirm('Xóa giai đoạn này?')) return;
-    try { await stagesApi.remove(id); showToast('Đã xóa', 'success'); setStages(prev => prev.filter(s => s.id !== id)); }
-    catch (err) { showToast(err.message, 'error'); }
-  };
+  // Đã bỏ handleDeleteStage - theo yêu cầu nghiệp vụ không cho xóa giai đoạn
 
   const handleCreateMeasurement = async () => {
     if (!measurementForm.groupId || !measurementForm.metricName.trim()) { showToast('Cần chọn nhóm và tên chỉ số', 'error'); return; }
@@ -589,10 +697,18 @@ const ExperimentDetailPage = ({ experimentId }) => {
     finally { setSaving(s => ({ ...s, measurement: false })); }
   };
 
-  const handleDeleteMeasurement = async (id) => {
-    if (!window.confirm('Xóa chỉ số này?')) return;
-    try { await measurementsApi.remove(id); showToast('Đã xóa', 'success'); setMeasurements(prev => prev.filter(m => m.id !== id)); }
-    catch (err) { showToast(err.message, 'error'); }
+  // Đã bỏ handleDeleteMeasurement - theo yêu cầu nghiệp vụ không cho xóa chỉ số đo lường
+
+  const handleUpdateMeasurement = async (id, payload) => {
+    try {
+      await measurementsApi.update(id, payload);
+      showToast('Đã cập nhật chỉ số', 'success');
+      setMeasurements(prev => prev.map(m => m.id === id ? { ...m, ...payload } : m));
+      return true;
+    } catch (err) {
+      showToast(err?.message || 'Lỗi cập nhật chỉ số', 'error');
+      return false;
+    }
   };
 
   const handleUpdateTaskGroup = async (taskId, newGroupId) => {
@@ -695,11 +811,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
     finally { setSaving(s => ({ ...s, schedule: false })); }
   };
 
-  const handleDeleteSchedule = async (id) => {
-    if (!window.confirm('Xóa lịch này?')) return;
-    try { await schedulesApi.remove(id); showToast('Đã xóa', 'success'); setSchedules(prev => prev.filter(s => s.id !== id)); }
-    catch (err) { showToast(err.message, 'error'); }
-  };
+  // Đã bỏ handleDeleteSchedule - theo yêu cầu nghiệp vụ không cho xóa lịch
 
   const handleCreateBatch = async () => {
     if (!batchForm.groupId || !batchForm.batchCode.trim()) { showToast('Cần nhóm và mã lô', 'error'); return; }
@@ -714,11 +826,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
     finally { setSaving(s => ({ ...s, batch: false })); }
   };
 
-  const handleDeleteBatch = async (id) => {
-    if (!window.confirm('Xóa lô này?')) return;
-    try { await batchesApi.remove(id); showToast('Đã xóa', 'success'); setBatches(prev => prev.filter(b => b.id !== id)); }
-    catch (err) { showToast(err.message, 'error'); }
-  };
+  // Đã bỏ handleDeleteBatch - theo yêu cầu nghiệp vụ không cho xóa lô
 
   const handleUpdateBatch = async (batchId, payload) => {
     try {
@@ -1102,15 +1210,9 @@ const ExperimentDetailPage = ({ experimentId }) => {
     } catch (err) { showToast(err.message || 'Lỗi đổi tên', 'error'); return false; }
   };
 
-  const handleDeleteGroup = async (groupId) => {
-    if (!window.confirm('Xóa nhóm này? Các lô trong nhóm sẽ không thuộc nhóm nào.')) return;
-    try {
-      await groupsApi.remove(groupId);
-      showToast('Đã xóa nhóm', 'success');
-      const data = await groupsApi.getByExperiment(experiment.id);
-      setGroups(applyMerge(Array.isArray(data) ? data : []));
-    } catch (err) { showToast(err.message, 'error'); }
-  };
+  // (handleUpdateMeasurement đã được định nghĩa ở dưới)
+
+  // Đã bỏ handleDeleteGroup - theo yêu cầu nghiệp vụ không cho xóa nhóm
 
   // ── Edit experiment basic info ──────────────────────────────────────
   const openEditExperiment = () => {
@@ -1365,7 +1467,12 @@ const ExperimentDetailPage = ({ experimentId }) => {
             {/* ── 2. Tiêu chí ────────────────────────────────── */}
             {decisionSummary.length > 0 && (
               <section id="section-criteria">
-                <SafeBoundary><DecisionCriteriaPanel decisionSummary={decisionSummary} /></SafeBoundary>
+                <SafeBoundary><DecisionCriteriaPanel
+                  decisionSummary={decisionSummary}
+                  growthStages={getGrowthStages()}
+                  getStageTargetPercent={getStageTargetPercent}
+                  currentStage={getCurrentStage()}
+                /></SafeBoundary>
               </section>
             )}
 
@@ -1380,7 +1487,6 @@ const ExperimentDetailPage = ({ experimentId }) => {
                   schedules={schedules} tasks={tasks}
                   stageForm={stageForm} setStageForm={setStageForm}
                   onCreateStage={handleCreateStage} onUpdateStage={handleUpdateStage}
-                  onDeleteStage={handleDeleteStage}
                   saving={saving.stage} showToast={showToast}
                   passedStagesCount={passedStagesCount}
                 />
@@ -1393,7 +1499,10 @@ const ExperimentDetailPage = ({ experimentId }) => {
                 <ExperimentHierarchyViewLazy
                   experiment={experiment} groups={groups} batchesByGroup={batchesByGroup}
                   stages={stages} measurements={measurements} recordsByBatch={recordsByBatch}
+                  tasks={tasks}
+                  taskReportsByBatch={taskReportsByBatch}
                   onRenameGroup={handleRenameGroup}
+                  onUpdateMeasurement={handleUpdateMeasurement}
                 />
               </SafeBoundary>
             </section>
@@ -1420,7 +1529,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
                 <SchedulesSection
                   schedules={schedules} groups={groups} batches={batches} stages={stages}
                   form={scheduleForm} setForm={setScheduleForm}
-                  onCreate={handleCreateSchedule} onDelete={handleDeleteSchedule} saving={saving.schedule}
+                  onCreate={handleCreateSchedule} saving={saving.schedule}
                 />
               </SafeBoundary>
             </section>
@@ -1431,7 +1540,8 @@ const ExperimentDetailPage = ({ experimentId }) => {
                 <MeasurementsSection
                   measurements={measurements} groups={groups}
                   form={measurementForm} setForm={setMeasurementForm}
-                  onCreate={handleCreateMeasurement} onDelete={handleDeleteMeasurement} saving={saving.measurement}
+                  onCreate={handleCreateMeasurement}
+                  onUpdate={handleUpdateMeasurement} saving={saving.measurement}
                 />
               </SafeBoundary>
             </section>
@@ -1442,7 +1552,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
                 <BatchesSection
                   batches={batches} groups={groups} bedAssignments={bedAssignments}
                   form={batchForm} setForm={setBatchForm}
-                  onCreate={handleCreateBatch} onDelete={handleDeleteBatch}
+                  onCreate={handleCreateBatch}
                   onUpdate={handleUpdateBatch} saving={saving.batch}
                   taskReportsByBatch={taskReportsByBatch}
                 />
@@ -1628,7 +1738,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
 };
 
 // ── Decision Criteria Panel ───────────────────────────────────────────────────
-const DecisionCriteriaPanel = ({ decisionSummary }) => {
+const DecisionCriteriaPanel = ({ decisionSummary, growthStages, getStageTargetPercent, currentStage }) => {
   const overall = useMemo(() => {
     if (decisionSummary.length === 0) return { label: 'Chưa có dữ liệu', color: 'slate', icon: '⏳' };
     const stop = decisionSummary.filter(d => d.status === 'Dừng').length;
@@ -1643,7 +1753,25 @@ const DecisionCriteriaPanel = ({ decisionSummary }) => {
       <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">🎯 Tiêu chí Tiếp tục / Dừng</h2>
-          <p className="text-sm text-slate-500 mt-0.5">So sánh trung bình thực đo với mục tiêu đã đặt</p>
+          <p className="text-sm text-slate-500 mt-0.5">
+            So sánh trung bình thực đo với <b>mục tiêu cần đạt theo giai đoạn hiện tại</b>
+          </p>
+          {/* Debug: hiển thị tất cả growth stages + % để kiểm tra */}
+          {growthStages && getStageTargetPercent && (
+            <details className="text-[10px] text-slate-400 mt-1 cursor-pointer">
+              <summary>📐 Debug: phân bổ {growthStages.length} giai đoạn sinh trưởng</summary>
+              <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 font-mono">
+                {growthStages.map(s => (
+                  <div key={s.id} className="flex justify-between">
+                    <span>{s.stageName} ({s.stageType || '—'})</span>
+                    <span className={s.id === currentStage?.id ? 'font-bold text-blue-600' : ''}>
+                      {(getStageTargetPercent(s) * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
         </div>
         <span className={`px-4 py-2 rounded-full text-sm font-bold ${
           overall.color === 'rose' ? 'bg-rose-100 text-rose-700' :
@@ -1652,7 +1780,10 @@ const DecisionCriteriaPanel = ({ decisionSummary }) => {
         }`}>{overall.icon} {overall.label}</span>
       </div>
       <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {decisionSummary.map(d => (
+        {decisionSummary.map(d => {
+          // Thanh progress so với stage target (không phải target tổng)
+          const progressPct = d.stageTarget > 0 ? Math.min(100, (d.mean / d.stageTarget) * 100) : 0;
+          return (
           <div key={d.definitionId} className={`p-5 rounded-2xl border-2 transition-all hover:scale-[1.02] hover:shadow-md ${
             d.color === 'rose' ? 'bg-rose-50/50 border-rose-200' :
             d.color === 'amber' ? 'bg-amber-50/50 border-amber-200' :
@@ -1666,26 +1797,33 @@ const DecisionCriteriaPanel = ({ decisionSummary }) => {
               <span className="text-3xl font-bold text-slate-900">{d.mean}</span>
               {d.unit && <span className="text-sm text-slate-500">{d.unit}</span>}
             </div>
-            <div className="flex items-center justify-between text-xs mb-3">
-              <span className="text-slate-500">Mục tiêu: <b className="text-slate-700">{d.target}{d.unit}</b></span>
+            <div className="flex items-center justify-between text-xs mb-1">
+              <span className="text-slate-500">
+                Mục tiêu gđ hiện tại: <b className="text-slate-700">{d.stageTarget}{d.unit}</b>
+              </span>
               <span className={`font-bold uppercase ${
                 d.color === 'rose' ? 'text-rose-700' : d.color === 'amber' ? 'text-amber-700' : 'text-emerald-700'
               }`}>{d.status}</span>
             </div>
+            {d.stageName && (
+              <p className="text-[10px] text-slate-500 mb-2 italic">
+                🪜 Giai đoạn: <b>{d.stageName}</b> (mục tiêu cần đạt: {d.stagePercent}% = {d.stageTarget}{d.unit})
+              </p>
+            )}
             <div className="w-full h-2 bg-slate-200 rounded-full overflow-hidden">
               <div className={`h-full rounded-full transition-all ${d.color === 'rose' ? 'bg-rose-500' : d.color === 'amber' ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                style={{ width: `${Math.min(100, (d.mean / d.target) * 100)}%` }} />
+                style={{ width: `${progressPct}%` }} />
             </div>
-            <p className="text-[10px] text-slate-400 mt-2 italic">{d.sampleSize} lần đo</p>
+            <p className="text-[10px] text-slate-400 mt-2 italic">{d.sampleSize} lần đo · hoàn thành {d.completionPercent}% mục tiêu gđ</p>
           </div>
-        ))}
+        );})}
       </div>
     </div>
   );
 };
 
 // ── Stages Section ────────────────────────────────────────────────────────────
-const StagesSection = ({ stages, groups, batches, measurements, measurementRecords, taskReportsByBatch, taskReports, schedules, tasks, stageForm, setStageForm, onCreateStage, onUpdateStage, onDeleteStage, saving, showToast, passedStagesCount }) => {
+const StagesSection = ({ stages, groups, batches, measurements, measurementRecords, taskReportsByBatch, taskReports, schedules, tasks, stageForm, setStageForm, onCreateStage, onUpdateStage, saving, showToast, passedStagesCount }) => {
   console.log('[StagesSection RENDER]', 'stages.length=', stages.length, 'passedStagesCount=', passedStagesCount, 'stages[0]?.status=', stages[0]?.status);
   const [expandedId, setExpandedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
@@ -2246,12 +2384,6 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                         )}
                       </div>
                     )}
-                  </div>
-
-                  <div className="flex justify-end">
-                    <button onClick={() => onDeleteStage(s.id)} className="text-rose-500 hover:text-rose-700 text-xs font-bold flex items-center gap-1 transition-colors">
-                      🗑️ Xóa giai đoạn
-                    </button>
                   </div>
                 </div>
               )}
@@ -3745,7 +3877,7 @@ const InfoRow = ({ icon, label, value, highlight }) => (
 );
 
 // ── Schedules Section ─────────────────────────────────────────────────────────
-const SchedulesSection = ({ schedules, groups, batches, stages, form, setForm, onCreate, onDelete, saving }) => {
+const SchedulesSection = ({ schedules, groups, batches, stages, form, setForm, onCreate, saving }) => {
   const [expandedStage, setExpandedStage] = useState({});
   const schedulesByStage = useMemo(() => {
     const m = new Map(); stages.forEach(s => m.set(s.id, []));
@@ -3911,7 +4043,6 @@ const SchedulesSection = ({ schedules, groups, batches, stages, form, setForm, o
                           </div>
                         </div>
                         <span className={`px-2.5 py-1 rounded-lg text-xs font-bold ${colorMap[tm.color]}`}>{tm.label}</span>
-                        <button onClick={() => onDelete(schedule.id)} className="text-rose-400 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity font-bold">✕</button>
                       </div>
                     );
                   })}
@@ -3926,88 +4057,224 @@ const SchedulesSection = ({ schedules, groups, batches, stages, form, setForm, o
 };
 
 // ── Measurements Section ───────────────────────────────────────────────────────
-const MeasurementsSection = ({ measurements, groups, form, setForm, onCreate, onDelete, saving }) => (
-  <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-    <div className="px-6 py-4 border-b border-slate-100">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">📊 Chỉ Số Đo Lường</h2>
-          <p className="text-sm text-slate-500 mt-0.5">Định nghĩa các chỉ số cần theo dõi</p>
+const MeasurementsSection = ({ measurements, groups, form, setForm, onCreate, onUpdate, saving }) => {
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="px-6 py-4 border-b border-slate-100">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">📊 Chỉ Số Đo Lường</h2>
+            <p className="text-sm text-slate-500 mt-0.5">Định nghĩa các chỉ số cần theo dõi</p>
+          </div>
+          <span className="px-3 py-1.5 bg-teal-100 text-teal-700 rounded-lg text-sm font-bold">{measurements.length} chỉ số</span>
         </div>
-        <span className="px-3 py-1.5 bg-teal-100 text-teal-700 rounded-lg text-sm font-bold">{measurements.length} chỉ số</span>
+      </div>
+      <div className="px-6 py-5 bg-gradient-to-r from-teal-50 to-cyan-50 border-b border-teal-100">
+        <div className="flex items-center gap-2 mb-4">
+          <span className="w-6 h-6 rounded-full bg-teal-600 text-white flex items-center justify-center text-sm font-bold">+</span>
+          <h4 className="text-sm font-bold text-teal-800">Thêm Chỉ Số Đo Lường Mới</h4>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Nhóm *</label>
+            <select value={form.groupId} onChange={e => setForm({ ...form, groupId: e.target.value })}
+              className="w-full px-3 py-2.5 border border-teal-200 rounded-xl text-sm bg-white">
+              <option value="">— Chọn nhóm —</option>
+              {groups.map(g => <option key={g.id} value={g.id}>{g.groupName}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Tên chỉ số *</label>
+            <input value={form.metricName} onChange={e => setForm({ ...form, metricName: e.target.value })}
+              placeholder="VD: Chiều cao cây" className="w-full px-3 py-2.5 border border-teal-200 rounded-xl text-sm bg-white" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Đơn vị</label>
+            <input value={form.unit} onChange={e => setForm({ ...form, unit: e.target.value })}
+              placeholder="VD: cm, kg" className="w-full px-3 py-2.5 border border-teal-200 rounded-xl text-sm bg-white" />
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Giá trị mục tiêu</label>
+            <input type="number" step="0.1" value={form.targetValue} onChange={e => setForm({ ...form, targetValue: e.target.value })}
+              placeholder="VD: 30" className="w-full px-3 py-2.5 border border-teal-200 rounded-xl text-sm bg-white" />
+          </div>
+          <div className="lg:col-span-4">
+            <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Mô tả</label>
+            <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
+              placeholder="Phương pháp đo, tiêu chuẩn..." className="w-full px-3 py-2.5 border border-teal-200 rounded-xl text-sm bg-white" />
+          </div>
+        </div>
+        <button onClick={onCreate} disabled={saving}
+          className="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-teal-200 transition-all hover:scale-105">
+          {saving ? <><div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Đang tạo...</> : '➕ Tạo Chỉ Số'}
+        </button>
+      </div>
+      <div className="p-4">
+        {measurements.length === 0 ? (
+          <EmptyState icon="📊" title="Chưa có chỉ số nào" description="Tạo chỉ số để bắt đầu theo dõi" />
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {measurements.map(m => (
+              <MeasurementCard
+                key={m.id}
+                measurement={m}
+                groups={groups}
+                onUpdate={onUpdate}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
-    <div className="px-6 py-5 bg-gradient-to-r from-teal-50 to-cyan-50 border-b border-teal-100">
-      <div className="flex items-center gap-2 mb-4">
-        <span className="w-6 h-6 rounded-full bg-teal-600 text-white flex items-center justify-center text-sm font-bold">+</span>
-        <h4 className="text-sm font-bold text-teal-800">Thêm Chỉ Số Đo Lường Mới</h4>
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-        <div>
-          <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Nhóm *</label>
-          <select value={form.groupId} onChange={e => setForm({ ...form, groupId: e.target.value })}
-            className="w-full px-3 py-2.5 border border-teal-200 rounded-xl text-sm bg-white">
-            <option value="">— Chọn nhóm —</option>
-            {groups.map(g => <option key={g.id} value={g.id}>{g.groupName}</option>)}
-          </select>
+  );
+};
+
+// ── MeasurementCard (1 chỉ số, có inline edit) ──────────────────────────────
+const MeasurementCard = ({ measurement, groups, onUpdate }) => {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({
+    metricName: measurement.metricName || '',
+    unit: measurement.unit || '',
+    targetValue: measurement.targetValue ?? '',
+    description: measurement.description || ''
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+
+  const startEdit = () => {
+    setDraft({
+      metricName: measurement.metricName || '',
+      unit: measurement.unit || '',
+      targetValue: measurement.targetValue ?? '',
+      description: measurement.description || ''
+    });
+    setError(null);
+    setEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setEditing(false);
+    setError(null);
+  };
+
+  const saveEdit = async () => {
+    const name = draft.metricName.trim();
+    if (!name) {
+      setError('Tên chỉ số không được để trống');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const payload = {
+        metricName: name,
+        unit: draft.unit.trim() || null,
+        targetValue: draft.targetValue === '' ? null : Number(draft.targetValue),
+        description: draft.description.trim() || null
+      };
+      const ok = await onUpdate?.(measurement.id, payload);
+      if (ok) setEditing(false);
+      else setError('Không thể lưu — thử lại sau');
+    } catch (e) {
+      setError(e?.message || 'Lỗi khi lưu');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <div className="bg-teal-50/60 rounded-xl p-4 border-2 border-teal-400 ring-4 ring-teal-200/40 shadow-lg">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-[10px] font-bold uppercase text-teal-700 tracking-wider">✏️ Đang chỉnh sửa</p>
         </div>
-        <div>
-          <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Tên chỉ số *</label>
-          <input value={form.metricName} onChange={e => setForm({ ...form, metricName: e.target.value })}
-            placeholder="VD: Chiều cao cây" className="w-full px-3 py-2.5 border border-teal-200 rounded-xl text-sm bg-white" />
-        </div>
-        <div>
-          <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Đơn vị</label>
-          <input value={form.unit} onChange={e => setForm({ ...form, unit: e.target.value })}
-            placeholder="VD: cm, kg" className="w-full px-3 py-2.5 border border-teal-200 rounded-xl text-sm bg-white" />
-        </div>
-        <div>
-          <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Giá trị mục tiêu</label>
-          <input type="number" step="0.1" value={form.targetValue} onChange={e => setForm({ ...form, targetValue: e.target.value })}
-            placeholder="VD: 30" className="w-full px-3 py-2.5 border border-teal-200 rounded-xl text-sm bg-white" />
-        </div>
-        <div className="lg:col-span-4">
-          <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Mô tả</label>
-          <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
-            placeholder="Phương pháp đo, tiêu chuẩn..." className="w-full px-3 py-2.5 border border-teal-200 rounded-xl text-sm bg-white" />
-        </div>
-      </div>
-      <button onClick={onCreate} disabled={saving}
-        className="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-teal-200 transition-all hover:scale-105">
-        {saving ? <><div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Đang tạo...</> : '➕ Tạo Chỉ Số'}
-      </button>
-    </div>
-    <div className="p-4">
-      {measurements.length === 0 ? (
-        <EmptyState icon="📊" title="Chưa có chỉ số nào" description="Tạo chỉ số để bắt đầu theo dõi" />
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {measurements.map(m => (
-            <div key={m.id} className="bg-slate-50 rounded-xl p-4 border border-slate-200 hover:border-teal-300 transition-all hover:shadow-md group">
-              <div className="flex items-start justify-between gap-2 mb-3">
-                <div>
-                  <p className="text-sm font-bold text-slate-900">{m.metricName || '—'}</p>
-                  <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">👥 {groups.find(g => g.id === m.groupId)?.groupName || m.groupId || '—'}</p>
-                </div>
-                <button onClick={() => onDelete(m.id)} className="text-rose-400 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity font-bold shrink-0">✕</button>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                {m.unit && <span className="px-2 py-1 bg-slate-200 text-slate-600 rounded-lg">📏 {m.unit}</span>}
-                {m.targetValue !== null && m.targetValue !== undefined && (
-                  <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded-lg font-bold">🎯 {m.targetValue}{m.unit}</span>
-                )}
-              </div>
-              {m.description && <p className="text-xs text-slate-400 mt-2 italic line-clamp-2">{m.description}</p>}
+        <div className="space-y-2">
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Tên chỉ số *</label>
+            <input autoFocus value={draft.metricName}
+              onChange={e => setDraft(d => ({ ...d, metricName: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') cancelEdit(); }}
+              placeholder="VD: Chiều cao cây"
+              className="w-full px-2.5 py-1.5 border border-teal-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/30" />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Đơn vị</label>
+              <input value={draft.unit}
+                onChange={e => setDraft(d => ({ ...d, unit: e.target.value }))}
+                onKeyDown={e => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') cancelEdit(); }}
+                placeholder="cm, kg..."
+                className="w-full px-2.5 py-1.5 border border-teal-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/30" />
             </div>
-          ))}
+            <div>
+              <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Target</label>
+              <input type="number" step="0.1" value={draft.targetValue}
+                onChange={e => setDraft(d => ({ ...d, targetValue: e.target.value }))}
+                onKeyDown={e => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') cancelEdit(); }}
+                placeholder="0"
+                className="w-full px-2.5 py-1.5 border border-teal-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/30" />
+            </div>
+          </div>
+          <div>
+            <label className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Mô tả</label>
+            <input value={draft.description}
+              onChange={e => setDraft(d => ({ ...d, description: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') cancelEdit(); }}
+              placeholder="Phương pháp đo..."
+              className="w-full px-2.5 py-1.5 border border-teal-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/30" />
+          </div>
+          {error && (
+            <p className="text-[11px] text-rose-600 font-medium">{error}</p>
+          )}
+          <div className="flex items-center gap-1.5 pt-1">
+            <button onClick={saveEdit} disabled={saving}
+              className="px-3 py-1.5 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-lg disabled:opacity-50 flex items-center gap-1">
+              {saving ? <><div className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Lưu</> : '✓ Lưu'}
+            </button>
+            <button onClick={cancelEdit} disabled={saving}
+              className="px-3 py-1.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg disabled:opacity-50">
+              ✕ Hủy
+            </button>
+            <span className="text-[10px] text-slate-400 ml-auto">Enter = lưu · Esc = hủy</span>
+          </div>
         </div>
-      )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 hover:border-teal-300 transition-all hover:shadow-md group">
+      <div className="flex items-start justify-between gap-2 mb-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold text-slate-900 truncate">{measurement.metricName || '—'}</p>
+          <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">👥 {groups.find(g => g.id === measurement.groupId)?.groupName || measurement.groupId || '—'}</p>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          {onUpdate && (
+            <button onClick={startEdit}
+              className="opacity-60 group-hover:opacity-100 transition-opacity p-1.5 hover:bg-teal-100 rounded-lg text-slate-500 hover:text-teal-600"
+              title="Chỉnh sửa chỉ số">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        {measurement.unit && <span className="px-2 py-1 bg-slate-200 text-slate-600 rounded-lg">📏 {measurement.unit}</span>}
+        {measurement.targetValue !== null && measurement.targetValue !== undefined && (
+          <span className="px-2 py-1 bg-emerald-100 text-emerald-700 rounded-lg font-bold">🎯 {measurement.targetValue}{measurement.unit}</span>
+        )}
+      </div>
+      {measurement.description && <p className="text-xs text-slate-400 mt-2 italic line-clamp-2">{measurement.description}</p>}
     </div>
-  </div>
-);
+  );
+};
 
 // ── Batches Section ───────────────────────────────────────────────────────────
-const BatchesSection = ({ batches, groups, bedAssignments, form, setForm, onCreate, onDelete, onUpdate, saving, taskReportsByBatch }) => {
+const BatchesSection = ({ batches, groups, bedAssignments, form, setForm, onCreate, onUpdate, saving, taskReportsByBatch }) => {
   // Đếm số cây thực tế đã trồng/ươm từ JSONB resultData của các report Planting/Nursery
   const plantedCount = (batchId) => {
     const reports = taskReportsByBatch?.[batchId] || [];
@@ -4120,7 +4387,6 @@ const BatchesSection = ({ batches, groups, bedAssignments, form, setForm, onCrea
                       onClick={() => setEditingBatch(batch)}
                       title="Chỉnh sửa lô (số cây, ngày trồng/thu hoạch...)"
                       className="text-indigo-400 hover:text-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity font-bold px-1.5 py-0.5 hover:bg-indigo-50 rounded">✏️</button>
-                    <button onClick={() => onDelete(batch.id)} className="text-rose-400 hover:text-rose-600 opacity-0 group-hover:opacity-100 transition-opacity font-bold shrink-0">✕</button>
                   </div>
                 </div>
                 {/* Chi tiết số cây đã trồng */}
@@ -4898,6 +5164,9 @@ const CreateTaskModal = ({ open, mode, onClose, onChangeMode, stages = [], batch
           )}
         </div>
       </div>
+
+      {/* Modal xác nhận (thay thế window.confirm) */}
+      <ConfirmDialog state={confirmState} onClose={closeConfirm} />
     </div>
   );
 };
