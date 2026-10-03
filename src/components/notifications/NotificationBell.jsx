@@ -139,7 +139,7 @@ const NotificationBell = ({ variant = 'light' }) => {
           fetchPage(page + 1, true);
         }
       },
-      { root: document.getElementById('notif-bell-dropdown'), threshold: 0.1 }
+      { root: document.getElementById('notif-bell-dropdown-list'), threshold: 0.1 }
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
@@ -225,12 +225,16 @@ const NotificationBell = ({ variant = 'light' }) => {
   };
 
   const handleMarkAllRead = async () => {
+    const t0 = Date.now();
+    console.log('[NotificationBell] 🔴 Đọc hết clicked - gọi PUT /notifications/read-all');
     try {
-      await notificationsApi.markAllAsRead();
+      const res = await notificationsApi.markAllAsRead();
+      console.log(`[NotificationBell] ✅ read-all response trong ${Date.now() - t0}ms:`, res);
       setItems(prev => prev.map(n => ({ ...n, isRead: true, readAt: new Date().toISOString() })));
       setUnreadCount(0);
       showToast('Đã đánh dấu tất cả là đã đọc', 'success');
     } catch (err) {
+      console.error('[NotificationBell] ❌ read-all error:', err);
       showToast(err.message || 'Lỗi', 'error');
     }
   };
@@ -298,6 +302,7 @@ const NotificationBell = ({ variant = 'light' }) => {
       {/* Dropdown - portal để tránh clipping/stacking-context từ ancestor (fixed sidebar, etc.) */}
       {open && createPortal(
         <div
+          id="notif-bell-dropdown"
           style={{ position: 'fixed', top: pos.top, left: pos.left, zIndex: 9999 }}
           className="w-[400px] max-h-[540px] bg-white border border-slate-200 rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-fade-in">
           {/* Header */}
@@ -311,7 +316,9 @@ const NotificationBell = ({ variant = 'light' }) => {
               </p>
             </div>
             {unreadCount > 0 && (
-              <button onClick={handleMarkAllRead}
+              <button
+                onClick={(e) => { e.stopPropagation(); handleMarkAllRead(); }}
+                onMouseDown={(e) => e.stopPropagation()}
                 className="text-[10px] font-bold text-blue-600 hover:text-blue-800 px-2 py-1 rounded hover:bg-blue-50 uppercase">
                 Đọc hết
               </button>
@@ -319,7 +326,7 @@ const NotificationBell = ({ variant = 'light' }) => {
           </div>
 
           {/* List */}
-          <div id="notif-bell-dropdown" className="overflow-y-auto flex-1 overscroll-contain" style={{ maxHeight: 460 }}>
+          <div id="notif-bell-dropdown-list" className="overflow-y-auto flex-1 overscroll-contain" style={{ maxHeight: 460 }}>
             {loading ? (
               <div className="px-4 py-8 text-center text-sm text-slate-500">Đang tải...</div>
             ) : sortedItems.length === 0 ? (

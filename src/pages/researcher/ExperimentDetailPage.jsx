@@ -37,6 +37,169 @@ const STAGE_TYPES = [
   { value: 'Other', label: 'Khác', icon: '📌', color: 'slate' }
 ];
 
+const QUICK_FORM_SCHEMA = {
+  Planting: {
+    icon: '🌱', color: 'emerald', title: 'Báo Cáo Trồng Cây', description: 'Ghi nhận nhanh thông tin trồng cây',
+    fields: [
+      { key: 'plantCount', label: 'Số cây đã trồng', type: 'number', unit: 'cây' },
+      { key: 'plantSpacing', label: 'Khoảng cách cây', type: 'number', unit: 'cm' },
+      { key: 'soilCondition', label: 'Tình trạng đất', type: 'select', options: ['Tốt', 'Trung bình', 'Khô', 'Ẩm ướt'] },
+      { key: 'seedlingSource', label: 'Nguồn giống', type: 'text', placeholder: 'VD: Vườn ươm A' }
+    ]
+  },
+  Watering: {
+    icon: '💧', color: 'blue', title: 'Báo Cáo Tưới Nước', description: 'Ghi nhận lượng nước và điều kiện tưới',
+    fields: [
+      { key: 'waterAmount', label: 'Lượng nước tưới', type: 'number', unit: 'L/m²' },
+      { key: 'irrigationMethod', label: 'Phương pháp tưới', type: 'select', options: ['Phun mưa', 'Nhỏ giọt', 'Thủ công', 'Ngập'] },
+      { key: 'duration', label: 'Thời gian tưới', type: 'number', unit: 'phút' },
+      { key: 'soilMoistureBefore', label: 'Độ ẩm đất trước', type: 'number', unit: '%' },
+      { key: 'soilMoistureAfter', label: 'Độ ẩm đất sau', type: 'number', unit: '%' }
+    ]
+  },
+  Fertilizing: {
+    icon: '🧪', color: 'amber', title: 'Báo Cáo Bón Phân', description: 'Ghi nhận loại phân và liều lượng',
+    fields: [
+      { key: 'fertilizerType', label: 'Loại phân', type: 'select', options: ['NPK', 'Hữu cơ', 'Vi sinh', 'Ure', 'Phân chuồng', 'Phân xanh', 'Khác'] },
+      { key: 'fertilizerAmount', label: 'Liều lượng', type: 'number', unit: 'g/cây' },
+      { key: 'fertilizerBrand', label: 'Thương hiệu/Nhãn hiệu', type: 'text', placeholder: 'VD: Đầu Trâu' },
+      { key: 'applicationMethod', label: 'Cách bón', type: 'select', options: ['Rải gốc', 'Pha nước', 'Bón lá', 'Bón theo hàng'] }
+    ]
+  },
+  Inspection: {
+    icon: '🔍', color: 'indigo', title: 'Báo Cáo Kiểm Tra', description: 'Ghi nhận tình trạng kiểm tra định kỳ',
+    fields: [
+      { key: 'overallHealth', label: 'Tình trạng tổng thể', type: 'select', options: ['Tốt', 'Trung bình', 'Yếu', 'Có vấn đề'] },
+      { key: 'pestDiseaseLevel', label: 'Mức độ sâu bệnh', type: 'select', options: ['Không có', 'Nhẹ', 'Trung bình', 'Nặng'] },
+      { key: 'affectedPlantCount', label: 'Số cây bị ảnh hưởng', type: 'number', unit: 'cây' },
+      { key: 'inspectionChecklist', label: 'Checklist tuân thủ', type: 'select', options: ['Đạt', 'Cần cải thiện', 'Không đạt'] }
+    ]
+  },
+  Harvest: {
+    icon: '🌾', color: 'orange', title: 'Báo Cáo Thu Hoạch', description: 'Ghi nhận sản lượng và chất lượng thu hoạch',
+    fields: [
+      { key: 'harvestWeight', label: 'Khối lượng thu hoạch', type: 'number', unit: 'kg' },
+      { key: 'qualityGrade', label: 'Phân loại chất lượng', type: 'select', options: ['Loại A', 'Loại B', 'Loại C', 'Không phân loại'] },
+      { key: 'plantCount', label: 'Số cây thu hoạch', type: 'number', unit: 'cây' },
+      { key: 'averagePerPlant', label: 'Trung bình/cây', type: 'number', unit: 'kg' },
+      { key: 'moistureContent', label: 'Độ ẩm', type: 'number', unit: '%' }
+    ]
+  }
+};
+
+// Map stageType (của giai đoạn thí nghiệm) → taskType(s) dùng trong task report.
+// Mỗi giai đoạn thường dùng nhiều task type khác nhau (Care = Watering+Fertilizing+Inspection, ...)
+const STAGE_TO_TASK_TYPES = {
+  Preparation: [],
+  Nursery: ['Planting'],
+  Planting: ['Planting'],
+  Care: ['Watering', 'Fertilizing', 'Inspection'],
+  Growing: ['Inspection', 'Measurement'],
+  Growth: ['Inspection', 'Measurement'],
+  Evaluation: ['Inspection', 'Measurement'],
+  Harvest: ['Harvest'],
+  Harvesting: ['Harvest'],
+  PostHarvest: ['Inspection'],
+  Other: []
+};
+
+// Lấy QUICK_FORM_SCHEMA fields cho stage (gộp tất cả task types của stage đó)
+const getTaskReportSchemaForStage = (stageType) => {
+  const taskTypes = STAGE_TO_TASK_TYPES[stageType] || [];
+  const sections = [];
+  for (const tt of taskTypes) {
+    const schema = QUICK_FORM_SCHEMA[tt];
+    if (!schema) continue;
+    sections.push({ taskType: tt, ...schema });
+  }
+  return sections;
+};
+
+// Đọc resultData của 1 task report an toàn (BE có thể trả string JSON, object, hoặc array)
+const readTaskReportResultData = (r) => {
+  if (!r) return {};
+  if (r.reportData) {
+    if (typeof r.reportData === 'object') return r.reportData;
+    if (typeof r.reportData === 'string') {
+      try { return JSON.parse(r.reportData); } catch { return {}; }
+    }
+  }
+  if (Array.isArray(r.resultData)) {
+    // BE trả về dạng [{key, value}]
+    const obj = {};
+    r.resultData.forEach(item => { if (item?.key) obj[item.key] = item.value; });
+    return obj;
+  }
+  return {};
+};
+
+// Aggregate tất cả reports của stage này theo từng taskType + field → tổng/tb/max
+const aggregateTaskReports = (taskReports, stageTasks, sections) => {
+  // Map taskId → taskType
+  const taskTypeById = new Map();
+  stageTasks.forEach(t => taskTypeById.set(t.id, t.taskType));
+
+  // Group reports theo taskType
+  const reportsByType = {};
+  for (const r of taskReports || []) {
+    const tt = taskTypeById.get(r.taskId) || r.taskType;
+    if (!tt) continue;
+    if (!reportsByType[tt]) reportsByType[tt] = [];
+    reportsByType[tt].push(r);
+  }
+
+  // Với mỗi section, tính giá trị đại diện cho mỗi field
+  const result = {};
+  for (const sec of sections) {
+    const reports = reportsByType[sec.taskType] || [];
+    const fieldValues = {};
+    sec.fields.forEach(f => {
+      fieldValues[f.key] = { count: 0, sum: 0, max: 0, min: Infinity, values: [], last: '' };
+    });
+    reports.forEach(r => {
+      const rd = readTaskReportResultData(r);
+      sec.fields.forEach(f => {
+        if (rd[f.key] != null && rd[f.key] !== '') {
+          const v = rd[f.key];
+          fieldValues[f.key].count += 1;
+          fieldValues[f.key].values.push(v);
+          if (f.type === 'number') {
+            const num = Number(v);
+            if (!isNaN(num)) {
+              fieldValues[f.key].sum += num;
+              if (num > fieldValues[f.key].max) fieldValues[f.key].max = num;
+              if (num < fieldValues[f.key].min) fieldValues[f.key].min = num;
+            }
+          }
+          fieldValues[f.key].last = v;
+        }
+      });
+    });
+    result[sec.taskType] = {
+      reportCount: reports.length,
+      fields: fieldValues
+    };
+  }
+  return result;
+};
+
+// Định dạng giá trị aggregate để hiển thị + dùng làm default cho input
+const formatAggregatedValue = (field, agg) => {
+  if (!agg || agg.count === 0) return { display: '', defaultValue: '' };
+  if (field.type === 'number') {
+    if (agg.count === 1) {
+      return { display: `${agg.values[0]}${field.unit || ''}`, defaultValue: String(agg.values[0]) };
+    }
+    const sum = agg.sum.toFixed(2);
+    return {
+      display: `Tổng ${sum}${field.unit || ''} (${agg.count} lần)`,
+      defaultValue: String(sum)
+    };
+  }
+  // select/text: lấy giá trị cuối
+  return { display: String(agg.last), defaultValue: String(agg.last) };
+};
+
 const RESULT_DATA_SCHEMA = {
   Nursery: [
     { key: 'soLuong', label: 'Số lượng cây giống', type: 'number', unit: 'cây', min: 0 },
@@ -1307,7 +1470,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
           {loadError && <p className="text-rose-600 text-sm mb-4">{loadError}</p>}
           {loading && <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto my-4" />}
           <button onClick={() => navigateTo('/researcher')} className="mt-4 px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700">
-            ← Quay lại Dashboard
+            ← Quay lại Thực nghiệm
           </button>
         </div>
       </div>
@@ -1326,7 +1489,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
           {/* Breadcrumb */}
           <div className="max-w-7xl mx-auto px-6 pt-3">
             <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
-              <button onClick={() => navigateTo('/researcher')} className="hover:text-indigo-600 transition-colors font-medium">Dashboard</button>
+              <button onClick={() => navigateTo('/researcher')} className="hover:text-indigo-600 transition-colors font-medium">Thực nghiệm</button>
               <span>/</span>
               <span className="text-indigo-600 font-semibold">Chi tiết thí nghiệm</span>
             </div>
@@ -1489,6 +1652,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
                   onCreateStage={handleCreateStage} onUpdateStage={handleUpdateStage}
                   saving={saving.stage} showToast={showToast}
                   passedStagesCount={passedStagesCount}
+                  experimentId={experiment.id}
                 />
               </SafeBoundary>
             </section>
@@ -1659,6 +1823,8 @@ const ExperimentDetailPage = ({ experimentId }) => {
           setBulkForm={setTaskBulkForm}
           submitting={taskSubmitting}
           skillCatalog={skillCatalog}
+          confirmState={confirmState}
+          closeConfirm={closeConfirm}
           onSubmitManual={async () => {
             if (!taskForm.title.trim()) { showToast('Tiêu đề tác vụ không được trống', 'error'); return; }
 
@@ -1823,14 +1989,36 @@ const DecisionCriteriaPanel = ({ decisionSummary, growthStages, getStageTargetPe
 };
 
 // ── Stages Section ────────────────────────────────────────────────────────────
-const StagesSection = ({ stages, groups, batches, measurements, measurementRecords, taskReportsByBatch, taskReports, schedules, tasks, stageForm, setStageForm, onCreateStage, onUpdateStage, saving, showToast, passedStagesCount }) => {
+const StagesSection = ({ stages, groups, batches, measurements, measurementRecords, taskReportsByBatch, taskReports, schedules, tasks, stageForm, setStageForm, onCreateStage, onUpdateStage, saving, showToast, passedStagesCount, experimentId }) => {
   console.log('[StagesSection RENDER]', 'stages.length=', stages.length, 'passedStagesCount=', passedStagesCount, 'stages[0]?.status=', stages[0]?.status);
   const [expandedId, setExpandedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editData, setEditData] = useState({});
   const [savingId, setSavingId] = useState(null);
 
+  // Stage đang edit: dùng để xác định có kích hoạt form động không
+  const editingStage = useMemo(
+    () => stages.find(s => s.id === editingId) || null,
+    [stages, editingId]
+  );
+
+  // ── Form động (chỉ số đo lường) — load cho MỌI giai đoạn đang edit
+  //   để researcher có thể custom nhập các chỉ số cần thiết.
+  //   Tính lại mỗi khi editingStage/measurements/groups đổi → không bao giờ leak state
+  //   từ giai đoạn trước.
+  const dynamicDefsByGroup = useMemo(() => {
+    if (!editingStage) return {};
+    if (!groups || groups.length === 0) return {};
+    const map = {};
+    groups.forEach(g => {
+      map[g.id] = (measurements || []).filter(m => m.groupId === g.id);
+    });
+    return map;
+  }, [editingStage, measurements, groups]);
+
   const toggleExpand = (id) => setExpandedId(expandedId === id ? null : id);
+
+  // (Đã bỏ useEffect tự rebuild — useMemo ở trên đã tự tính lại khi measurements/groups đổi)
 
   const startEdit = (s) => {
     setEditingId(s.id);
@@ -1838,32 +2026,37 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
     const isPerGroup = isPerGroupStage(s.stageType);
     const stageRecs = measurementRecords.filter(r => r.stageId === s.id || r.experimentStageId === s.id);
 
+    // Cấu trúc mới: resultData = { overall: { winningGroupId, conclusion }, byGroup: { [gid]: { [taskType]: { field: val }, [defId]: {field: val} } } }
+    // Để tránh phá data cũ của user đã lưu, chỉ thêm computed/auto-fill nếu parsed chưa có hoặc thiếu keys.
+    // KHÔNG ép reset bằng schema cũ (RESULT_DATA_SCHEMA) nữa.
     if (isPerGroup) {
-      const overall = {}; const byGroup = {};
-      getSchemaForStage(s.stageType).forEach(f => { overall[f.key] = ''; });
-      groups.forEach(g => { byGroup[g.id] = {}; getSchemaForStage(s.stageType).forEach(f => { byGroup[g.id][f.key] = ''; }); });
-      if (parsed && typeof parsed === 'object') {
-        if (parsed.overall) Object.entries(parsed.overall).forEach(([k, v]) => { if (overall.hasOwnProperty(k)) overall[k] = v; });
-        if (parsed.byGroup) Object.entries(parsed.byGroup).forEach(([gid, vals]) => {
-          if (!byGroup[gid]) byGroup[gid] = {};
-          getSchemaForStage(s.stageType).forEach(f => { byGroup[gid][f.key] = ''; });
-          Object.entries(vals || {}).forEach(([k, v]) => { if (byGroup[gid].hasOwnProperty(k)) byGroup[gid][k] = v; });
-        });
-      } else if (parsed) Object.entries(parsed).forEach(([k, v]) => { if (overall.hasOwnProperty(k)) overall[k] = v; });
+      if (!parsed || typeof parsed !== 'object') parsed = {};
+      if (!parsed.overall) parsed.overall = {};
+      if (!parsed.byGroup) parsed.byGroup = {};
+      // Auto-fill computed results từ measurement records (chỉ thêm khi chưa có)
       const fieldKeys = getAutoFillFieldKeys(s.stageType);
       const computed = computeResultsByGroup({ stageId: s.id, groups, batches, records: stageRecs, definitions: measurements, fieldKeys });
-      Object.entries(computed.overall || {}).forEach(([k, v]) => { if ((overall[k] === '' || overall[k] == null) && v != null) overall[k] = v; });
-      Object.entries(computed.perGroup || {}).forEach(([gid, perG]) => {
-        if (!byGroup[gid]) byGroup[gid] = {};
-        Object.entries(perG).forEach(([k, v]) => { if ((byGroup[gid][k] === '' || byGroup[gid][k] == null) && v != null) byGroup[gid][k] = v; });
-      });
-      parsed = { overall, byGroup };
+      if (computed.overall && Object.keys(parsed.overall).length === 0) {
+        Object.entries(computed.overall).forEach(([k, v]) => { if (v != null && (parsed.overall[k] === '' || parsed.overall[k] == null)) parsed.overall[k] = v; });
+      }
+      if (computed.perGroup) {
+        Object.entries(computed.perGroup).forEach(([gid, perG]) => {
+          if (!parsed.byGroup[gid]) parsed.byGroup[gid] = {};
+          Object.entries(perG).forEach(([k, v]) => {
+            if (v != null && (parsed.byGroup[gid][k] === '' || parsed.byGroup[gid][k] == null)) parsed.byGroup[gid][k] = v;
+          });
+        });
+      }
     } else {
-      const isGrowth = s.stageType === 'Growing' || s.stageType === 'Growth';
-      const autoFilledMap = isGrowth && measurements.length > 0
-        ? autoFillFromDynamicSchema(buildGrowthResultSchema(s.stageType, measurements), stageRecs, measurements)
-        : autoFillAllFields(s.stageType, stageRecs, measurements);
-      Object.entries(autoFilledMap).forEach(([k, info]) => { if ((parsed[k] === '' || parsed[k] == null) && info.value != null) parsed[k] = info.value; });
+      // Overall: chỉ auto-fill nếu parsed rỗng
+      if (!parsed || Object.keys(parsed).length === 0) {
+        const isGrowth = s.stageType === 'Growing' || s.stageType === 'Growth';
+        const autoFilledMap = isGrowth && measurements.length > 0
+          ? autoFillFromDynamicSchema(buildGrowthResultSchema(s.stageType, measurements), stageRecs, measurements)
+          : autoFillAllFields(s.stageType, stageRecs, measurements);
+        parsed = {};
+        Object.entries(autoFilledMap).forEach(([k, info]) => { if (info.value != null) parsed[k] = info.value; });
+      }
     }
 
     setEditData({
@@ -1872,9 +2065,16 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
       endDate: s.endDate ? s.endDate.slice(0, 10) : '', resultSummary: s.resultSummary || '',
       resultData: parsed, _isPerGroup: isPerGroup
     });
+
+    // Form động theo từng nhóm CHỈ active cho giai đoạn Đánh giá (Evaluation).
+    // `dynamicDefsByGroup` được tính tự động qua useMemo ở trên dựa trên editingStage,
+    // nên không cần setState thủ công ở đây.
   };
 
-  const cancelEdit = () => { setEditingId(null); setEditData({}); };
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditData({});
+  };
 
   const updateField = (key, value, groupId = null) => {
     setEditData(prev => {
@@ -1932,17 +2132,70 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
     return total > 0 ? { total, reportCount } : null;
   };
 
+  // Tính số cây đã trồng/ươm CHO TỪNG NHÓM của stage.
+  // → Mỗi group chỉ aggregate từ task reports của batches thuộc group đó.
+  // Trả về: { [groupId]: { total, reportCount } } — bỏ qua group không có data.
+  const getStagePlantCountByGroup = (stage) => {
+    const stageType = stage.stageType;
+    if (!['Nursery', 'Planting', 'Care', 'Growing', 'Growth', 'Evaluation', 'Harvest', 'Harvesting'].includes(stageType)) return {};
+    const stageSchedules = schedules.filter(sc => sc.experimentStageId === stage.id);
+    let batchIds = [...new Set(stageSchedules.map(sc => sc.batchId).filter(Boolean))];
+    if (batchIds.length === 0) batchIds = batches.map(b => b.id);
+    // Map batchId → groupId
+    const batchToGroup = new Map();
+    batches.forEach(b => batchToGroup.set(b.id, b.groupId || '_unassigned'));
+    // Gom kết quả theo groupId
+    const out = {};
+    batchIds.forEach(bid => {
+      const result = aggregatePlantCountFromReports(bid, taskReportsByBatch[bid] || []);
+      if (!result || !result.total) return;
+      const gid = batchToGroup.get(bid) || '_unassigned';
+      if (!out[gid]) out[gid] = { total: 0, reportCount: 0 };
+      out[gid].total += result.total;
+      out[gid].reportCount += result.reportCount || 0;
+    });
+    return out;
+  };
+
   const getStageSuggestedHints = (stage) => {
     const stageType = stage.stageType;
     const stageTasks = tasks.filter(t => t.stageId === stage.id || t.experimentStageId === stage.id);
     const plantInfo = getStagePlantCount(stage);
+    const plantByGroup = getStagePlantCountByGroup(stage);
     const schema = getSchemaForStage(stageType);
 
     const hints = [];
-    if (plantInfo && (stageType === 'Nursery' || stageType === 'Planting')) {
-      // Map field trong schema để auto-fill
-      const targetField = stageType === 'Nursery' ? 'soLuong' : null;
-      hints.push({ icon: '🌱', label: 'Số cây đã trồng/ươm', value: `${plantInfo.total} cây`, source: `${plantInfo.reportCount} báo cáo`, key: targetField, numericValue: plantInfo.total });
+    // 🌱 Số cây đã trồng/ươm — tách theo từng nhóm nếu có nhiều group
+    // Chỉ áp dụng cho Nursery/Planting vì đây là giai đoạn tạo số lượng cây
+    if (stageType === 'Nursery' || stageType === 'Planting') {
+      const groupEntries = Object.entries(plantByGroup);
+      if (groupEntries.length > 0) {
+        groupEntries.forEach(([gid, info]) => {
+          const grp = groups.find(g => g.id === gid);
+          const groupLabel = grp?.groupName || (gid === '_unassigned' ? 'Chưa gán nhóm' : 'Nhóm');
+          hints.push({
+            icon: '🌱',
+            label: `Số cây đã trồng — ${groupLabel}`,
+            value: `${info.total} cây`,
+            source: `${info.reportCount} báo cáo trồng`,
+            key: 'plantCount',                            // key trong QUICK_FORM_SCHEMA Planting
+            taskType: 'Planting',                         // → auto-fill vào byGroup[gid].Planting.plantCount
+            numericValue: info.total,
+            groupId: gid
+          });
+        });
+      } else if (plantInfo) {
+        // Fallback khi stage không có group tách biệt
+        hints.push({
+          icon: '🌱',
+          label: 'Số cây đã trồng/ươm',
+          value: `${plantInfo.total} cây`,
+          source: `${plantInfo.reportCount} báo cáo`,
+          key: 'plantCount',
+          taskType: 'Planting',
+          numericValue: plantInfo.total
+        });
+      }
     }
 
     const countByType = {};
@@ -2318,16 +2571,40 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                                   }
                                   return (
                                   <button key={i} onClick={() => {
-                                    if (h.key) {
+                                    if (h.key || h.numericValue !== undefined) {
                                         if (editData._isPerGroup || h.groupId) {
                                           // Điền vào nhóm cụ thể
                                           const targetGroupId = h.groupId && h.groupId !== '_unassigned'
                                             ? h.groupId
                                             : (groups[0]?.id);
                                           if (targetGroupId) {
-                                            updateField(h.key, String(h.numericValue ?? ''), targetGroupId);
+                                            // Nếu key thuộc task report schema (vd 'plantCount'),
+                                            // lưu nested theo taskType: byGroup[gid].Planting.plantCount
+                                            if (h.taskType && h.key) {
+                                              setEditData(prev => {
+                                                const next = JSON.parse(JSON.stringify(prev || {}));
+                                                next.resultData = next.resultData || {};
+                                                next.resultData.byGroup = next.resultData.byGroup || {};
+                                                next.resultData.byGroup[targetGroupId] = next.resultData.byGroup[targetGroupId] || {};
+                                                next.resultData.byGroup[targetGroupId][h.taskType] = next.resultData.byGroup[targetGroupId][h.taskType] || {};
+                                                next.resultData.byGroup[targetGroupId][h.taskType][h.key] = String(h.numericValue ?? '');
+                                                return next;
+                                              });
+                                            } else if (h.key) {
+                                              updateField(h.key, String(h.numericValue ?? ''), targetGroupId);
+                                            }
                                           }
-                                      } else {
+                                      } else if (h.taskType && h.key) {
+                                        // Overall: resultData.overall[taskType][key]
+                                        setEditData(prev => {
+                                          const next = JSON.parse(JSON.stringify(prev || {}));
+                                          next.resultData = next.resultData || {};
+                                          next.resultData.overall = next.resultData.overall || {};
+                                          next.resultData.overall[h.taskType] = next.resultData.overall[h.taskType] || {};
+                                          next.resultData.overall[h.taskType][h.key] = String(h.numericValue ?? '');
+                                          return next;
+                                        });
+                                      } else if (h.key) {
                                         updateField(h.key, String(h.numericValue ?? ''));
                                       }
                                       showToast(`Đã điền ${h.label}`, 'success');
@@ -2354,32 +2631,325 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                             </div>
                           );
                         })()}
-                        {editData._isPerGroup ? (
-                          groups.map(g => (
-                            <div key={g.id} className="bg-indigo-50/50 rounded-xl p-4 border border-indigo-100">
-                              <p className="text-xs font-bold text-indigo-700 mb-3">👥 {g.groupName}</p>
-                              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                                {schema.filter(f => f.type === 'number').map(f => (
-                                  <div key={f.key}>
-                                    <label className="text-[10px] text-slate-500 uppercase block mb-1">{f.label} {f.unit && `(${f.unit})`}</label>
-                                    <input type="number" value={editData.resultData?.byGroup?.[g.id]?.[f.key] || ''}
-                                      onChange={e => updateField(f.key, e.target.value, g.id)}
-                                      className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white" />
+                        {(() => {
+                          // ── Render form kết quả dựa trên:
+                          //   1) Các field input từ TASK REPORT FORM tương ứng taskType của stage
+                          //      (auto-fill từ các báo cáo nhanh đã có)
+                          //      → TÁCH THEO TỪNG NHÓM: mỗi group chỉ aggregate từ
+                          //      task reports của batches thuộc group đó.
+                          //   2) Các field custom từ MEASUREMENT DEFINITIONS (chỉ số đo lường)
+                          //      cho phép researcher nhập các chỉ số cần thiết.
+                          const sections = getTaskReportSchemaForStage(s.stageType);
+                          const stageTasks = tasks.filter(t => t.stageId === s.id || t.experimentStageId === s.id);
+                          const stageReportList = (taskReports || []).filter(r =>
+                            stageTasks.some(t => t.id === r.taskId)
+                          );
+                          // Map batchId → groupId (dùng để lọc report theo group)
+                          const batchGroupMap = new Map();
+                          (batches || []).forEach(b => batchGroupMap.set(b.id, b.groupId || '_unassigned'));
+
+                          // Component con: render 1 block task report schema cho 1 tập reports cụ thể
+                          const TaskReportBlock = ({ reports, scopeLabel, storagePath }) => {
+                            const localAggregated = aggregateTaskReports(reports, stageTasks, sections);
+                            return (
+                                <div className="space-y-3">
+                                  {sections.length === 0 ? (
+                                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-500 italic">
+                                      ℹ️ Giai đoạn này không có form báo cáo nhanh tương ứng.
+                                    </div>
+                                  ) : (
+                                    sections.map(sec => {
+                                      const agg = localAggregated[sec.taskType] || { reportCount: 0, fields: {} };
+                                      const colorCls = {
+                                        emerald: { bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-700', badge: 'bg-emerald-100 text-emerald-700' },
+                                        blue: { bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-700', badge: 'bg-blue-100 text-blue-700' },
+                                        amber: { bg: 'bg-amber-50', border: 'border-amber-200', text: 'text-amber-700', badge: 'bg-amber-100 text-amber-700' },
+                                        indigo: { bg: 'bg-indigo-50', border: 'border-indigo-200', text: 'text-indigo-700', badge: 'bg-indigo-100 text-indigo-700' },
+                                        orange: { bg: 'bg-orange-50', border: 'border-orange-200', text: 'text-orange-700', badge: 'bg-orange-100 text-orange-700' }
+                                      }[sec.color] || { bg: 'bg-slate-50', border: 'border-slate-200', text: 'text-slate-700', badge: 'bg-slate-100 text-slate-700' };
+                                      return (
+                                        <div key={sec.taskType} className={`${colorCls.bg} rounded-xl p-4 border ${colorCls.border}`}>
+                                          <div className="flex items-center justify-between mb-3">
+                                            <div className="flex items-center gap-2">
+                                              <span className="text-base">{sec.icon}</span>
+                                              <p className={`text-xs font-bold ${colorCls.text}`}>{sec.title}</p>
+                                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${colorCls.badge}`}>
+                                                {agg.reportCount} báo cáo
+                                              </span>
+                                              {scopeLabel && (
+                                                <span className="text-[10px] italic text-slate-500">{scopeLabel}</span>
+                                              )}
+                                            </div>
+                                            {agg.reportCount > 0 && (
+                                              <span className="text-[10px] italic text-slate-500">
+                                                Đã tự động điền từ báo cáo
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                            {sec.fields.map(f => {
+                                              // Giá trị ưu tiên: user đã nhập > auto-fill từ aggregate > rỗng
+                                              const storedVal = getStoredNested(editData.resultData, storagePath, sec.taskType, f.key);
+                                              const a = agg.fields[f.key] || { count: 0 };
+                                              const { display, defaultValue } = formatAggregatedValue(f, a);
+                                              const value = storedVal !== undefined && storedVal !== null && storedVal !== ''
+                                                ? storedVal
+                                                : defaultValue;
+                                              // Helper setState nested
+                                              const onChange = (v) => setStoredNested(storagePath, sec.taskType, f.key, v);
+                                              return (
+                                                <div key={f.key} className="bg-white rounded-lg p-2.5 border border-slate-200">
+                                                  <label className="text-[10px] font-bold uppercase text-slate-600 block mb-1">
+                                                    {f.label}
+                                                    {f.unit && <span className="ml-1 text-slate-400 font-normal">({f.unit})</span>}
+                                                    {a.count > 0 && (
+                                                      <span className="ml-1 text-[9px] text-slate-400 font-normal italic">↻ {display}</span>
+                                                    )}
+                                                  </label>
+                                                  {f.type === 'select' ? (
+                                                    <select
+                                                      value={value || ''}
+                                                      onChange={e => onChange(e.target.value)}
+                                                      className="w-full px-2 py-1.5 border border-slate-200 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400"
+                                                    >
+                                                      <option value="">— Chọn —</option>
+                                                      {(f.options || []).map(o => <option key={o} value={o}>{o}</option>)}
+                                                    </select>
+                                                  ) : (
+                                                    <div className="relative">
+                                                      <input
+                                                        type={f.type || 'text'}
+                                                        value={value || ''}
+                                                        placeholder={f.placeholder || (f.type === 'number' ? '0' : 'Nhập...')}
+                                                        onChange={e => onChange(e.target.value)}
+                                                        className={`w-full px-2 py-1.5 border border-slate-200 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-400 ${f.unit ? 'pr-10' : ''}`}
+                                                      />
+                                                      {f.unit && (
+                                                        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-500 font-semibold">{f.unit}</span>
+                                                      )}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      );
+                                    })
+                                  )}
+                                </div>
+                              );
+                          };
+
+                          // Helper đọc / ghi nested state theo path kiểu ['byGroup', '<gid>']
+                          function getStoredNested(root, ...path) {
+                            let cur = root;
+                            for (const k of path) {
+                              if (cur == null) return undefined;
+                              cur = cur[k];
+                            }
+                            return cur;
+                          }
+                          function setStoredNested(...pathAndValue) {
+                            // pathAndValue = [seg1, seg2, ..., value]
+                            const value = pathAndValue[pathAndValue.length - 1];
+                            const path = pathAndValue.slice(0, -1);
+                            setEditData(prev => {
+                              const next = JSON.parse(JSON.stringify(prev || {}));
+                              next.resultData = next.resultData || {};
+                              let cur = next.resultData;
+                              for (let i = 0; i < path.length - 1; i++) {
+                                const k = path[i];
+                                cur[k] = cur[k] || {};
+                                cur = cur[k];
+                              }
+                              const lastKey = path[path.length - 1];
+                              if (value === '' || value === null || value === undefined) {
+                                if (cur[lastKey]) delete cur[lastKey];
+                              } else {
+                                cur[lastKey] = value;
+                              }
+                              return next;
+                            });
+                          }
+
+                          if (editData._isPerGroup && groups && groups.length > 0) {
+                            // ── Per-group: tách form task report theo từng nhóm
+                            return (
+                              <div className="space-y-4">
+                                {groups.map(g => {
+                                  // Lọc reports của stage theo group
+                                  const groupReports = stageReportList.filter(r => {
+                                    const gid = batchGroupMap.get(r.batchId);
+                                    return gid === g.id;
+                                  });
+                                  return (
+                                    <div key={g.id} className="bg-white rounded-xl p-4 border-2 border-indigo-100">
+                                      <div className="flex items-center gap-2 mb-3">
+                                        <span className="text-base">👥</span>
+                                        <p className="text-sm font-bold text-indigo-800">{g.groupName}</p>
+                                        {g.groupType && (
+                                          <span className="text-[10px] italic text-indigo-500">({g.groupType})</span>
+                                        )}
+                                        <span className="text-[10px] italic text-slate-500 ml-auto">
+                                          {groupReports.length} báo cáo cho nhóm này
+                                        </span>
+                                      </div>
+                                      <TaskReportBlock
+                                        reports={groupReports}
+                                        scopeLabel=""
+                                        storagePath={['byGroup', g.id]}
+                                      />
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          }
+
+                          // ── Overall (không theo nhóm)
+                          return (
+                            <TaskReportBlock
+                              reports={stageReportList}
+                              scopeLabel=""
+                              storagePath={['overall']}
+                            />
+                          );
+                        })()}
+
+                        {/* 2) Chỉ số đo lường (researcher tự custom) — cho mọi giai đoạn.
+                              Lấy measurement definitions từ tất cả các nhóm của experiment.
+                              Tách theo từng nhóm giống task report. */}
+                        <div className="space-y-4 mt-4">
+                          <p className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                            📊 Chỉ số đo lường (researcher tự custom)
+                          </p>
+                          {editData._isPerGroup && groups && groups.length > 0 ? (
+                            groups.map(g => {
+                              const dynDefs = dynamicDefsByGroup[g.id] || [];
+                              return (
+                                <div key={g.id} className="bg-indigo-50/50 rounded-xl p-4 border border-indigo-100">
+                                  <div className="flex items-center justify-between mb-3">
+                                    <p className="text-xs font-bold text-indigo-700">👥 {g.groupName}</p>
+                                    <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+                                      {dynDefs.length} chỉ số
+                                    </span>
                                   </div>
-                                ))}
+                                  {dynDefs.length === 0 ? (
+                                    <p className="text-[10px] italic text-slate-400">Chưa có chỉ số đo lường nào cho nhóm này.</p>
+                                  ) : (
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                                      {dynDefs.map(def => {
+                                        const storageKey = def.id || def.metricName;
+                                        const minVal = def.minValue ?? def.minThreshold;
+                                        const maxVal = def.maxValue ?? def.maxThreshold;
+                                        return (
+                                          <div key={def.id || def.metricName}>
+                                            <label className="text-[10px] text-slate-500 uppercase block mb-1" title={def.description || def.metricName}>
+                                              {def.metricName}
+                                              {def.unit && <span className="ml-1 text-slate-400">({def.unit})</span>}
+                                              {def.targetValue !== null && def.targetValue !== undefined && def.targetValue !== '' && (
+                                                <span className="ml-1 text-amber-600">🎯{def.targetValue}</span>
+                                              )}
+                                            </label>
+                                            <input
+                                              type="number" step="any" min={minVal ?? undefined} max={maxVal ?? undefined}
+                                              value={editData.resultData?.byGroup?.[g.id]?.[storageKey] ?? ''}
+                                              onChange={e => updateField(storageKey, e.target.value, g.id)}
+                                              className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                                            />
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })
+                          ) : (
+                            <div className="bg-indigo-50/50 rounded-xl p-4 border border-indigo-100">
+                              <p className="text-[10px] italic text-slate-500">Giai đoạn này không theo nhóm — dùng tổng thể từ measurements.</p>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Kết luận nhóm tốt nhất — CHỈ hiển thị cho giai đoạn Đánh giá.
+                            Cho phép chốt nhóm thắng/đạt tốt nhất hoặc các lựa chọn đặc biệt. */}
+                        {s.stageType === 'Evaluation' && (
+                          <div className="mt-4 bg-gradient-to-r from-emerald-50 to-teal-50 rounded-xl p-4 border border-emerald-200">
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="text-base">🏆</span>
+                              <p className="text-sm font-bold text-emerald-800">Kết luận nhóm tốt nhất</p>
+                              <span className="text-[10px] italic text-emerald-600">(Bắt buộc cho Đánh giá)</span>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div>
+                                <label className="text-[10px] font-bold uppercase text-slate-600 block mb-1">🏆 Nhóm thắng</label>
+                                <select
+                                  value={editData.resultData?.overall?.winningGroupId || ''}
+                                  onChange={e => setEditData(prev => ({
+                                    ...prev,
+                                    resultData: {
+                                      ...(prev.resultData || {}),
+                                      overall: {
+                                        ...((prev.resultData || {}).overall || {}),
+                                        winningGroupId: e.target.value
+                                      }
+                                    }
+                                  }))}
+                                  className="w-full px-3 py-2.5 border border-emerald-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+                                >
+                                  <option value="">— Chưa chốt —</option>
+                                  {groups.map(g => (
+                                    <option key={g.id} value={g.id}>👥 {g.groupName}{g.groupType ? ` (${g.groupType})` : ''}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-bold uppercase text-slate-600 block mb-1">📊 Mức đánh giá tổng thể</label>
+                                <select
+                                  value={editData.resultData?.overall?.overallRating || ''}
+                                  onChange={e => setEditData(prev => ({
+                                    ...prev,
+                                    resultData: {
+                                      ...(prev.resultData || {}),
+                                      overall: {
+                                        ...((prev.resultData || {}).overall || {}),
+                                        overallRating: e.target.value
+                                      }
+                                    }
+                                  }))}
+                                  className="w-full px-3 py-2.5 border border-emerald-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+                                >
+                                  <option value="">— Chọn mức —</option>
+                                  <option value="xuat_sac">🌟 Xuất sắc — vượt target</option>
+                                  <option value="tot">✅ Tốt — đạt target</option>
+                                  <option value="dat">👍 Đạt — gần target</option>
+                                  <option value="kem">⚠️ Kém — dưới target</option>
+                                  <option value="can_trien_khai">🚀 Có thể triển khai rộng</option>
+                                  <option value="can_theo_doi">🔄 Cần theo dõi thêm</option>
+                                </select>
                               </div>
                             </div>
-                          ))
-                        ) : (
-                          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                            {schema.filter(f => f.type === 'number').map(f => (
-                              <div key={f.key}>
-                                <label className="text-[10px] text-slate-500 uppercase block mb-1">{f.label} {f.unit && `(${f.unit})`}</label>
-                                <input type="number" value={editData.resultData?.[f.key] || ''}
-                                  onChange={e => updateField(f.key, e.target.value)}
-                                  className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm bg-white" />
-                              </div>
-                            ))}
+                            <div className="mt-3">
+                              <label className="text-[10px] font-bold uppercase text-slate-600 block mb-1">💬 Lý do / Nhận xét</label>
+                              <textarea
+                                rows={2}
+                                value={editData.resultData?.overall?.conclusion || ''}
+                                onChange={e => setEditData(prev => ({
+                                  ...prev,
+                                  resultData: {
+                                    ...(prev.resultData || {}),
+                                    overall: {
+                                      ...((prev.resultData || {}).overall || {}),
+                                      conclusion: e.target.value
+                                    }
+                                  }
+                                }))}
+                                placeholder="VD: Nhóm A có chiều cao vượt target 15%, tỷ lệ sống 98% — đề xuất nhân rộng..."
+                                className="w-full px-3 py-2 border border-emerald-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
+                              />
+                            </div>
                           </div>
                         )}
                       </div>
@@ -4916,7 +5486,7 @@ const SkillRequirementsPicker = ({ value = [], onChange, catalog = [] }) => {
   );
 };
 
-const CreateTaskModal = ({ open, mode, onClose, onChangeMode, stages = [], batches = [], schedules = [], form, setForm, bulkForm, setBulkForm, submitting, onSubmitManual, onSubmitByStage, onSubmitByExperiment, skillCatalog = [] }) => {
+const CreateTaskModal = ({ open, mode, onClose, onChangeMode, stages = [], batches = [], schedules = [], form, setForm, bulkForm, setBulkForm, submitting, onSubmitManual, onSubmitByStage, onSubmitByExperiment, skillCatalog = [], confirmState, closeConfirm }) => {
   if (!open) return null;
 
   const tabs = [

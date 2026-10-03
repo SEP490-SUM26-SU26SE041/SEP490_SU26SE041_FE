@@ -412,7 +412,7 @@ const Overview = ({ setActiveTab, setUnreadCount }) => {
                 <button
                   onClick={async () => {
                     try {
-                      await notificationsApi.markAllRead();
+                      await notificationsApi.markAllAsRead();
                       setUnreadCount(0);
                       showToast('Đã đánh dấu tất cả đã đọc', 'success');
                       setRecentNotifications(prev => prev.map(n => ({ ...n, isRead: true })));

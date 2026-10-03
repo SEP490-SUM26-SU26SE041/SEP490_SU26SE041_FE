@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 
 // SVG sparkline / line chart (no external chart library required)
 export const LineChart = ({
@@ -12,6 +12,8 @@ export const LineChart = ({
   xLabel = '',
   unit = ''
 }) => {
+  const [hoverIdx, setHoverIdx] = useState(null);
+
   if (!data || data.length === 0) {
     return (
       <div className="h-40 flex items-center justify-center text-xs text-on-surface-variant italic">
@@ -35,7 +37,7 @@ export const LineChart = ({
   const points = data.map((d, i) => {
     const x = padding.left + i * stepX;
     const y = padding.top + innerH - ((d.value - min) / range) * innerH;
-    return { x, y, ...d };
+    return { x, y, ...d, idx: i };
   });
 
   const linePath = points
@@ -51,13 +53,58 @@ export const LineChart = ({
     return { v, y: padding.top + (innerH / ticks) * i };
   });
 
+  // Số điểm quá nhiều → chỉ show dots ở min/max + cuối
+  const isDense = points.length > 20;
+  const dotIndices = useMemo(() => {
+    if (!showDots) return new Set();
+    if (!isDense) return new Set(points.map((_, i) => i));
+    // Dense: lọc dots cách nhau ít nhất 8% width để tránh chồng chéo
+    const minPxGap = width * 0.08; // ~48px trên viewBox 600
+    const selected = new Set([0, points.length - 1]);
+    // Thêm min/max nếu chưa có và không quá gần
+    const minIdx = values.indexOf(Math.min(...values));
+    const maxIdx = values.indexOf(Math.max(...values));
+    const candidateIdxs = [minIdx, maxIdx].filter(i => i > 0 && i < points.length - 1);
+    // Sắp theo thứ tự
+    candidateIdxs.sort((a, b) => a - b);
+    for (const idx of candidateIdxs) {
+      // Kiểm tra khoảng cách với dot đã chọn gần nhất
+      const sortedSelected = [...selected].sort((a, b) => a - b);
+      const tooClose = sortedSelected.some(s => Math.abs(s - idx) * stepX < minPxGap);
+      if (!tooClose) selected.add(idx);
+    }
+    return selected;
+  }, [points.length, showDots, isDense, values.join(','), stepX, width]);
+
+  // Tính toán hover overlay (crosshair + tooltip)
+  const hoverPoint = hoverIdx !== null ? points[hoverIdx] : null;
+
+  // Xử lý mouse move trên SVG
+  const handleMouseMove = (e) => {
+    const svg = e.currentTarget;
+    const rect = svg.getBoundingClientRect();
+    // Convert pixel X → viewBox X
+    const ratio = width / rect.width;
+    const vbX = (e.clientX - rect.left) * ratio;
+    if (vbX < padding.left || vbX > width - padding.right) {
+      setHoverIdx(null);
+      return;
+    }
+    // Tìm index gần nhất
+    const idx = Math.round((vbX - padding.left) / stepX);
+    const clamped = Math.max(0, Math.min(points.length - 1, idx));
+    setHoverIdx(clamped);
+  };
+
   return (
-    <div className="w-full overflow-hidden">
+    <div className="w-full overflow-visible relative" style={{ zIndex: hoverIdx !== null ? 20 : 'auto' }}>
       <svg
         viewBox={`0 0 ${width} ${height}`}
         preserveAspectRatio="none"
-        className="w-full"
+        className="w-full cursor-crosshair"
         style={{ height }}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={() => setHoverIdx(null)}
       >
         <defs>
           <linearGradient id={`grad-${color.replace('#', '')}`} x1="0" y1="0" x2="0" y2="1">
@@ -107,17 +154,63 @@ export const LineChart = ({
           strokeLinecap="round"
         />
 
-        {/* dots */}
-        {showDots && points.map((p, i) => (
-          <g key={i}>
-            <circle cx={p.x} cy={p.y} r="3.5" fill="white" stroke={color} strokeWidth="2" />
-          </g>
-        ))}
+        {/* dots - chỉ hiện khi không dày */}
+        {showDots && points.map((p) => {
+          if (!dotIndices.has(p.idx)) return null;
+          const isHovered = hoverIdx === p.idx;
+          return (
+            <g key={p.idx}>
+              <circle
+                cx={p.x} cy={p.y}
+                r={isHovered ? 5 : 3.5}
+                fill="white"
+                stroke={color}
+                strokeWidth={isHovered ? 2.5 : 2}
+              />
+              {isHovered && (
+                <circle cx={p.x} cy={p.y} r="2.5" fill={color} />
+              )}
+            </g>
+          );
+        })}
 
-        {/* X-axis labels - show every nth to avoid clutter */}
-        {showLabels && points.map((p, i) => {
-          const step = Math.max(1, Math.floor(points.length / 6));
-          if (i % step !== 0 && i !== points.length - 1) return null;
+        {/* hover crosshair line */}
+        {hoverPoint && (
+          <line
+            x1={hoverPoint.x} x2={hoverPoint.x}
+            y1={padding.top} y2={padding.top + innerH}
+            stroke={color}
+            strokeWidth="1"
+            strokeDasharray="3 3"
+            opacity="0.5"
+          />
+        )}
+
+        {/* X-axis labels - smart spacing, tối đa 6 labels, dùng pixel distance */}
+        {showLabels && points.length > 0 && points.map((p, i) => {
+          // Cứng: tối đa 6 labels (giảm mật độ), mỗi label cách nhau >= 48px
+          const MIN_DIST_PX = 48;
+          const MAX_LABELS = 6;
+          const isHHMMSS = (p.label || '').length >= 7;
+          const labelWidth = isHHMMSS ? 42 : 30;
+          const minDistPx = Math.max(MIN_DIST_PX, labelWidth + 8);
+          // Step dựa trên MAX_LABELS cố định (6) - không phụ thuộc width
+          const step = Math.max(1, Math.floor(points.length / MAX_LABELS));
+          const isFirst = i === 0;
+          const isLast = i === points.length - 1;
+          const isStep = i % step === 0;
+          if (!isFirst && !isLast && !isStep) return null;
+          // Tính pixel distance tới label trước đã hiển thị gần nhất
+          for (let j = i - 1; j >= 0; j--) {
+            const jFirst = j === 0;
+            const jLast = j === points.length - 1;
+            const jStep = j % step === 0;
+            if (jFirst || jLast || jStep) {
+              const distPx = Math.abs(p.x - points[j].x);
+              if (distPx < minDistPx && !isLast) return null;
+              break;
+            }
+          }
           return (
             <text
               key={i}
@@ -125,7 +218,7 @@ export const LineChart = ({
               y={height - 8}
               fontSize="9"
               fill="#94a3b8"
-              textAnchor="middle"
+              textAnchor={isFirst ? 'start' : (isLast ? 'end' : 'middle')}
               fontFamily="JetBrains Mono, monospace"
             >
               {p.label || ''}
@@ -133,6 +226,31 @@ export const LineChart = ({
           );
         })}
       </svg>
+
+      {/* Tooltip HTML overlay */}
+      {hoverPoint && (() => {
+        // Tính % Y của hover point → nếu > 70% (gần đáy) thì tooltip nằm phía trên
+        const yPct = (hoverPoint.y / height) * 100;
+        const isLow = yPct > 65;
+        return (
+          <div
+            className="absolute pointer-events-none bg-slate-900/95 text-white rounded-lg px-2.5 py-1.5 text-[10px] font-bold shadow-xl border border-white/20"
+            style={{
+              left: `${(hoverPoint.x / width) * 100}%`,
+              top: `${yPct}%`,
+              transform: `translate(-50%, ${isLow ? '-130%' : '20%'})`,
+              whiteSpace: 'nowrap',
+              zIndex: 10
+            }}
+          >
+            <div className="font-mono text-[10px] opacity-70">{hoverPoint.label}</div>
+            <div className="text-sm font-black">
+              {hoverPoint.value}{unit}
+            </div>
+          </div>
+        );
+      })()}
+
       {(yLabel || xLabel) && (
         <div className="flex justify-between text-[10px] text-on-surface-variant mt-1 px-2">
           <span>{yLabel}</span>
@@ -208,11 +326,33 @@ export const MultiLineChart = ({
         })}
 
         {labels.map((lbl, i) => {
-          const step = Math.max(1, Math.floor(labels.length / 7));
-          if (i % step !== 0 && i !== labels.length - 1) return null;
+          // Tối đa 6 labels cố định, min distance 48px
+          const MIN_DIST_PX = 48;
+          const MAX_LABELS = 6;
+          const isHHMMSS = (lbl || '').length >= 7;
+          const labelWidth = isHHMMSS ? 42 : 30;
+          const minDistPx = Math.max(MIN_DIST_PX, labelWidth + 8);
+          const step = Math.max(1, Math.floor(labels.length / MAX_LABELS));
+          const isFirst = i === 0;
+          const isLast = i === labels.length - 1;
+          const isStep = i % step === 0;
+          if (!isFirst && !isLast && !isStep) return null;
+          // Distance check với label trước đã hiển thị
+          for (let j = i - 1; j >= 0; j--) {
+            const jFirst = j === 0;
+            const jLast = j === labels.length - 1;
+            const jStep = j % step === 0;
+            if (jFirst || jLast || jStep) {
+              const distPx = Math.abs(i - j) * stepX;
+              if (distPx < minDistPx && !isLast) return null;
+              break;
+            }
+          }
           return (
             <text key={i} x={padding.left + i * stepX} y={height - 8} fontSize="9"
-              fill="#94a3b8" textAnchor="middle" fontFamily="JetBrains Mono, monospace">
+              fill="#94a3b8"
+              textAnchor={isFirst ? 'start' : (isLast ? 'end' : 'middle')}
+              fontFamily="JetBrains Mono, monospace">
               {lbl}
             </text>
           );
@@ -301,28 +441,43 @@ export const Gauge = ({ value = 0, max = 100, label = '', color = '#486730', siz
   );
 };
 
-// Heatmap (farm grid status)
+// Heatmap (device status grid - 1 cell = 1 thiết bị)
 export const StatusHeatmap = ({ cells = [] }) => {
+  const colorMap = {
+    healthy: 'bg-emerald-500',
+    warning: 'bg-amber-500',
+    critical: 'bg-rose-500',
+    inactive: 'bg-slate-300',
+    active: 'bg-primary'
+  };
+  const labelMap = {
+    healthy: 'Online',
+    warning: 'Mất kết nối',
+    critical: 'Lỗi',
+    inactive: 'Ngưng',
+    active: 'Hoạt động'
+  };
+  if (!cells.length) {
+    return (
+      <div className="py-8 text-center text-xs text-on-surface-variant italic">
+        Chưa có thiết bị nào
+      </div>
+    );
+  }
   return (
-    <div className="grid grid-cols-6 md:grid-cols-10 lg:grid-cols-12 gap-1">
-      {cells.map((c, i) => {
-        const colorMap = {
-          healthy: 'bg-emerald-500',
-          warning: 'bg-amber-500',
-          critical: 'bg-rose-500',
-          inactive: 'bg-slate-300',
-          active: 'bg-primary'
-        };
-        return (
-          <div
-            key={i}
-            title={`${c.label || ''} - ${c.status}`}
-            className={`aspect-square rounded-md ${colorMap[c.status] || 'bg-slate-200'} flex items-center justify-center text-[10px] font-bold text-white cursor-pointer hover:scale-110 transition-transform`}
-          >
-            {c.value || ''}
-          </div>
-        );
-      })}
+    <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-2">
+      {cells.map((c, i) => (
+        <div
+          key={i}
+          title={`${c.label} - ${labelMap[c.status] || c.status}`}
+          className={`aspect-square rounded-lg ${colorMap[c.status] || 'bg-slate-200'} flex flex-col items-center justify-center text-white cursor-pointer hover:scale-110 transition-transform shadow-sm`}
+        >
+          <span className="text-base">📡</span>
+          <span className="text-[9px] font-bold leading-none mt-0.5 px-1 truncate w-full text-center">
+            {c.label?.slice(-4) || `#${i + 1}`}
+          </span>
+        </div>
+      ))}
     </div>
   );
 };

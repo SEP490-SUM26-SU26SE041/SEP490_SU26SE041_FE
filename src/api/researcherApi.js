@@ -33,6 +33,33 @@ export const designApi = {
 
 export const measurementsApi = {
   getByExperiment: (expId) => apiClient.request('/experiments/' + expId + '/measurements').then(u),
+  /**
+   * Lấy measurement definitions theo groupId.
+   * BE không có route riêng — cách đúng là gọi getByExperiment rồi filter client-side.
+   * Trả về instance BE, kèm fallback khi không truyền experimentId.
+   */
+  getByGroup: async (groupId, experimentId) => {
+    if (!groupId) return [];
+    // Case 1: có sẵn experimentId → lấy all rồi filter
+    if (experimentId) {
+      try {
+        const list = await apiClient.request('/experiments/' + experimentId + '/measurements').then(u);
+        return (Array.isArray(list) ? list : []).filter(m => m.groupId === groupId);
+      } catch {
+        return [];
+      }
+    }
+    // Case 2: chỉ có groupId → fetch group để biết experimentId
+    try {
+      const group = await apiClient.request('/experiments/groups/' + groupId).then(u).catch(() => null);
+      const expId = group?.experimentId || group?.experiment?.id;
+      if (!expId) return [];
+      const list = await apiClient.request('/experiments/' + expId + '/measurements').then(u);
+      return (Array.isArray(list) ? list : []).filter(m => m.groupId === groupId);
+    } catch {
+      return [];
+    }
+  },
   create: (expId, payload) => apiClient.request('/experiments/' + expId + '/measurements', { method: 'POST', body: payload }),
   update: (mId, payload) => apiClient.request('/experiments/measurements/' + mId, { method: 'PUT', body: payload }),
   remove: (mId) => apiClient.request('/experiments/measurements/' + mId, { method: 'DELETE' }),

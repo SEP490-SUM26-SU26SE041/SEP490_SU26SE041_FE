@@ -136,23 +136,122 @@ export function classifyDevice(dev) {
 export function groupLatestByType(sensorData = []) {
   const map = {};
   for (const r of sensorData || []) {
-    // Nếu có nhiều bản ghi cùng sensorType → giữ bản ghi mới nhất
-    const existing = map[r.sensorType];
+    // Chuẩn hóa key: nếu sensorType là string ("Temperature") → convert sang number (1) để match SENSOR_META
+    const key = normalizeSensorKey(r.sensorType);
+    if (key === null) continue;
+    // Nếu có nhiều bản ghi cùng key → giữ bản ghi mới nhất
+    const existing = map[key];
     if (!existing || new Date(r.recordedAt) > new Date(existing.recordedAt)) {
-      map[r.sensorType] = r;
+      map[key] = { ...r, sensorType: key };
     }
   }
   return map;
+}
+
+// ── NEW: Chuẩn hóa sensorType key ───────────────────────────────────────────────
+// BE có 2 cách trả sensorType:
+//   1. Số enum: 1, 2, 3, 4, 5, 6 (Temperature, Humidity, SoilMoisture, Light, PH, Other)
+//   2. Tên string: "Temperature", "Humidity", "SoilMoisture", "Light", "PH", "Other"
+// Hàm này trả về key chuẩn (number) để dùng chung với SENSOR_META.
+export function normalizeSensorKey(raw) {
+  if (raw === null || raw === undefined) return null;
+  // Nếu là số (1-6) → trả về luôn
+  if (typeof raw === 'number') {
+    return (raw >= 1 && raw <= 6) ? raw : null;
+  }
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    // Thử parse số
+    const n = Number(s);
+    if (!isNaN(n) && n >= 1 && n <= 6) return n;
+    // Map theo tên
+    const map = {
+      'Temperature': 1,
+      'Humidity': 2,
+      'SoilMoisture': 3,
+      'Light': 4,
+      'PH': 5,
+      'Ph': 5,
+      'Other': 6
+    };
+    return map[s] ?? null;
+  }
+  return null;
+}
+
+// ── NEW: Phân loại chi tiết theo sensorCode ─────────────────────────────────────
+// Vì BE có 2 sensor cùng sensorType=Temperature (TEMP-AIR, TEMP-WATER) → cần tách
+// Trả về object { type, label, unit, color, fillCode, icon, warn, warnMsg }
+export function classifySensorByCode(sensorCode, sensorTypeName) {
+  // Map sensorCode → category riêng
+  const code = (sensorCode || '').toUpperCase();
+  const typeName = (sensorTypeName || '').toLowerCase();
+
+  // Từ code
+  if (code.includes('PH-WATER') || code === 'PH' || typeName === 'ph') {
+    return {
+      ...SENSOR_META[SensorType.PH],
+      id: 'PH',
+      label: 'pH nước',
+      warn: null,  // check sau khi có value
+      warnMsg: 'Lý tưởng 6.5 – 8.5',
+    };
+  }
+  if (code.includes('TEMP-WATER') || code.includes('DS18B20') || code.includes('WATER-TEMP')) {
+    return {
+      ...SENSOR_META[SensorType.Temperature],
+      id: 'TEMP_WATER',
+      label: 'Nhiệt độ nước',
+    };
+  }
+  if (code.includes('TEMP-AIR') || code.includes('DHT-T') || code.includes('AIR-TEMP') || code.includes('AM2320')) {
+    return {
+      ...SENSOR_META[SensorType.Temperature],
+      id: 'TEMP_AIR',
+      label: 'Nhiệt độ KK',
+    };
+  }
+  if (code.includes('HUM-AIR') || code.includes('DHT-H') || code.includes('AIR-HUM') || code.includes('AM2320-H')) {
+    return {
+      ...SENSOR_META[SensorType.Humidity],
+      id: 'HUM_AIR',
+      label: 'Độ ẩm KK',
+    };
+  }
+  if (code.includes('SOIL') || code.includes('MOISTURE') || typeName === 'soilmoisture') {
+    return {
+      ...SENSOR_META[SensorType.SoilMoisture],
+      id: 'SOIL',
+      label: 'Độ ẩm đất',
+    };
+  }
+  if (code.includes('LIGHT') || code.includes('LDR') || typeName === 'light') {
+    return {
+      ...SENSOR_META[SensorType.Light],
+      id: 'LIGHT',
+      label: 'Ánh sáng',
+    };
+  }
+
+  // Fallback theo sensorType
+  const key = normalizeSensorKey(sensorTypeName);
+  if (key && SENSOR_META[key]) {
+    return { ...SENSOR_META[key], id: `TYPE_${key}` };
+  }
+  return { ...SENSOR_META[SensorType.Other], id: 'OTHER', label: 'Khác' };
 }
 
 // Group history readings by sensorType → dạng { [sensorType]: [{recordedAt, value}, ...] }
 export function groupHistoryByType(sensorData = []) {
   const map = {};
   for (const r of sensorData || []) {
-    if (!map[r.sensorType]) map[r.sensorType] = [];
-    map[r.sensorType].push({
+    const key = normalizeSensorKey(r.sensorType);
+    if (key === null) continue;
+    if (!map[key]) map[key] = [];
+    map[key].push({
       recordedAt: r.recordedAt,
-      value: Number(r.value || 0)
+      value: Number(r.value || 0),
+      sensorCode: r.sensorCode  // giữ code để phân loại chi tiết sau
     });
   }
   // Sort theo thời gian tăng dần
@@ -163,21 +262,53 @@ export function groupHistoryByType(sensorData = []) {
 }
 
 // Convert to chart data dạng [{ label, value }] theo format LineChart đang dùng
+// Logic:
+//  - Nếu số records ≤ 100 → hiển thị trực tiếp (giữ nguyên độ chi tiết, không bucket)
+//  - Nếu > 100 records VÀ span > 6h → bucket trung bình theo giờ
+//  - Nếu > 100 records VÀ span ≤ 6h → hiển thị trực tiếp (chart sẽ rõ hơn bucket)
 export function toChartPoints(records = [], points = 24) {
-  const now = Date.now();
   if (!records.length) return Array.from({ length: points }, (_, i) => ({
     label: `${(points - 1 - i)}h`,
     value: 0
   }));
-  // Bucket theo giờ (24 buckets gần nhất)
+
+  // Sắp xếp theo thời gian tăng dần
+  const sorted = [...records].sort((a, b) => new Date(a.recordedAt) - new Date(b.recordedAt));
+
+  // Tính span thời gian (giờ)
+  const first = new Date(sorted[0].recordedAt).getTime();
+  const last = new Date(sorted[sorted.length - 1].recordedAt).getTime();
+  const spanHours = (last - first) / (1000 * 60 * 60);
+
+  // Nếu số records ≤ 100 HOẶC span < 6h → hiển thị trực tiếp không bucket
+  if (sorted.length <= 100 || spanHours < 6) {
+    return sorted.map(r => {
+      const d = new Date(r.recordedAt);
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      const ss = String(d.getSeconds()).padStart(2, '0');
+      // Mặc định HH:MM (gọn, không đè). Chỉ hiển thị giây khi:
+      // - records quá thưa (>120s/point, vd 5 phút/point) HOẶC
+      // - tổng số records ≤ 5
+      const spanMs = sorted.length > 1
+        ? new Date(sorted[sorted.length - 1].recordedAt).getTime() - new Date(sorted[0].recordedAt).getTime()
+        : 0;
+      const avgGapSec = sorted.length > 1 ? spanMs / 1000 / (sorted.length - 1) : 0;
+      const showSeconds = sorted.length <= 5 || avgGapSec > 120;
+      const label = showSeconds ? `${hh}:${mm}:${ss}` : `${hh}:${mm}`;
+      return { label, value: Number(r.value || 0) };
+    });
+  }
+
+  // Nếu có nhiều records VÀ span >= 6h → bucket theo giờ (24 buckets gần nhất)
+  const now = Date.now();
   const buckets = new Array(points).fill(null).map((_, i) => {
     const t = new Date(now - (points - 1 - i) * 60 * 60 * 1000);
     return { t, sums: [], count: 0 };
   });
-  for (const r of records) {
+  for (const r of sorted) {
     const ts = new Date(r.recordedAt).getTime();
     if (Number.isNaN(ts)) continue;
-    // Tìm bucket gần nhất
     let bestIdx = -1;
     let bestDiff = Infinity;
     for (let i = 0; i < buckets.length; i++) {

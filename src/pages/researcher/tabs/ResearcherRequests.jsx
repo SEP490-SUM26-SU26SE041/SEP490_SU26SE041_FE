@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { experimentRequestsApi } from '../../../api/experimentApi';
 import { farmsApi } from '../../../api/managerResourcesApi';
 import { experimentsApi } from '../../../api/experimentApi';
@@ -9,6 +9,7 @@ import { useConfirm, ConfirmDialog } from '../../../components/common/ConfirmDia
 
 const STATUS_FILTERS = [
   { value: '', label: 'Tất Cả' },
+  { value: 'noExperiment', label: 'Chưa Có Thực Nghiệm' },
   { value: 'Pending', label: 'Chờ Duyệt' },
   { value: 'Approved', label: 'Đã Duyệt' },
   { value: 'Rejected', label: 'Từ Chối' },
@@ -23,12 +24,11 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
   const [filterFarm, setFilterFarm] = useState('');
-  // Chỉ hiển thị các yêu cầu CH�A có thực nghiệm (tức: yêu cầu đã duyệt mà chưa tạo Experiment)
-  // Mặc định bật vì phần lớn thời gian user chỉ quan tâm yêu cầu cần tạo thực nghiệm.
-  // Filter theo `experimentId` của BE (nếu có) — fallback bỏ qua khi BE chưa trả field này.
-  const [hideAlreadyCreated, setHideAlreadyCreated] = useState(true);
+  // Phân trang — client-side: slice trên list đã filter
+  const [pageNumber, setPageNumber] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   // Set các requestId đã có thực nghiệm — build từ GET /api/experiments (response có field `requestId`)
-  // Dùng để ẩn nút "Tạo TN" ngay cả khi BE trả status vẫn là Approved.
+  // Dùng để filter "Chưa Có Thực Nghiệm" ngay cả khi BE không trả field experimentId trên request
   const [requestsWithExperiment, setRequestsWithExperiment] = useState(new Set());
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -117,20 +117,30 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
     try {
       setLoading(true);
       const params = {};
-      if (filter) params.status = filter;
+      // Filter "Chưa Có Thực Nghiệm" → status Approved + chưa có TN
+      // Filter các status khác → chỉ truyền status
+      if (filter === 'noExperiment') {
+        params.status = 'Approved';
+      } else if (filter) {
+        params.status = filter;
+      }
       const data = await experimentRequestsApi.getAll(params);
       let list = Array.isArray(data) ? data : [];
       if (filterFarm) list = list.filter(r => r.farmId === filterFarm);
 
-      // Filter: chỉ hiện yêu cầu CHƯA có thực nghiệm (nếu bật)
-      //   - Ưu tiên 1: req có field `experimentId` truthy → đã có TN → ẩn
-      //   - Ưu tiên 2: req có `experiment` object → đã có TN → ẩn
-      //   - Ưu tiên 3: req có `experimentCode` truthy → đã có TN → ẩn
-      //   Nếu BE không trả field nào → không lọc (giữ nguyên), vẫn hiển thị để tránh mất data.
-      if (hideAlreadyCreated) {
-        list = list.filter(r => !r.experimentId && !r.experiment && !r.experimentCode);
+      // Filter client-side "Chưa Có Thực Nghiệm":
+      //   Kết hợp 3 nguồn để detect đã có TN:
+      //     1. BE trả `experimentId` / `experiment` / `experimentCode` trên request
+      //     2. Set `requestsWithExperiment` build từ GET /api/experiments (response.requestId)
+      //   Nếu BE không trả field nào & chưa load xong experiments list → fallback: giữ nguyên (không lọc)
+      if (filter === 'noExperiment') {
+        list = list.filter(r =>
+          !r.experimentId && !r.experiment && !r.experimentCode
+          && !requestsWithExperiment.has(r.id)
+        );
       }
       setRequests(list);
+      // Reset về trang 1 khi filter thay đổi (effect bên dưới xử lý)
     } catch (err) {
       showToast(err.message || 'Không thể tải danh sách yêu cầu', 'error');
     } finally {
@@ -156,8 +166,9 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
   };
 
   useEffect(() => { fetchFarms(); fetchCrops(); fetchExperimentsList(); }, []);
-  useEffect(() => { fetchRequests(); }, [filter]);
-  useEffect(() => { fetchRequests(); }, [hideAlreadyCreated, filterFarm]);
+  // Reset về trang 1 mỗi khi filter/farm thay đổi
+  useEffect(() => { setPageNumber(1); }, [filter, filterFarm]);
+  useEffect(() => { fetchRequests(); }, [filter, filterFarm, requestsWithExperiment]);
 
   const validateForm = () => {
     const errs = {};
@@ -434,23 +445,16 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
         </div>
       </div>
 
-      {/* Toggle: chỉ hiện yêu cầu chưa có thực nghiệm */}
-      <div className="flex items-center gap-2">
-        <label className="inline-flex items-center gap-2 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={hideAlreadyCreated}
-            onChange={e => setHideAlreadyCreated(e.target.checked)}
-            className="w-4 h-4 text-indigo-600 border-outline-variant rounded focus:ring-2 focus:ring-indigo-500/20"
-          />
-          <span className="text-xs font-bold text-on-surface-variant">
-            Chỉ hiển thị yêu cầu <span className="text-indigo-600">CHƯA CÓ</span> thực nghiệm
-          </span>
-        </label>
-        <span className="text-[10px] text-on-surface-variant italic">
-          (Bỏ chọn để xem cả yêu cầu đã tạo thực nghiệm)
-        </span>
-      </div>
+      {/* Pagination + Info bar — chỉ hiển thị khi có data */}
+      {requests.length > 0 && (
+        <PaginationBar
+          pageNumber={pageNumber}
+          pageSize={pageSize}
+          totalCount={requests.length}
+          onPageChange={setPageNumber}
+          onPageSizeChange={(s) => { setPageSize(s); setPageNumber(1); }}
+        />
+      )}
 
       {/* Table */}
       <div className="bg-white border border-outline-variant rounded-2xl overflow-hidden shadow-sm">
@@ -467,18 +471,27 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
               </tr>
             </thead>
             <tbody className="divide-y divide-outline-variant">
-              {loading ? (
-                <tr><td colSpan="6" className="px-6 py-8 text-center text-sm text-on-surface-variant">Đang tải...</td></tr>
-              ) : requests.length === 0 ? (
-                <tr>
-                  <td colSpan="6" className="px-6 py-8 text-center text-sm text-on-surface-variant">
-                    {hideAlreadyCreated
-                      ? 'Không có yêu cầu nào CHƯA có thực nghiệm. Bỏ tick "Chỉ hiển thị yêu cầu CHƯA CÓ thực nghiệm" để xem tất cả.'
-                      : 'Chưa có yêu cầu nào.'}
-                  </td>
-                </tr>
-              ) : (
-                requests.map(req => {
+              {(() => {
+                // Phân trang client-side: slice theo pageNumber/pageSize
+                const pagedRequests = requests.slice(
+                  (pageNumber - 1) * pageSize,
+                  pageNumber * pageSize
+                );
+                if (loading) {
+                  return <tr><td colSpan="6" className="px-6 py-8 text-center text-sm text-on-surface-variant">Đang tải...</td></tr>;
+                }
+                if (pagedRequests.length === 0) {
+                  return (
+                    <tr>
+                      <td colSpan="6" className="px-6 py-8 text-center text-sm text-on-surface-variant">
+                        {filter === 'noExperiment'
+                          ? 'Không có yêu cầu nào đã duyệt mà chưa có thực nghiệm.'
+                          : 'Chưa có yêu cầu nào.'}
+                      </td>
+                    </tr>
+                  );
+                }
+                return pagedRequests.map(req => {
                   // Check theo 3 nguồn:
                   //  1. BE trả `experimentId` / `experiment` / `experimentCode` trực tiếp trong request
                   //  2. requestsWithExperiment Set (build từ GET /api/experiments - response có field `requestId`)
@@ -534,8 +547,8 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
                     </td>
                   </tr>
                   );
-                })
-              )}
+                });
+              })()}
             </tbody>
           </table>
         </div>
@@ -1129,6 +1142,92 @@ const ResearcherRequests = ({ onConvertToExperiment }) => {
           <div className="p-8 text-center text-sm text-rose-600">Không có dữ liệu yêu cầu.</div>
         )}
       </Modal>
+    </div>
+  );
+};
+
+// ── PaginationBar: phân trang client-side đơn giản ─────────────────────────────
+const PAGE_SIZE_OPTIONS = [5, 10, 20, 50];
+
+const PaginationBar = ({ pageNumber, pageSize, totalCount, onPageChange, onPageSizeChange }) => {
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const start = (pageNumber - 1) * pageSize + 1;
+  const end = Math.min(pageNumber * pageSize, totalCount);
+
+  // Sinh danh sách số trang hiển thị (kiểu 1 ... 4 5 [6] 7 8 ... 20)
+  const pageNumbers = useMemo(() => {
+    const arr = [];
+    const max = totalPages;
+    if (max <= 7) {
+      for (let i = 1; i <= max; i++) arr.push(i);
+      return arr;
+    }
+    // Luôn có 1, ... và max
+    arr.push(1);
+    const left = Math.max(2, pageNumber - 1);
+    const right = Math.min(max - 1, pageNumber + 1);
+    if (left > 2) arr.push('…');
+    for (let i = left; i <= right; i++) arr.push(i);
+    if (right < max - 1) arr.push('…');
+    if (max > 1) arr.push(max);
+    return arr;
+  }, [totalPages, pageNumber]);
+
+  return (
+    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-1">
+      <div className="flex items-center gap-3 text-xs text-on-surface-variant">
+        <span>
+          Hiển thị <strong className="text-on-surface">{start}-{end}</strong> / <strong className="text-on-surface">{totalCount}</strong> yêu cầu
+        </span>
+        <label className="inline-flex items-center gap-1.5 ml-2">
+          <span>Mỗi trang:</span>
+          <select
+            value={pageSize}
+            onChange={e => onPageSizeChange(Number(e.target.value))}
+            className="px-2 py-1 border border-outline-variant rounded-lg bg-white text-xs font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
+          >
+            {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onPageChange(pageNumber - 1)}
+          disabled={pageNumber <= 1}
+          className="px-2.5 py-1.5 rounded-lg border border-outline-variant bg-white text-xs font-bold text-on-surface-variant hover:bg-surface-container disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          title="Trang trước"
+        >
+          ‹
+        </button>
+        {pageNumbers.map((p, idx) =>
+          p === '…' ? (
+            <span key={`gap-${idx}`} className="px-1.5 text-on-surface-variant text-xs">…</span>
+          ) : (
+            <button
+              key={p}
+              type="button"
+              onClick={() => onPageChange(p)}
+              className={`min-w-[32px] px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                p === pageNumber
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'border border-outline-variant bg-white text-on-surface-variant hover:bg-surface-container'
+              }`}
+            >
+              {p}
+            </button>
+          )
+        )}
+        <button
+          type="button"
+          onClick={() => onPageChange(pageNumber + 1)}
+          disabled={pageNumber >= totalPages}
+          className="px-2.5 py-1.5 rounded-lg border border-outline-variant bg-white text-xs font-bold text-on-surface-variant hover:bg-surface-container disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          title="Trang sau"
+        >
+          ›
+        </button>
+      </div>
     </div>
   );
 };

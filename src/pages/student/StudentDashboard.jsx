@@ -10,6 +10,7 @@ import NotificationBell from '../../components/notifications/NotificationBell';
 import TaskReportForm, { buildReportPayload } from '../../components/tasks/TaskReportForm';
 import StudentRagPanel from './StudentRagPanel';
 import ImageUploader from '../../components/tasks/ImageUploader';
+import IoTMonitorPanel from '../../components/iot/IoTMonitorPanel';
 import { extractMeasurementsFromReport, buildMeasurementPayloads, createMeasurementsFromTaskReport, previewMeasurements, extractBulkItemsFromResultData, createMeasurementsBulk, filterDefinitionsByTaskGroup } from '../../utils/measurementBridge';
 import { batchesApi, measurementDefinitionsApi } from '../../api/experimentApi';
 import { validateForm, isValid, required, nonNegativeNumber, pastOrTodayDate, minValue, maxValue, compose } from '../../utils/validation';
@@ -19,6 +20,7 @@ const STU_TABS = [
   { id: 'tasks', label: 'Công Việc', icon: '📋' },
   { id: 'reports', label: 'Báo Cáo', icon: '📝' },
   { id: 'morphology', label: 'Ghi Nhận', icon: '📊' },
+  { id: 'iot', label: 'Giám Sát IoT', icon: '📡' },
   { id: 'rag', label: 'AI Chat', icon: '🤖' },
 ];
 
@@ -99,6 +101,7 @@ const StudentDashboard = () => {
               {activeTab === 'tasks' && 'Danh sách công việc được giao'}
               {activeTab === 'reports' && 'Báo cáo tác vụ đã gửi'}
               {activeTab === 'morphology' && 'Ghi nhận dữ liệu hình thái học'}
+              {activeTab === 'iot' && 'Xem chỉ số cảm biến IoT realtime của các batch được giao (tham khảo khi viết báo cáo)'}
               {activeTab === 'rag' && 'Hỏi đáp AI về nông nghiệp (RAG)'}
             </p>
           </div>
@@ -107,6 +110,7 @@ const StudentDashboard = () => {
           {activeTab === 'tasks' && <StudentTasksTab />}
           {activeTab === 'reports' && <StudentReportsTab />}
           {activeTab === 'morphology' && <StudentMorphologySection setActiveTab={setActiveTab} />}
+          {activeTab === 'iot' && <IoTMonitorPanel scope="task" />}
           {activeTab === 'rag' && <StudentRagPanel />}
         </div>
       </main>
