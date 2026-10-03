@@ -1650,6 +1650,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
                   schedules={schedules} tasks={tasks}
                   stageForm={stageForm} setStageForm={setStageForm}
                   onCreateStage={handleCreateStage} onUpdateStage={handleUpdateStage}
+                  onStageUpdated={(stageId, updatedFields) => setStages(prev => prev.map(s => s.id === stageId ? { ...s, ...updatedFields } : s))}
                   saving={saving.stage} showToast={showToast}
                   passedStagesCount={passedStagesCount}
                   experimentId={experiment.id}
@@ -1990,7 +1991,7 @@ const DecisionCriteriaPanel = ({ decisionSummary, growthStages, getStageTargetPe
 };
 
 // ── Stages Section ────────────────────────────────────────────────────────────
-const StagesSection = ({ stages, groups, batches, measurements, measurementRecords, taskReportsByBatch, taskReports, schedules, tasks, stageForm, setStageForm, onCreateStage, onUpdateStage, saving, showToast, passedStagesCount, experimentId }) => {
+const StagesSection = ({ stages, groups, batches, measurements, measurementRecords, taskReportsByBatch, taskReports, schedules, tasks, stageForm, setStageForm, onCreateStage, onUpdateStage, onStageUpdated, saving, showToast, passedStagesCount, experimentId }) => {
   console.log('[StagesSection RENDER]', 'stages.length=', stages.length, 'passedStagesCount=', passedStagesCount, 'stages[0]?.status=', stages[0]?.status);
   const [expandedId, setExpandedId] = useState(null);
   const [editingId, setEditingId] = useState(null);
@@ -2017,7 +2018,24 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
     return map;
   }, [editingStage, measurements, groups]);
 
-  const toggleExpand = (id) => setExpandedId(expandedId === id ? null : id);
+  const toggleExpand = (id) => {
+    // Mở rộng → auto vào chế độ edit (form chứa data đã lưu) để xem/chỉnh sửa luôn
+    if (expandedId !== id) {
+      setExpandedId(id);
+      // Tìm stage tương ứng và startEdit
+      const target = stages.find(s => s.id === id);
+      if (target && editingId !== id) {
+        startEdit(target);
+      }
+    } else {
+      // Thu gọn → cancel edit (nếu đang edit card này) để tránh kẹt form
+      setExpandedId(null);
+      if (editingId === id) {
+        setEditingId(null);
+        setEditData({});
+      }
+    }
+  };
 
   // (Đã bỏ useEffect tự rebuild — useMemo ở trên đã tự tính lại khi measurements/groups đổi)
 
@@ -2079,17 +2097,23 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
 
   const updateField = (key, value, groupId = null) => {
     setEditData(prev => {
+      // 🆕 Safety: ép resultData thành object trước khi mutate
+      let rd = prev.resultData;
+      if (typeof rd === 'string') {
+        try { rd = JSON.parse(rd) || {}; } catch { rd = {}; }
+      }
+      rd = rd || {};
       if (prev._isPerGroup) {
         if (groupId != null) {
-          const newByGroup = { ...(prev.resultData?.byGroup || {}) };
+          const newByGroup = { ...(rd.byGroup || {}) };
           newByGroup[groupId] = { ...(newByGroup[groupId] || {}), [key]: value };
-          return { ...prev, resultData: { ...prev.resultData, byGroup: newByGroup } };
+          return { ...prev, resultData: { ...rd, byGroup: newByGroup } };
         }
-        const newOverall = { ...(prev.resultData?.overall || {}) };
+        const newOverall = { ...(rd.overall || {}) };
         newOverall[key] = value;
-        return { ...prev, resultData: { ...prev.resultData, overall: newOverall } };
+        return { ...prev, resultData: { ...rd, overall: newOverall } };
       }
-      return { ...prev, resultData: { ...prev.resultData, [key]: value } };
+      return { ...prev, resultData: { ...rd, [key]: value } };
     });
   };
 
@@ -2112,8 +2136,26 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
         resultSummary: editData.resultSummary || null, resultData: JSON.stringify(editData.resultData || {})
       };
       await onUpdateStage(stageId, payload);
+      // 🆕 Optimistic merge: cập nhật stage trong state ngay để view hiển thị data mới
+      // mà không cần đợi fetch lại từ BE (BE có thể trả thiếu resultData)
+      if (typeof onStageUpdated === 'function') {
+        onStageUpdated(stageId, {
+          stageName: payload.stageName,
+          stageOrder: payload.stageOrder,
+          stageType: payload.stageType,
+          objective: payload.objective,
+          startDate: payload.startDate,
+          endDate: payload.endDate,
+          resultSummary: payload.resultSummary,
+          resultData: payload.resultData, // string JSON đã stringify
+        });
+      }
       showToast('Đã lưu kết quả giai đoạn', 'success');
-      cancelEdit();
+      // 🆕 Giữ nguyên form edit (không cancelEdit) để user vẫn thấy data vừa lưu
+      // trong khung form giống lúc vừa bung card — tránh reset về view rỗng.
+      // resultData trong editData GIỮ NGUYÊN DẠNG OBJECT (không stringify) để
+      // các path như resultData.byGroup[gid][key] hoạt động đúng. BE đã nhận
+      // chuỗi JSON qua payload.resultData ở trên.
     } catch (err) { showToast(err.message || 'Lỗi lưu', 'error'); }
     finally { setSavingId(null); }
   };
@@ -2584,6 +2626,11 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                                             if (h.taskType && h.key) {
                                               setEditData(prev => {
                                                 const next = JSON.parse(JSON.stringify(prev || {}));
+                                                // 🆕 Safety: resultData phải là object
+                                                if (typeof next.resultData === 'string') {
+                                                  try { next.resultData = JSON.parse(next.resultData) || {}; }
+                                                  catch { next.resultData = {}; }
+                                                }
                                                 next.resultData = next.resultData || {};
                                                 next.resultData.byGroup = next.resultData.byGroup || {};
                                                 next.resultData.byGroup[targetGroupId] = next.resultData.byGroup[targetGroupId] || {};
@@ -2599,6 +2646,11 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                                         // Overall: resultData.overall[taskType][key]
                                         setEditData(prev => {
                                           const next = JSON.parse(JSON.stringify(prev || {}));
+                                          // 🆕 Safety: resultData phải là object
+                                          if (typeof next.resultData === 'string') {
+                                            try { next.resultData = JSON.parse(next.resultData) || {}; }
+                                            catch { next.resultData = {}; }
+                                          }
                                           next.resultData = next.resultData || {};
                                           next.resultData.overall = next.resultData.overall || {};
                                           next.resultData.overall[h.taskType] = next.resultData.overall[h.taskType] || {};
@@ -2744,6 +2796,11 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
 
                           // Helper đọc / ghi nested state theo path kiểu ['byGroup', '<gid>']
                           function getStoredNested(root, ...path) {
+                            // 🆕 Safety: nếu root là string JSON → parse trước
+                            if (typeof root === 'string') {
+                              try { root = JSON.parse(root) || {}; } catch { root = {}; }
+                            }
+                            if (root == null || typeof root !== 'object') return undefined;
                             let cur = root;
                             for (const k of path) {
                               if (cur == null) return undefined;
@@ -2757,18 +2814,26 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                             const path = pathAndValue.slice(0, -1);
                             setEditData(prev => {
                               const next = JSON.parse(JSON.stringify(prev || {}));
+                              // 🆕 Safety: resultData phải là object (không phải string JSON)
+                              if (typeof next.resultData === 'string') {
+                                try { next.resultData = JSON.parse(next.resultData) || {}; }
+                                catch { next.resultData = {}; }
+                              }
                               next.resultData = next.resultData || {};
                               let cur = next.resultData;
                               for (let i = 0; i < path.length - 1; i++) {
                                 const k = path[i];
-                                cur[k] = cur[k] || {};
+                                // Bỏ qua key lạ có dấu phẩy (key rác từ BE)
+                                if (typeof k !== 'string' || k.includes(',')) continue;
+                                if (typeof cur !== 'object' || cur === null) cur = {};
+                                cur[k] = (typeof cur[k] === 'object' && cur[k] !== null) ? cur[k] : {};
                                 cur = cur[k];
                               }
                               const lastKey = path[path.length - 1];
                               if (value === '' || value === null || value === undefined) {
-                                if (cur[lastKey]) delete cur[lastKey];
+                                if (cur && typeof cur === 'object' && cur[lastKey]) delete cur[lastKey];
                               } else {
-                                cur[lastKey] = value;
+                                if (cur && typeof cur === 'object') cur[lastKey] = value;
                               }
                               return next;
                             });
@@ -2888,16 +2953,13 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                                 <label className="text-[10px] font-bold uppercase text-slate-600 block mb-1">🏆 Nhóm thắng</label>
                                 <select
                                   value={editData.resultData?.overall?.winningGroupId || ''}
-                                  onChange={e => setEditData(prev => ({
-                                    ...prev,
-                                    resultData: {
-                                      ...(prev.resultData || {}),
-                                      overall: {
-                                        ...((prev.resultData || {}).overall || {}),
-                                        winningGroupId: e.target.value
-                                      }
-                                    }
-                                  }))}
+                                  onChange={e => setEditData(prev => {
+                                    // 🆕 Safety: ép resultData thành object
+                                    let rd = prev.resultData;
+                                    if (typeof rd === 'string') { try { rd = JSON.parse(rd) || {}; } catch { rd = {}; } }
+                                    rd = rd || {};
+                                    return { ...prev, resultData: { ...rd, overall: { ...(rd.overall || {}), winningGroupId: e.target.value } } };
+                                  })}
                                   className="w-full px-3 py-2.5 border border-emerald-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
                                 >
                                   <option value="">— Chưa chốt —</option>
@@ -2910,16 +2972,13 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                                 <label className="text-[10px] font-bold uppercase text-slate-600 block mb-1">📊 Mức đánh giá tổng thể</label>
                                 <select
                                   value={editData.resultData?.overall?.overallRating || ''}
-                                  onChange={e => setEditData(prev => ({
-                                    ...prev,
-                                    resultData: {
-                                      ...(prev.resultData || {}),
-                                      overall: {
-                                        ...((prev.resultData || {}).overall || {}),
-                                        overallRating: e.target.value
-                                      }
-                                    }
-                                  }))}
+                                  onChange={e => setEditData(prev => {
+                                    // 🆕 Safety: ép resultData thành object
+                                    let rd = prev.resultData;
+                                    if (typeof rd === 'string') { try { rd = JSON.parse(rd) || {}; } catch { rd = {}; } }
+                                    rd = rd || {};
+                                    return { ...prev, resultData: { ...rd, overall: { ...(rd.overall || {}), overallRating: e.target.value } } };
+                                  })}
                                   className="w-full px-3 py-2.5 border border-emerald-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
                                 >
                                   <option value="">— Chọn mức —</option>
@@ -2937,16 +2996,13 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                               <textarea
                                 rows={2}
                                 value={editData.resultData?.overall?.conclusion || ''}
-                                onChange={e => setEditData(prev => ({
-                                  ...prev,
-                                  resultData: {
-                                    ...(prev.resultData || {}),
-                                    overall: {
-                                      ...((prev.resultData || {}).overall || {}),
-                                      conclusion: e.target.value
-                                    }
-                                  }
-                                }))}
+                                onChange={e => setEditData(prev => {
+                                  // 🆕 Safety: ép resultData thành object
+                                  let rd = prev.resultData;
+                                  if (typeof rd === 'string') { try { rd = JSON.parse(rd) || {}; } catch { rd = {}; } }
+                                  rd = rd || {};
+                                  return { ...prev, resultData: { ...rd, overall: { ...(rd.overall || {}), conclusion: e.target.value } } };
+                                })}
                                 placeholder="VD: Nhóm A có chiều cao vượt target 15%, tỷ lệ sống 98% — đề xuất nhân rộng..."
                                 className="w-full px-3 py-2 border border-emerald-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500"
                               />
