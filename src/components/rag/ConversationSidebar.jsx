@@ -217,18 +217,7 @@ const ConversationSidebar = ({
         )}
       </div>
 
-      {/* Footer */}
-      {conversations.length > 0 && (
-        <div className="p-2 border-t border-slate-100">
-          <button
-            type="button"
-            onClick={() => setPendingClearAll(true)}
-            className="w-full text-[10px] font-bold text-rose-600 hover:bg-rose-50 rounded-lg py-1.5"
-          >
-            🗑 Xóa tất cả cuộc hội thoại
-          </button>
-        </div>
-      )}
+      {/* Footer — nút "Xóa tất cả" đã ẩn vì không xóa được */}
     </aside>
 
     {/* Modal xác nhận xóa 1 cuộc */}
