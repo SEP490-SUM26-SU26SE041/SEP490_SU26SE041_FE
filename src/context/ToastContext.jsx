@@ -1,13 +1,16 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
 
 const ToastContext = createContext(null);
+
+let toastCounter = 0; // Module-level counter để đảm bảo ID luôn unique
 
 export const ToastProvider = ({ children }) => {
   const [toasts, setToasts] = useState([]);
 
   // Hàm để show toast, có thể nhận type: 'success', 'error', 'warning', 'info'
   const showToast = useCallback((message, type = 'success', duration = 3000) => {
-    const id = Date.now();
+    // Dùng counter + Date.now() + Math.random() để chắc chắn unique
+    const id = `${Date.now()}-${++toastCounter}-${Math.floor(Math.random() * 1000)}`;
     setToasts((prev) => [...prev, { id, message, type }]);
 
     setTimeout(() => {
@@ -22,8 +25,8 @@ export const ToastProvider = ({ children }) => {
   return (
     <ToastContext.Provider value={{ showToast }}>
       {children}
-      {/* Container hiển thị Toasts */}
-      <div className="fixed top-5 right-5 z-[99999] flex flex-col gap-3">
+      {/* Container hiển thị Toasts - đặt ở góc dưới-trái, rộng để đọc hết nội dung */}
+      <div className="fixed bottom-5 left-5 z-[99999] flex flex-col-reverse gap-3 max-w-md w-[calc(100vw-2.5rem)] sm:w-auto sm:min-w-[320px]">
         {toasts.map((toast) => {
           // Các style tùy theo loại thông báo
           const typeStyles = {
@@ -43,11 +46,11 @@ export const ToastProvider = ({ children }) => {
           return (
             <div 
               key={toast.id} 
-              className={`flex items-center gap-3 px-4 py-3 border rounded-xl shadow-lg min-w-[280px] max-w-sm animate-slide-left transition-all ${typeStyles[toast.type] || typeStyles.info}`}
+              className={`flex items-start gap-3 px-4 py-3 border rounded-xl shadow-lg w-full animate-slide-left transition-all ${typeStyles[toast.type] || typeStyles.info}`}
             >
-              {iconStyles[toast.type] || iconStyles.info}
-              <span className="flex-1 text-sm font-semibold">{toast.message}</span>
-              <button onClick={() => removeToast(toast.id)} className="p-1 hover:bg-black/5 rounded-full transition-colors">
+              <div className="shrink-0 mt-0.5">{iconStyles[toast.type] || iconStyles.info}</div>
+              <span className="flex-1 text-sm font-semibold leading-snug break-words whitespace-normal">{toast.message}</span>
+              <button onClick={() => removeToast(toast.id)} className="p-1 hover:bg-black/5 rounded-full transition-colors shrink-0">
                 <svg className="w-4 h-4 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
               </button>
             </div>

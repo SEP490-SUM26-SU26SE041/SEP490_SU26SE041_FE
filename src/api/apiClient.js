@@ -97,6 +97,11 @@ const request = async (path, { method = 'GET', body, headers = {}, params, respo
     if (query) url += `?${query}`;
   }
 
+  // Debug log - dễ thấy request có gửi đi không
+  if (method !== 'GET' || import.meta.env.DEV) {
+    console.log(`[apiClient] → ${method} ${url}`);
+  }
+
   const isFormData = body instanceof FormData;
 
   const fetchOptions = {

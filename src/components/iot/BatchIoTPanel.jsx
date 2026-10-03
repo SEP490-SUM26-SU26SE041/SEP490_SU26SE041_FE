@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useToast } from '../../context/ToastContext';
-import { batchesApi } from '../../api/experimentApi';
 import {
   iotDevicesApi,
   SENSOR_META,
@@ -9,6 +8,7 @@ import {
   classifyDevice
 } from '../../api/iotDevicesApi';
 import ThresholdRulesModal from './ThresholdRulesModal';
+import BatchIoTRealtimeModal from './BatchIoTRealtimeModal';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const SENSOR_TYPE_OPTIONS = [
@@ -39,22 +39,25 @@ const BatchIoTPanel = ({ batch, onDevicesChange }) => {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null); // device đang sửa
   const [showThreshold, setShowThreshold] = useState(false);
+  const [showRealtime, setShowRealtime] = useState(false);
 
   // Trạng thái IoT của batch — lấy từ BE (batchesApi.getById trả về isIoTEnabled)
   // Mặc định null = chưa load xong, false = tắt, true = bật
   const [isIoTEnabled, setIsIoTEnabled] = useState(null);
 
-  // ── Fetch trạng thái IoT của batch từ BE ──────────────────────────────────
+  // ── Fetch trạng thái IoT của batch từ devices (isActive = true nghĩa là đã bật) ──
+  // Theo response mẫu từ /iot-devices/batch/{batchId}: có field isActive trên từng device.
+  // Quy ước: nếu có ÍT NHẤT 1 device có isActive = true → batch được coi là IoT ON.
   const loadIoTStatus = useCallback(async () => {
     if (!batch?.id) return;
     try {
-      const data = await batchesApi.getById(batch.id);
-      // BE có thể trả thẳng hoặc wrap trong data
-      const batchData = data?.data || data;
-      setIsIoTEnabled(Boolean(batchData?.isIoTEnabled ?? batchData?.IsIoTEnabled ?? false));
+      const list = await iotDevicesApi.getByBatch(batch.id);
+      const arr = Array.isArray(list) ? list : (list?.data || list?.items || []);
+      const hasActiveDevice = arr.some(d => d && d.isActive === true);
+      console.log('[loadIoTStatus] devices:', arr.length, 'hasActiveDevice:', hasActiveDevice);
+      setIsIoTEnabled(hasActiveDevice);
     } catch (e) {
       console.warn('[loadIoTStatus]', e?.message || e);
-      // Nếu BE chưa trả field này → mặc định OFF để an toàn
       setIsIoTEnabled(false);
     }
   }, [batch?.id]);
@@ -117,7 +120,9 @@ const BatchIoTPanel = ({ batch, onDevicesChange }) => {
     try {
       await iotDevicesApi.update(device.id, { isActive: !device.isActive });
       showToast(device.isActive ? 'Đã tắt thiết bị' : 'Đã bật thiết bị', 'success');
-      loadDevices();
+      await loadDevices();
+      // Reload trạng thái toggle batch vì nó phụ thuộc vào isActive của devices
+      await loadIoTStatus();
     } catch (e) {
       showToast(e?.message || 'Không thể cập nhật', 'error');
     }
@@ -127,31 +132,63 @@ const BatchIoTPanel = ({ batch, onDevicesChange }) => {
     <div className="border border-outline-variant rounded-xl p-4 bg-surface-container-lowest/50">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-base">📡</span>
           <h4 className="font-bold text-sm text-on-surface">
             IoT — {batch?.batchCode || `Batch ${batch?.id?.slice(0, 6)}`}
           </h4>
+          {/* Status badge rõ ràng */}
+          {isIoTEnabled === null ? (
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-500">Đang tải...</span>
+          ) : isIoTEnabled ? (
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700 flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" /> IoT ON
+            </span>
+          ) : (
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-200 text-slate-600">
+              IoT OFF
+            </span>
+          )}
           {loading && <span className="text-[10px] text-on-surface-variant animate-pulse">đang tải...</span>}
         </div>
-        <div className="flex items-center gap-2">
-          {/* Toggle IoT batch */}
-          <button
-            type="button"
-            onClick={handleToggleIoT}
-            disabled={togglingIoT || isIoTEnabled === null}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-              isIoTEnabled ? 'bg-emerald-500' : 'bg-slate-300'
-            } ${togglingIoT ? 'opacity-50' : ''}`}
-            title={isIoTEnabled ? 'Tắt IoT cho batch này' : 'Bật IoT cho batch này'}
-          >
-            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-              isIoTEnabled ? 'translate-x-6' : 'translate-x-1'
-            }`} />
-          </button>
-          <span className={`text-[10px] font-bold uppercase ${isIoTEnabled === null ? 'text-slate-400' : isIoTEnabled ? 'text-emerald-600' : 'text-slate-500'}`}>
-            {isIoTEnabled === null ? '...' : (isIoTEnabled ? 'IoT ON' : 'IoT OFF')}
-          </span>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Toggle IoT batch - CHỈ CHO PHÉP BẬT 1 LẦN, sau đó khóa */}
+          {isIoTEnabled ? (
+            <div
+              className="relative inline-flex h-6 w-11 items-center rounded-full transition-colors bg-emerald-500 cursor-not-allowed opacity-90"
+              title="IoT đã được kích hoạt cho batch này"
+            >
+              <span className="inline-block h-4 w-4 transform rounded-full bg-white translate-x-6 shadow-sm" />
+              <span className="absolute -top-1 -right-1 w-3 h-3 bg-emerald-600 rounded-full flex items-center justify-center">
+                <svg className="w-2 h-2 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+              </span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={handleToggleIoT}
+              disabled={togglingIoT || isIoTEnabled === null}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors bg-slate-300 hover:bg-slate-400 ${
+                togglingIoT ? 'opacity-50' : ''
+              }`}
+              title="Bật IoT cho batch này (chỉ kích hoạt được 1 lần)"
+            >
+              <span className="inline-block h-4 w-4 transform rounded-full bg-white translate-x-1 transition-transform" />
+            </button>
+          )}
+          {/* Nút xem realtime (chỉ hiện khi IoT ON + có thiết bị) */}
+          {isIoTEnabled && devices.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowRealtime(true)}
+              className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[11px] font-bold transition-all flex items-center gap-1 shadow-sm"
+              title="Xem dữ liệu realtime (giá trị mới nhất + chart 24h)"
+            >
+              <span>📊</span> Xem realtime
+            </button>
+          )}
           {isIoTEnabled && (
             <button
               type="button"
@@ -271,6 +308,14 @@ const BatchIoTPanel = ({ batch, onDevicesChange }) => {
           experimentId={batch?.experimentId}
         />
       )}
+
+      {/* Modal xem dữ liệu realtime (giống Monitoring Dashboard) */}
+      <BatchIoTRealtimeModal
+        open={showRealtime}
+        onClose={() => setShowRealtime(false)}
+        batch={{ ...batch, isIoTEnabled }}
+        devices={devices}
+      />
     </div>
   );
 };
