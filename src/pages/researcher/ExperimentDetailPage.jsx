@@ -1778,6 +1778,7 @@ const ExperimentDetailPage = ({ experimentId }) => {
           groups={groups}
           tasks={tasks}
           taskReports={Object.values(taskReportsByBatch || {}).flat()}
+          measurements={measurements}
           onAssign={handleAssignTask}
           onReassign={handleReassignTask}
           showToast={showToast}
@@ -2050,10 +2051,10 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
     } else {
       // Overall: chỉ auto-fill nếu parsed rỗng
       if (!parsed || Object.keys(parsed).length === 0) {
-        const isGrowth = s.stageType === 'Growing' || s.stageType === 'Growth';
-        const autoFilledMap = isGrowth && measurements.length > 0
-          ? autoFillFromDynamicSchema(buildGrowthResultSchema(s.stageType, measurements), stageRecs, measurements)
-          : autoFillAllFields(s.stageType, stageRecs, measurements);
+      const isGrowth = s.stageType === 'Growing' || s.stageType === 'Growth';
+      const autoFilledMap = isGrowth && measurements.length > 0
+        ? autoFillFromDynamicSchema(buildGrowthResultSchema(s.stageType, measurements), stageRecs, measurements)
+        : autoFillAllFields(s.stageType, stageRecs, measurements);
         parsed = {};
         Object.entries(autoFilledMap).forEach(([k, info]) => { if (info.value != null) parsed[k] = info.value; });
       }
@@ -2591,8 +2592,8 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                                                 return next;
                                               });
                                             } else if (h.key) {
-                                              updateField(h.key, String(h.numericValue ?? ''), targetGroupId);
-                                            }
+                                            updateField(h.key, String(h.numericValue ?? ''), targetGroupId);
+                                          }
                                           }
                                       } else if (h.taskType && h.key) {
                                         // Overall: resultData.overall[taskType][key]
@@ -2828,7 +2829,7 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                             groups.map(g => {
                               const dynDefs = dynamicDefsByGroup[g.id] || [];
                               return (
-                                <div key={g.id} className="bg-indigo-50/50 rounded-xl p-4 border border-indigo-100">
+                            <div key={g.id} className="bg-indigo-50/50 rounded-xl p-4 border border-indigo-100">
                                   <div className="flex items-center justify-between mb-3">
                                     <p className="text-xs font-bold text-indigo-700">👥 {g.groupName}</p>
                                     <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
@@ -2838,7 +2839,7 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                                   {dynDefs.length === 0 ? (
                                     <p className="text-[10px] italic text-slate-400">Chưa có chỉ số đo lường nào cho nhóm này.</p>
                                   ) : (
-                                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
                                       {dynDefs.map(def => {
                                         const storageKey = def.id || def.metricName;
                                         const minVal = def.minValue ?? def.minThreshold;
@@ -2858,18 +2859,18 @@ const StagesSection = ({ stages, groups, batches, measurements, measurementRecor
                                               onChange={e => updateField(storageKey, e.target.value, g.id)}
                                               className="w-full px-3 py-2 border border-indigo-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                                             />
-                                          </div>
+                                  </div>
                                         );
                                       })}
-                                    </div>
+                              </div>
                                   )}
-                                </div>
+                            </div>
                               );
                             })
                           ) : (
                             <div className="bg-indigo-50/50 rounded-xl p-4 border border-indigo-100">
                               <p className="text-[10px] italic text-slate-500">Giai đoạn này không theo nhóm — dùng tổng thể từ measurements.</p>
-                            </div>
+                              </div>
                           )}
                         </div>
 
@@ -3680,7 +3681,7 @@ const TasksByDayList = ({ tasks, batches, onOpenTaskDetail }) => {
 };
 
 // ── Task Detail Drawer (chi tiết task + assign/reassign) ──────────────────────────
-const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskReports, onAssign, onReassign, showToast }) => {
+const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskReports, measurements, onAssign, onReassign, showToast }) => {
   const [assignModal, setAssignModal] = useState(null); // 'assign' | 'reassign' | null
   const [assigneeId, setAssigneeId] = useState('');
   const [reason, setReason] = useState('');
@@ -3697,6 +3698,49 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
   const [aiModalImage, setAiModalImage] = useState(null);
   const savingRef = useRef(false);
   useEffect(() => { savingRef.current = saving; }, [saving]);
+
+  // 🆕 Build definition lookup để render resultData (key 'def_<uuid>' → metricName + unit + targetValue)
+  const definitionMap = useMemo(() => {
+    const m = new Map();
+    if (Array.isArray(measurements)) {
+      for (const d of measurements) {
+        if (d?.id) m.set(d.id, d);
+      }
+    }
+    return m;
+  }, [measurements]);
+
+  const resolveMetricLabel = (key) => {
+    if (typeof key !== 'string') return String(key);
+    if (key.startsWith('def_')) {
+      const defId = key.slice(4);
+      const def = definitionMap.get(defId);
+      if (def?.metricName) {
+        return def.unit ? `${def.metricName} (${def.unit})` : def.metricName;
+      }
+      return `Chỉ số #${defId.slice(0, 8)}`;
+    }
+    return key;
+  };
+
+  // Helper: parse resultData (BE có thể trả JSON string, object, hoặc array {key,value})
+  const parseResultData = (raw) => {
+    if (raw == null) return [];
+    if (Array.isArray(raw)) {
+      return raw
+        .filter(it => it && (it.key || it.metricName))
+        .map(it => [it.key || `def_${it.measurementDefinitionId || ''}`, it.value ?? it.val ?? '']);
+    }
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parseResultData(parsed);
+        if (parsed && typeof parsed === 'object') return Object.entries(parsed);
+      } catch { return []; }
+    }
+    if (typeof raw === 'object') return Object.entries(raw);
+    return [];
+  };
 
   const skills = useMemo(() => {
     if (!task) return [];
@@ -4056,10 +4100,60 @@ const TaskDetailDrawer = ({ task, onClose, stages, batches, groups, tasks, taskR
                         </span>
                       </div>
 
-                      {/* Plant count */}
-                    {(r.actualPlantCount || r.plantCount) && (
+{/* Plant count */}
+                      {(r.actualPlantCount || r.plantCount) && (
                         <p className="text-emerald-700 font-bold text-xs mb-2">🌱 {r.actualPlantCount || r.plantCount} cây</p>
                       )}
+
+                      {/* 🆕 Kết quả đo lường (resultData) — giống TaskReportsModal & student */}
+                      {(() => {
+                        const entries = parseResultData(r.resultData);
+                        if (entries.length === 0) return null;
+                        return (
+                          <div className="mb-2 p-2.5 bg-white rounded-xl border border-slate-200">
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-1.5">
+                              <span>📊</span> Kết Quả Đo Lường ({entries.length})
+                            </div>
+                            <div className="grid grid-cols-2 gap-1.5">
+                              {entries.map(([key, value]) => {
+                                const label = resolveMetricLabel(key);
+                                const def = definitionMap.get(key.startsWith('def_') ? key.slice(4) : '');
+                                const unit = def?.unit || '';
+                                const target = def?.targetValue;
+                                const num = parseFloat(value);
+                                const targetNum = parseFloat(target);
+                                const meetsTarget = !isNaN(num) && !isNaN(targetNum) && num >= targetNum;
+                                const closeTarget = !isNaN(num) && !isNaN(targetNum) && num < targetNum && num >= targetNum * 0.8;
+                                return (
+                                  <div key={key} className="text-xs p-2 rounded-lg bg-slate-50 border border-slate-100">
+                                    <div className="flex items-start justify-between gap-1">
+                                      <div className="flex-1 min-w-0">
+                                        <div className="text-[10px] text-slate-500 font-bold truncate">{label}</div>
+                                        <div className="flex items-baseline gap-1 mt-0.5">
+                                          <span className="font-bold text-slate-800 text-sm">{String(value)}</span>
+                                          {unit && <span className="text-[10px] text-slate-500">{unit}</span>}
+                                        </div>
+                                      </div>
+                                      {!isNaN(num) && !isNaN(targetNum) && (
+                                        <span className="shrink-0" title={`Target: ${target}${unit}`}>
+                                          {meetsTarget && <span className="text-emerald-600 font-bold text-sm">✅</span>}
+                                          {!meetsTarget && closeTarget && <span className="text-amber-500 font-bold text-sm">⚡</span>}
+                                          {!meetsTarget && !closeTarget && <span className="text-rose-400 font-bold text-sm">⚠️</span>}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {target != null && (
+                                      <div className="text-[9px] text-slate-500 mt-0.5">
+                                        🎯 Target: <span className="font-semibold">{target}{unit}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       {/* Ảnh + AI results */}
                       {imgs.length > 0 ? (
