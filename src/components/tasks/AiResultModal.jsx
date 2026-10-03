@@ -18,21 +18,22 @@ const confColor = (c) => {
   return 'rose';
 };
 
-// Map tên bệnh Tomato Leaf Disease → tiếng Việt + treatment
+// Map tên bệnh Tomato Leaf Disease → tiếng Việt + severity
+// LƯU Ý: KHÔNG chứa 'treat' ở đây — phương pháp chăm sóc phải đến từ API (ai.diseaseInfo.treatment)
 const TOMATO_DISEASE_MAP = {
-  Tomato_Early_blight:               { vi: 'Bệnh đốm sớm',              severity: 'high',     treat: 'Phun thuốc gốc đồng (Copper-based fungicide), loại bỏ lá bệnh, cải thiện thông gió.' },
-  Tomato_Late_blight:                { vi: 'Bệnh đốm nâu',               severity: 'critical', treat: 'Phun thuốc fungicide Metalaxyl hoặc Mancozeb, loại bỏ cây nhiễm nặng.' },
-  Tomato_Leaf_Mold:                 { vi: 'Bệnh mốc sương lá',         severity: 'medium',   treat: 'Cải thiện thông gió, phun thuốc gốc đồng hoặc Chlorothalonil.' },
-  Tomato_Septoria_leaf_spot:         { vi: 'Bệnh đốm Septoria',         severity: 'high',     treat: 'Phun thuốc gốc đồng, loại bỏ lá bệnh, không tưới nước lên lá.' },
-  Tomato_Spider_mites_Tetranychus:   { vi: 'Nhện đỏ',                  severity: 'medium',   treat: 'Phun thuốc trừ nhện (Abamectin, Spiromesifen), tăng độ ẩm.' },
-  Tomato__yellow_leaf_curl_virus:    { vi: 'Bệnh xoắn lá virus',       severity: 'critical', treat: 'Diệt trừ bọ gầy (vector), nhổ bỏ cây nhiễm, trồng giống kháng.' },
-  Tomato_mosaic_virus:               { vi: 'Bệnh khảm virus',           severity: 'critical', treat: 'Diệt trừ côn trùng vector, khử trùng dụng cụ, nhổ cây bệnh.' },
-  Bacterial_spot:                    { vi: 'Bệnh đốm vi khuẩn',         severity: 'high',     treat: 'Phun thuốc gốc đồng, tránh tưới nước lên lá.' },
-  Target_Spot:                       { vi: 'Bệnh đốm đích',              severity: 'medium',   treat: 'Phun fungicide Daconil, loại bỏ lá bệnh.' },
-  Spider_mites:                      { vi: 'Nhện đỏ',                   severity: 'medium',   treat: 'Phun thuốc trừ nhện, tăng độ ẩm môi trường.' },
-  Powdery_mildew:                    { vi: 'Bệnh phấn trắng',            severity: 'medium',   treat: 'Phun sulfur, cải thiện thông gió, giảm độ ẩm.' },
-  Leaf_Mold:                         { vi: 'Bệnh mốc sương lá',         severity: 'medium',   treat: 'Cải thiện thông gió, phun thuốc gốc đồng.' },
-  Blight:                            { vi: 'Bệnh héo',                   severity: 'critical', treat: 'Loại bỏ cây bệnh ngay, phun fungicide, không trồng lại cùng chỗ.' },
+  Tomato_Early_blight:               { vi: 'Bệnh đốm sớm',              severity: 'high' },
+  Tomato_Late_blight:                { vi: 'Bệnh sương mai muộn',         severity: 'critical' },
+  Tomato_Leaf_Mold:                  { vi: 'Bệnh mốc sương lá',         severity: 'medium' },
+  Tomato_Septoria_leaf_spot:         { vi: 'Bệnh đốm Septoria',         severity: 'high' },
+  Tomato_Spider_mites_Tetranychus:   { vi: 'Nhện đỏ',                  severity: 'medium' },
+  Tomato__yellow_leaf_curl_virus:    { vi: 'Bệnh xoắn lá virus',       severity: 'critical' },
+  Tomato_mosaic_virus:               { vi: 'Bệnh khảm virus',           severity: 'critical' },
+  Bacterial_spot:                    { vi: 'Bệnh đốm vi khuẩn',         severity: 'high' },
+  Target_Spot:                       { vi: 'Bệnh đốm đích',              severity: 'medium' },
+  Spider_mites:                      { vi: 'Nhện đỏ',                   severity: 'medium' },
+  Powdery_mildew:                    { vi: 'Bệnh phấn trắng',            severity: 'medium' },
+  Leaf_Mold:                         { vi: 'Bệnh mốc sương lá',         severity: 'medium' },
+  Blight:                            { vi: 'Bệnh héo',                   severity: 'critical' },
 };
 
 const SEVERITY_STYLE = {
@@ -462,8 +463,8 @@ const AiResultModal = ({ image: imageProp, onClose, onRetry, taskReportId, onIma
             </div>
           )}
 
-          {/* Thông tin bệnh chi tiết */}
-          {(diseaseDesc || diseaseTreat || (diseaseMeta && isTomato && diseaseMeta.treat)) && (
+          {/* Thông tin bệnh chi tiết — chỉ hiển thị khi có dữ liệu từ API (ai.diseaseInfo) */}
+          {(diseaseDesc || diseaseTreat) && (
             <div className="bg-orange-50 border-2 border-orange-200 rounded-xl p-3 space-y-2">
               <p className="text-[9px] font-bold uppercase text-orange-700">📋 Thông Tin Bệnh</p>
               {diseaseDesc && (
@@ -472,11 +473,11 @@ const AiResultModal = ({ image: imageProp, onClose, onRetry, taskReportId, onIma
                   <p className="text-orange-800 text-[11px] leading-relaxed">{diseaseDesc}</p>
                 </div>
               )}
-              {(diseaseTreat || diseaseMeta?.treat) && (
+              {diseaseTreat && (
                 <div>
                   <p className="font-bold text-orange-900 text-[11px] mb-0.5">💊 Phương pháp điều trị</p>
                   <p className="text-orange-800 text-[11px] leading-relaxed whitespace-pre-line">
-                    {diseaseTreat || diseaseMeta?.treat}
+                    {diseaseTreat}
                   </p>
                 </div>
               )}

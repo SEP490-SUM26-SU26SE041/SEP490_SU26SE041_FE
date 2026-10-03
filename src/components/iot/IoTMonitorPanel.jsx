@@ -847,7 +847,7 @@ const TimeRangeQuery = ({ devices, sensorMetaMap }) => {
         <h3 className="font-hanken text-base font-bold text-slate-900 flex items-center gap-2">
           <span>📊</span> Truy vấn dữ liệu theo khoảng thời gian
         </h3>
-        {summary.length > 0 && (
+        {false && summary.length > 0 && (
           <button
             type="button"
             onClick={exportCSV}
